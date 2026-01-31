@@ -60,11 +60,23 @@ function convertFrontmatter(content) {
  */
 function protectMermaidBlocks(content) {
   const blocks = [];
-  const protected_ = content.replace(MERMAID_PATTERN, (match, code) => {
+  const protectedContent = content.replace(MERMAID_PATTERN, (match, code) => {
     blocks.push(code);
     return `<!--MERMAID_PLACEHOLDER_${blocks.length - 1}-->`;
   });
-  return { content: protected_, blocks };
+  return { content: protectedContent, blocks };
+}
+
+/**
+ * Escape HTML entities for safe display
+ * @param {string} text - Text to escape
+ * @returns {string}
+ */
+function escapeHtmlEntities(text) {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 /**
@@ -74,53 +86,28 @@ function protectMermaidBlocks(content) {
  * @returns {string}
  */
 function restoreMermaidBlocks(html, blocks) {
-  blocks.forEach((code, i) => {
-    const escaped = code
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
+  let result = html;
+  for (let i = 0; i < blocks.length; i++) {
+    const escaped = escapeHtmlEntities(blocks[i]);
     const mermaidHtml = `<pre><code class="language-mermaid">${escaped}</code></pre>`;
-
     // Replace both paragraph-wrapped and bare placeholders
-    html = html.replace(`<p><!--MERMAID_PLACEHOLDER_${i}--></p>`, mermaidHtml);
-    html = html.replace(`<!--MERMAID_PLACEHOLDER_${i}-->`, mermaidHtml);
-  });
-  return html;
-}
-
-/**
- * Add line numbers to rendered elements for editor sync
- * @param {string} html - Rendered HTML
- * @returns {string}
- */
-function addLineNumbers(html) {
-  // This is a simplified version - the full implementation would
-  // track source positions during rendering
-  return html;
+    result = result
+      .replace(`<p><!--MERMAID_PLACEHOLDER_${i}--></p>`, mermaidHtml)
+      .replace(`<!--MERMAID_PLACEHOLDER_${i}-->`, mermaidHtml);
+  }
+  return result;
 }
 
 /**
  * Render markdown to HTML
  * @param {string} content - Markdown content
- * @returns {string} HTML
+ * @returns {string}
  */
 export function renderMarkdown(content) {
-  // Convert frontmatter to code block
-  content = convertFrontmatter(content);
-
-  // Protect Mermaid blocks
-  const { content: protected_, blocks } = protectMermaidBlocks(content);
-
-  // Render markdown
-  let html = md.render(protected_);
-
-  // Restore Mermaid blocks
-  html = restoreMermaidBlocks(html, blocks);
-
-  // Add line numbers
-  html = addLineNumbers(html);
-
-  return html;
+  const withFrontmatter = convertFrontmatter(content);
+  const { content: protectedContent, blocks } = protectMermaidBlocks(withFrontmatter);
+  const html = md.render(protectedContent);
+  return restoreMermaidBlocks(html, blocks);
 }
 
 export default { renderMarkdown, isMarp };

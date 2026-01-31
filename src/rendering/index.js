@@ -52,46 +52,47 @@ export async function renderFile(filePath) {
   const content = await fs.readFile(filePath, 'utf-8');
   const fileType = getFileType(filePath);
 
-  // Markdown files
   if (fileType.type === 'markdown') {
-    // Check if it's a Marp presentation
-    if (isMarp(content)) {
-      const { html, css } = renderMarp(content);
-      return {
-        content: html,
-        css,
-        raw: content,
-        fileType: 'markdown',
-        isMarp: true
-      };
-    }
-
-    // Regular markdown
-    const html = renderMarkdown(content);
-    return {
-      content: html,
-      raw: content,
-      fileType: 'markdown',
-      isMarp: false
-    };
+    return renderMarkdownFile(content);
   }
 
-  // Code files
   if (fileType.type === 'code') {
-    const html = renderCode(content, fileType.lang);
     return {
-      content: html,
+      content: renderCode(content, fileType.lang),
       raw: content,
       fileType: 'code'
     };
   }
 
-  // Plain text
-  const html = renderText(content);
   return {
-    content: html,
+    content: renderText(content),
     raw: content,
     fileType: 'text'
+  };
+}
+
+/**
+ * Render markdown content, detecting Marp presentations
+ * @param {string} content - Raw markdown content
+ * @returns {Object} Rendered content and metadata
+ */
+function renderMarkdownFile(content) {
+  if (isMarp(content)) {
+    const { html, css } = renderMarp(content);
+    return {
+      content: html,
+      css,
+      raw: content,
+      fileType: 'markdown',
+      isMarp: true
+    };
+  }
+
+  return {
+    content: renderMarkdown(content),
+    raw: content,
+    fileType: 'markdown',
+    isMarp: false
   };
 }
 

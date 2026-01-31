@@ -2,29 +2,41 @@
  * File upload API routes
  */
 
-import multer from 'multer';
 import fs from 'fs/promises';
+import multer from 'multer';
 import path from 'path';
+
 import { validatePath } from '../utils/path.js';
+
+const FILE_SIZE_LIMIT = 100 * 1024 * 1024; // 100MB
+
+/**
+ * Sanitize filename to prevent path traversal and remove control characters
+ * @param {string} originalName - Original filename from upload
+ * @returns {string} Sanitized filename
+ */
+function sanitizeFilename(originalName) {
+  const baseName = path.basename(originalName);
+  const sanitized = baseName.replace(/[\x00-\x1f]/g, '');
+  return sanitized || 'unnamed';
+}
 
 /**
  * Setup upload routes
  * @param {Express} app - Express app instance
+ * @returns {void}
  */
 export function setupUploadRoutes(app) {
-  // Configure multer for file uploads
   const storage = multer.diskStorage({
     destination: async (req, file, cb) => {
       const targetPath = req.body.path || '';
 
-      // Security check: validate relative path before joining
       if (!validatePath(targetPath, app.locals.rootDir)) {
         return cb(new Error('Access denied'));
       }
 
       const fullPath = path.join(app.locals.rootDir, targetPath);
 
-      // Ensure directory exists
       try {
         await fs.mkdir(fullPath, { recursive: true });
         cb(null, fullPath);
@@ -33,37 +45,26 @@ export function setupUploadRoutes(app) {
       }
     },
     filename: (req, file, cb) => {
-      // パストラバーサル防止: ベース名のみ使用
-      const safeName = path.basename(file.originalname);
-      // null byteや制御文字を除去
-      const sanitized = safeName.replace(/[\x00-\x1f]/g, '');
-      cb(null, sanitized || 'unnamed');
+      cb(null, sanitizeFilename(file.originalname));
     }
   });
 
   const upload = multer({
     storage,
-    limits: {
-      fileSize: 100 * 1024 * 1024 // 100MB limit
-    }
+    limits: { fileSize: FILE_SIZE_LIMIT }
   });
 
-  // Upload files
   app.post('/api/upload', upload.array('files'), (req, res) => {
-    try {
-      if (!req.files || req.files.length === 0) {
-        return res.status(400).json({ error: 'No files uploaded' });
-      }
-
-      const uploaded = req.files.map(f => ({
-        name: f.originalname,
-        size: f.size
-      }));
-
-      res.json({ success: true, files: uploaded });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: 'No files uploaded' });
     }
+
+    const uploaded = req.files.map(file => ({
+      name: file.originalname,
+      size: file.size
+    }));
+
+    res.json({ success: true, files: uploaded });
   });
 }
 

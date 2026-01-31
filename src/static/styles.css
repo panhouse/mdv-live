@@ -20,6 +20,9 @@
     --scrollbar-hover: #585b70;
     --tab-active: #313244;
     --tab-hover: #262637;
+    --success: #a6e3a1;
+    --warning: #f9e2af;
+    --danger: #f38ba8;
 }
 
 [data-theme="light"] {
@@ -57,10 +60,34 @@ body {
     transition: background 0.2s, color 0.2s;
 }
 
+/* Utility Classes */
+.hidden { display: none !important; }
+
 .container {
     display: flex;
     height: 100vh;
 }
+
+/* ============================================================
+   Scrollbar (Shared)
+   ============================================================ */
+
+.file-tree::-webkit-scrollbar { width: 8px; }
+.content::-webkit-scrollbar { width: 10px; }
+.tab-bar::-webkit-scrollbar { height: 4px; }
+
+.file-tree::-webkit-scrollbar-track { background: transparent; }
+.content::-webkit-scrollbar-track { background: var(--bg-primary); }
+
+.file-tree::-webkit-scrollbar-thumb,
+.content::-webkit-scrollbar-thumb,
+.tab-bar::-webkit-scrollbar-thumb { background: var(--scrollbar); }
+
+.file-tree::-webkit-scrollbar-thumb { border-radius: 4px; }
+.content::-webkit-scrollbar-thumb { border-radius: 5px; }
+
+.file-tree::-webkit-scrollbar-thumb:hover,
+.content::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
 
 /* ============================================================
    Sidebar
@@ -110,11 +137,6 @@ body {
     overflow-x: hidden;
     padding: 8px 0;
 }
-
-.file-tree::-webkit-scrollbar { width: 8px; }
-.file-tree::-webkit-scrollbar-track { background: transparent; }
-.file-tree::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 4px; }
-.file-tree::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
 
 .tree-item { user-select: none; }
 
@@ -231,10 +253,10 @@ body {
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #a6e3a1;
+    background: var(--success);
 }
 
-.status-dot.disconnected { background: #f38ba8; }
+.status-dot.disconnected { background: var(--danger); }
 
 .shutdown-btn {
     background: none;
@@ -258,7 +280,7 @@ body {
 }
 
 .shutdown-btn:hover {
-    color: #f38ba8;
+    color: var(--danger);
     background: rgba(243, 139, 168, 0.1);
 }
 
@@ -273,12 +295,7 @@ body {
     overflow-x: auto;
 }
 
-.tab-bar:empty {
-    display: none;
-}
-
-.tab-bar::-webkit-scrollbar { height: 4px; }
-.tab-bar::-webkit-scrollbar-thumb { background: var(--scrollbar); }
+.tab-bar:empty { display: none; }
 
 .tab {
     display: flex;
@@ -339,11 +356,6 @@ body {
     padding: 32px 48px;
 }
 
-.content::-webkit-scrollbar { width: 10px; }
-.content::-webkit-scrollbar-track { background: var(--bg-primary); }
-.content::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 5px; }
-.content::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
-
 /* ============================================================
    Markdown Body
    ============================================================ */
@@ -399,12 +411,16 @@ body {
     border: 1px solid var(--border);
 }
 
-.markdown-body pre code { padding: 0; margin: 0; font-size: 100%; background: transparent; border-radius: 0; white-space: pre; }
-
-/* Full-page code view (non-markdown files) */
-.code-view-container {
-    max-width: 100%;
+.markdown-body pre code {
+    padding: 0;
+    margin: 0;
+    font-size: 100%;
+    background: transparent;
+    border-radius: 0;
+    white-space: pre;
 }
+
+.code-view-container { max-width: 100%; }
 
 .markdown-body table { margin-bottom: 16px; border-collapse: collapse; width: 100%; }
 .markdown-body table th, .markdown-body table td { padding: 8px 16px; border: 1px solid var(--border); }
@@ -413,11 +429,12 @@ body {
 .markdown-body hr { height: 1px; margin: 24px 0; background: var(--border); border: 0; }
 .markdown-body img { max-width: 100%; border-radius: 8px; }
 
-/* Task List (Checkbox) */
+/* Task List */
 .markdown-body .task-list-item {
     list-style-type: none;
     margin-left: -1.5em;
 }
+
 .markdown-body .task-list-item input[type="checkbox"] {
     margin-right: 0.5em;
     vertical-align: middle;
@@ -439,10 +456,13 @@ body {
 }
 
 /* ============================================================
-   Image Preview
+   Media Preview (Image, Video, Audio, Binary)
    ============================================================ */
 
-.image-preview {
+.image-preview,
+.video-preview,
+.audio-preview,
+.binary-preview {
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -450,17 +470,28 @@ body {
     padding: 32px;
 }
 
-.image-preview img {
+.binary-preview {
+    justify-content: center;
+    padding: 48px;
+    height: 100%;
+    color: var(--text-muted);
+}
+
+.image-preview img,
+.video-preview video {
     max-width: 100%;
     max-height: 70vh;
     border-radius: 8px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
-.image-preview .image-info {
-    font-size: 13px;
-    color: var(--text-muted);
-}
+.audio-preview audio { width: 100%; max-width: 500px; }
+
+.image-preview .image-info,
+.media-info { font-size: 13px; color: var(--text-muted); }
+
+.binary-icon svg { width: 64px; height: 64px; }
+.binary-info { font-size: 16px; }
 
 /* ============================================================
    PDF Viewer
@@ -527,13 +558,8 @@ body {
     color: var(--text-muted);
 }
 
-.editor-status.modified {
-    color: #f9e2af;
-}
-
-.editor-status.saved {
-    color: #a6e3a1;
-}
+.editor-status.modified { color: var(--warning); }
+.editor-status.saved { color: var(--success); }
 
 /* ============================================================
    File Icons
@@ -595,7 +621,6 @@ body {
     z-index: 1000;
     padding: 4px 0;
 }
-.context-menu.hidden { display: none; }
 .context-menu-item {
     display: flex;
     align-items: center;
@@ -609,7 +634,7 @@ body {
     background: var(--bg-tertiary);
     color: var(--text-primary);
 }
-.context-menu-item.danger { color: #f38ba8; }
+.context-menu-item.danger { color: var(--danger); }
 .context-menu-item.danger:hover { background: rgba(243, 139, 168, 0.1); }
 .context-menu-separator {
     height: 1px;
@@ -618,10 +643,11 @@ body {
 }
 
 /* ============================================================
-   Dialog
+   Dialog & Overlay (Shared)
    ============================================================ */
 
-.dialog-overlay {
+.dialog-overlay,
+.upload-progress-overlay {
     position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
     background: rgba(0, 0, 0, 0.5);
@@ -630,7 +656,7 @@ body {
     justify-content: center;
     z-index: 2000;
 }
-.dialog-overlay.hidden { display: none; }
+
 .dialog-content {
     background: var(--bg-secondary);
     padding: 24px;
@@ -654,6 +680,10 @@ body {
     outline: none;
 }
 .dialog-content input:focus { border-color: var(--accent); }
+.dialog-content p {
+    margin: 0;
+    color: var(--text-secondary);
+}
 .dialog-actions {
     display: flex;
     justify-content: flex-end;
@@ -671,7 +701,7 @@ body {
 .btn-cancel:hover { background: var(--border); }
 .btn-confirm { background: var(--accent); color: white; }
 .btn-confirm:hover { opacity: 0.9; }
-.btn-danger { background: #f38ba8; color: white; }
+.btn-danger { background: var(--danger); color: white; }
 .btn-danger:hover { opacity: 0.9; }
 
 /* ============================================================
@@ -689,55 +719,9 @@ body {
 }
 
 /* ============================================================
-   Video/Audio Preview
-   ============================================================ */
-
-.video-preview, .audio-preview {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 16px;
-    padding: 32px;
-}
-.video-preview video {
-    max-width: 100%;
-    max-height: 70vh;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-}
-.audio-preview audio { width: 100%; max-width: 500px; }
-.media-info { font-size: 13px; color: var(--text-muted); }
-
-.binary-preview {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 16px;
-    padding: 48px;
-    height: 100%;
-    color: var(--text-muted);
-}
-.binary-icon svg {
-    width: 64px;
-    height: 64px;
-}
-.binary-info { font-size: 16px; }
-
-/* ============================================================
    Upload Progress
    ============================================================ */
 
-.upload-progress-overlay {
-    position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0, 0, 0, 0.5);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 2000;
-}
-.upload-progress-overlay.hidden { display: none; }
 .upload-progress-box {
     background: var(--bg-secondary);
     padding: 24px 32px;
@@ -764,13 +748,9 @@ body {
    ============================================================ */
 
 @media print {
-    @page {
-        margin: 15mm;
-    }
+    @page { margin: 15mm; }
 
-    * {
-        box-sizing: border-box !important;
-    }
+    * { box-sizing: border-box !important; }
 
     html, body {
         width: 100% !important;
@@ -787,7 +767,7 @@ body {
         color: black !important;
     }
 
-    .container {
+    .container, .main, .content {
         height: auto !important;
         overflow: visible !important;
         display: block !important;
@@ -795,33 +775,10 @@ body {
         padding: 0 !important;
     }
 
-    .main {
-        width: 100% !important;
-        height: auto !important;
-        overflow: visible !important;
-        display: block !important;
-        padding: 0 !important;
-        margin: 0 !important;
-    }
-
-    .content {
-        height: auto !important;
-        overflow: visible !important;
-        flex: none !important;
-        padding: 0 !important;
-        margin: 0 !important;
-    }
-
-    .markdown-body {
-        max-width: 100% !important;
-        padding: 0 !important;
-        margin: 0 !important;
-    }
-
-    .markdown-body img {
-        max-width: 100% !important;
-    }
-
+    .main { width: 100% !important; }
+    .content { flex: none !important; }
+    .markdown-body { max-width: 100% !important; }
+    .markdown-body img { max-width: 100% !important; }
     .markdown-body code { background: #f0f0f0 !important; }
     .markdown-body pre { background: #f8f8f8 !important; border: 1px solid #ddd !important; }
 
@@ -829,6 +786,7 @@ body {
     .markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 {
         page-break-after: avoid;
     }
+
     .markdown-body pre, .markdown-body table, .markdown-body img,
     .markdown-body ul, .markdown-body ol, .markdown-body li, .markdown-body p {
         page-break-inside: avoid;
@@ -889,40 +847,19 @@ body {
     margin-bottom: 12px;
 }
 
-.marp-slide p {
+.marp-slide p,
+.marp-slide ul,
+.marp-slide ol {
     font-size: 1.25em;
     line-height: 1.6;
     margin-bottom: 16px;
 }
 
-.marp-slide ul, .marp-slide ol {
-    font-size: 1.25em;
-    line-height: 1.6;
-    margin-bottom: 16px;
-}
-
-.marp-slide li {
-    margin-bottom: 8px;
-}
-
-.marp-slide pre {
-    font-size: 0.9em;
-    max-width: 100%;
-}
-
-.marp-slide code {
-    font-size: 0.95em;
-}
-
-.marp-slide img {
-    max-width: 100%;
-    max-height: 60vh;
-}
-
-/* Mermaid in slides */
-.marp-slide .mermaid {
-    margin: 16px 0;
-}
+.marp-slide li { margin-bottom: 8px; }
+.marp-slide pre { font-size: 0.9em; max-width: 100%; }
+.marp-slide code { font-size: 0.95em; }
+.marp-slide img { max-width: 100%; max-height: 60vh; }
+.marp-slide .mermaid { margin: 16px 0; }
 
 /* Navigation Controls */
 .marp-nav {
@@ -965,10 +902,7 @@ body {
     cursor: not-allowed;
 }
 
-.marp-nav button svg {
-    width: 16px;
-    height: 16px;
-}
+.marp-nav button svg { width: 16px; height: 16px; }
 
 .marp-nav .slide-counter {
     font-size: 13px;
@@ -977,7 +911,6 @@ body {
     text-align: center;
 }
 
-/* Keyboard hint */
 .marp-nav .keyboard-hint {
     font-size: 11px;
     color: var(--text-muted);
@@ -1004,14 +937,9 @@ body {
         page-break-inside: avoid;
     }
 
-    .marpit > svg[data-marpit-svg]:last-child {
-        page-break-after: avoid;
-    }
+    .marpit > svg[data-marpit-svg]:last-child { page-break-after: avoid; }
 
-    /* Legacy class support */
-    .marp-presentation {
-        height: auto !important;
-    }
+    .marp-presentation { height: auto !important; }
 
     .marp-slide {
         display: block !important;
@@ -1020,7 +948,5 @@ body {
         min-height: 100vh;
     }
 
-    .marp-slide:last-child {
-        page-break-after: avoid;
-    }
+    .marp-slide:last-child { page-break-after: avoid; }
 }

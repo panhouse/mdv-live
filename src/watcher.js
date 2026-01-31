@@ -6,6 +6,30 @@ import chokidar from 'chokidar';
 import path from 'path';
 import { renderFile } from './rendering/index.js';
 
+const IGNORED_PATTERNS = [
+  /(^|[\/\\])\../,  // Dotfiles
+  /node_modules/,
+  /\.git/,
+  /__pycache__/,
+  /\.pyc$/,
+  /\.cache/,
+  /\.pytest_cache/,
+  /\.mypy_cache/,
+  /\.ruff_cache/,
+  /venv/,
+  /\.venv/,
+  /dist/,
+  /build/,
+  /\.next/,
+  /\.nuxt/,
+  /coverage/,
+  /\.DS_Store/,
+  /Thumbs\.db/,
+  /desktop\.ini/,
+];
+
+const TREE_CHANGE_EVENTS = ['add', 'unlink', 'addDir', 'unlinkDir'];
+
 /**
  * Setup file watcher
  * @param {string} rootDir - Root directory to watch
@@ -14,32 +38,7 @@ import { renderFile } from './rendering/index.js';
  */
 export function setupWatcher(rootDir, wss) {
   const watcher = chokidar.watch(rootDir, {
-    ignored: [
-      /(^|[\/\\])\../,  // Ignore dotfiles
-      /node_modules/,
-      /\.git/,
-      /__pycache__/,
-      /\.pyc$/,
-      // Python cache/build
-      /\.cache/,
-      /\.pytest_cache/,
-      /\.mypy_cache/,
-      /\.ruff_cache/,
-      /venv/,
-      /\.venv/,
-      // Build outputs
-      /dist/,
-      /build/,
-      // Framework specific
-      /\.next/,
-      /\.nuxt/,
-      // Test coverage
-      /coverage/,
-      // OS generated files
-      /\.DS_Store/,
-      /Thumbs\.db/,
-      /desktop\.ini/,
-    ],
+    ignored: IGNORED_PATTERNS,
     persistent: true,
     ignoreInitial: true,
     awaitWriteFinish: {
@@ -48,20 +47,22 @@ export function setupWatcher(rootDir, wss) {
     }
   });
 
-  // Helper to get relative path
-  const getRelativePath = (filePath) => {
+  function toRelativePath(filePath) {
     return path.relative(rootDir, filePath).split(path.sep).join('/');
-  };
+  }
 
-  // File change handler
+  function broadcastTreeUpdate() {
+    wss.broadcast({
+      type: 'tree_update',
+      tree: null
+    });
+  }
+
   watcher.on('change', async (filePath) => {
-    const relativePath = getRelativePath(filePath);
+    const relativePath = toRelativePath(filePath);
 
     try {
-      // Render the file content
       const rendered = await renderFile(filePath);
-
-      // Broadcast to clients watching this file
       wss.broadcastFileUpdate(relativePath, {
         type: 'file_update',
         path: relativePath,
@@ -72,20 +73,9 @@ export function setupWatcher(rootDir, wss) {
     }
   });
 
-  // Tree change handlers
-  const broadcastTreeUpdate = async () => {
-    // We'll implement getFileTree in api/tree.js
-    // For now, just notify clients to refresh
-    wss.broadcast({
-      type: 'tree_update',
-      tree: null // Client will fetch via API
-    });
-  };
-
-  watcher.on('add', broadcastTreeUpdate);
-  watcher.on('unlink', broadcastTreeUpdate);
-  watcher.on('addDir', broadcastTreeUpdate);
-  watcher.on('unlinkDir', broadcastTreeUpdate);
+  for (const event of TREE_CHANGE_EVENTS) {
+    watcher.on(event, broadcastTreeUpdate);
+  }
 
   watcher.on('error', (err) => {
     console.error('Watcher error:', err);

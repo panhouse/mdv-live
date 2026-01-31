@@ -5,7 +5,32 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { getFileType } from '../utils/fileTypes.js';
-import { validatePath } from '../utils/path.js';
+import { getRelativePath, validatePath } from '../utils/path.js';
+
+const IGNORED_PATTERNS = new Set(['node_modules', '__pycache__']);
+const MAX_INITIAL_DEPTH = 1;
+
+/**
+ * Check if an entry should be ignored
+ * @param {string} name - Entry name
+ * @returns {boolean} True if should be ignored
+ */
+function shouldIgnore(name) {
+  return name.startsWith('.') || IGNORED_PATTERNS.has(name);
+}
+
+/**
+ * Sort entries: directories first, then files, alphabetically
+ * @param {fs.Dirent} a - First entry
+ * @param {fs.Dirent} b - Second entry
+ * @returns {number} Sort order
+ */
+function sortEntries(a, b) {
+  const aIsDir = a.isDirectory();
+  const bIsDir = b.isDirectory();
+  if (aIsDir !== bIsDir) return aIsDir ? -1 : 1;
+  return a.name.localeCompare(b.name);
+}
 
 /**
  * Build file tree for a directory
@@ -16,50 +41,32 @@ import { validatePath } from '../utils/path.js';
  */
 export async function buildFileTree(dirPath, rootDir, depth = 0) {
   const items = [];
-  const maxInitialDepth = 1; // Only expand first level initially
 
   try {
     const entries = await fs.readdir(dirPath, { withFileTypes: true });
-
-    // Sort: directories first, then files, alphabetically
-    entries.sort((a, b) => {
-      if (a.isDirectory() && !b.isDirectory()) return -1;
-      if (!a.isDirectory() && b.isDirectory()) return 1;
-      return a.name.localeCompare(b.name);
-    });
+    entries.sort(sortEntries);
 
     for (const entry of entries) {
-      // Skip hidden files and common ignore patterns
-      if (entry.name.startsWith('.')) continue;
-      if (entry.name === 'node_modules') continue;
-      if (entry.name === '__pycache__') continue;
+      if (shouldIgnore(entry.name)) continue;
 
       const fullPath = path.join(dirPath, entry.name);
-      const relativePath = path.relative(rootDir, fullPath).split(path.sep).join('/');
+      const relativePath = getRelativePath(fullPath, rootDir);
 
       if (entry.isDirectory()) {
-        const item = {
+        const shouldLoadChildren = depth < MAX_INITIAL_DEPTH;
+        items.push({
           type: 'directory',
           name: entry.name,
           path: relativePath,
-          children: [],
-          loaded: false
-        };
-
-        // Load children for first level
-        if (depth < maxInitialDepth) {
-          item.children = await buildFileTree(fullPath, rootDir, depth + 1);
-          item.loaded = true;
-        }
-
-        items.push(item);
+          children: shouldLoadChildren ? await buildFileTree(fullPath, rootDir, depth + 1) : [],
+          loaded: shouldLoadChildren
+        });
       } else {
-        const fileType = getFileType(entry.name);
         items.push({
           type: 'file',
           name: entry.name,
           path: relativePath,
-          icon: fileType.icon
+          icon: getFileType(entry.name).icon
         });
       }
     }

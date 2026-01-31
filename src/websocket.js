@@ -2,7 +2,16 @@
  * WebSocket management for MDV
  */
 
-import { WebSocketServer } from 'ws';
+import { WebSocketServer, WebSocket } from 'ws';
+
+/**
+ * Check if a WebSocket client is ready to receive messages
+ * @param {WebSocket} client - WebSocket client
+ * @returns {boolean} True if client is open and ready
+ */
+function isClientReady(client) {
+  return client.readyState === WebSocket.OPEN;
+}
 
 /**
  * Setup WebSocket server
@@ -11,8 +20,6 @@ import { WebSocketServer } from 'ws';
  */
 export function setupWebSocket(server) {
   const wss = new WebSocketServer({ server });
-
-  // Track watched files per client
   const clientWatches = new Map();
 
   wss.on('connection', (ws) => {
@@ -23,7 +30,6 @@ export function setupWebSocket(server) {
         const message = JSON.parse(data.toString());
 
         if (message.type === 'watch') {
-          // Client wants to watch a file
           const watches = clientWatches.get(ws);
           watches.clear();
           watches.add(message.path);
@@ -43,30 +49,28 @@ export function setupWebSocket(server) {
     });
   });
 
-  // Add broadcast helper
   wss.broadcast = (data) => {
     const message = JSON.stringify(data);
     wss.clients.forEach((client) => {
-      if (client.readyState === 1) { // WebSocket.OPEN
+      if (isClientReady(client)) {
         client.send(message);
       }
     });
   };
 
-  // Add targeted broadcast for file updates
   wss.broadcastFileUpdate = (filePath, data) => {
     const message = JSON.stringify(data);
     wss.clients.forEach((client) => {
-      if (client.readyState === 1) {
-        const watches = clientWatches.get(client);
-        if (watches && watches.has(filePath)) {
-          client.send(message);
-        }
+      if (!isClientReady(client)) {
+        return;
+      }
+      const watches = clientWatches.get(client);
+      if (watches && watches.has(filePath)) {
+        client.send(message);
       }
     });
   };
 
-  // Store clientWatches for external access
   wss.clientWatches = clientWatches;
 
   return wss;

@@ -139,7 +139,6 @@
         return FILE_ICONS[iconName] || FILE_ICONS.default;
     }
 
-    // Scroll position utilities
     function saveScrollPosition(element) {
         return element.scrollTop;
     }
@@ -150,7 +149,6 @@
         });
     }
 
-    // API utilities
     async function apiRequest(url, options = {}) {
         const response = await fetch(url, options);
         const data = await response.json();
@@ -168,7 +166,6 @@
         });
     }
 
-    // Tab path update utility (shared by rename and move)
     function updateTabPaths(oldPath, newPath) {
         let updated = false;
         const newName = newPath.split('/').pop();
@@ -332,20 +329,17 @@
 
         handleFileUpdate(data) {
             const tab = state.tabs[state.activeTabIndex];
+
             if (data.fileType === 'image' && data.reload) {
                 ContentRenderer.renderImage(tab.imageUrl, tab.name);
                 return;
             }
+
             if (!data.content) return;
 
             tab.content = data.content;
-            if (data.raw) {
-                tab.raw = data.raw;
-            }
-            // Update Marp flag
-            if (typeof data.isMarp !== 'undefined') {
-                tab.isMarp = data.isMarp;
-            }
+            if (data.raw) tab.raw = data.raw;
+            if (typeof data.isMarp !== 'undefined') tab.isMarp = data.isMarp;
 
             if (state.isEditMode) {
                 if (!state.hasUnsavedChanges && data.raw) {
@@ -356,17 +350,16 @@
                         restoreScrollPosition(textarea, currentScroll);
                     }
                 }
+                return;
+            }
+
+            if (tab.isMarp) {
+                if (data.css) tab.css = data.css;
+                ContentRenderer.renderMarp(data.content, tab.css);
             } else {
-                // Marp slides: preserve current slide position
-                if (tab.isMarp) {
-                    // Update css if provided
-                    if (data.css) tab.css = data.css;
-                    ContentRenderer.renderMarp(data.content, tab.css);
-                } else {
-                    const currentScroll = saveScrollPosition(elements.content);
-                    ContentRenderer.render(data.content, data.fileType || tab.fileType);
-                    restoreScrollPosition(elements.content, currentScroll);
-                }
+                const currentScroll = saveScrollPosition(elements.content);
+                ContentRenderer.render(data.content, data.fileType || tab.fileType);
+                restoreScrollPosition(elements.content, currentScroll);
             }
         }
     };
@@ -509,9 +502,9 @@
 
     const ContentRenderer = {
         render(htmlContent, fileType) {
-            // コードファイル（非markdown）は専用のスタイルを適用
-            const isCodeFile = fileType === 'code';
-            const containerClass = isCodeFile ? 'markdown-body code-view-container' : 'markdown-body';
+            const containerClass = fileType === 'code'
+                ? 'markdown-body code-view-container'
+                : 'markdown-body';
             elements.content.innerHTML = `<div class="${containerClass}">${htmlContent}</div>`;
 
             elements.content.querySelectorAll('pre code').forEach(block => {
@@ -860,15 +853,17 @@
                 state.activeTabIndex = -1;
                 this.render();
                 ContentRenderer.showWelcome();
-            } else {
-                if (state.activeTabIndex >= state.tabs.length) {
-                    state.activeTabIndex = state.tabs.length - 1;
-                } else if (index < state.activeTabIndex) {
-                    state.activeTabIndex--;
-                }
-                this.render();
-                this.renderActive();
+                FileTreeManager.updateHighlight();
+                return;
             }
+
+            if (state.activeTabIndex >= state.tabs.length) {
+                state.activeTabIndex = state.tabs.length - 1;
+            } else if (index < state.activeTabIndex) {
+                state.activeTabIndex--;
+            }
+            this.render();
+            this.renderActive();
             FileTreeManager.updateHighlight();
         },
 
@@ -900,36 +895,28 @@
         },
 
         renderByFileType(tab) {
-            // Clean up Marp state when switching tabs
             ContentRenderer.cleanupMarp();
 
-            // Marp slides
             if (tab.isMarp) {
                 ContentRenderer.renderMarp(tab.content, tab.css);
                 return;
             }
 
-            switch (tab.fileType) {
-                case 'image':
-                    ContentRenderer.renderImage(tab.imageUrl, tab.name);
-                    break;
-                case 'pdf':
-                    ContentRenderer.renderPDF(tab.pdfUrl, tab.name);
-                    break;
-                case 'video':
-                    ContentRenderer.renderVideo(tab.mediaUrl, tab.name);
-                    break;
-                case 'audio':
-                    ContentRenderer.renderAudio(tab.mediaUrl, tab.name);
-                    break;
-                case 'archive':
-                case 'office':
-                case 'executable':
-                case 'binary':
-                    ContentRenderer.renderBinary(tab.name, tab.fileType);
-                    break;
-                default:
-                    ContentRenderer.render(tab.content, tab.fileType);
+            const fileType = tab.fileType;
+            const binaryTypes = ['archive', 'office', 'executable', 'binary'];
+
+            if (fileType === 'image') {
+                ContentRenderer.renderImage(tab.imageUrl, tab.name);
+            } else if (fileType === 'pdf') {
+                ContentRenderer.renderPDF(tab.pdfUrl, tab.name);
+            } else if (fileType === 'video') {
+                ContentRenderer.renderVideo(tab.mediaUrl, tab.name);
+            } else if (fileType === 'audio') {
+                ContentRenderer.renderAudio(tab.mediaUrl, tab.name);
+            } else if (binaryTypes.includes(fileType)) {
+                ContentRenderer.renderBinary(tab.name, fileType);
+            } else {
+                ContentRenderer.render(tab.content, fileType);
             }
         }
     };
@@ -954,13 +941,8 @@
         },
 
         updateButton() {
-            if (state.isEditMode) {
-                elements.editToggle.classList.add('active');
-                elements.editLabel.textContent = 'View';
-            } else {
-                elements.editToggle.classList.remove('active');
-                elements.editLabel.textContent = 'Edit';
-            }
+            elements.editToggle.classList.toggle('active', state.isEditMode);
+            elements.editLabel.textContent = state.isEditMode ? 'View' : 'Edit';
         },
 
         show() {
@@ -1051,21 +1033,15 @@
 
             elements.editorStatus.style.display = 'none';
 
-            // サーバーから最新のレンダリング済みコンテンツを取得
             try {
                 const response = await fetch(`/api/file?path=${encodeURIComponent(tab.path)}`);
                 const data = await response.json();
-                if (data.content) {
-                    tab.content = data.content;
-                }
-                if (data.raw) {
-                    tab.raw = data.raw;
-                }
+                if (data.content) tab.content = data.content;
+                if (data.raw) tab.raw = data.raw;
             } catch (e) {
                 console.error('Failed to fetch updated content:', e);
             }
 
-            // WebSocket経由でファイル監視を再登録（重要）
             WebSocketManager.watchFile(tab.path);
 
             state.skipScrollRestore = true;
@@ -1169,7 +1145,6 @@
 
     const PrintManager = {
         isMarpPresentation() {
-            // Check if current content has .marpit class (Marp presentation)
             return !!elements.content.querySelector('.marpit');
         },
 
@@ -1179,10 +1154,8 @@
             const tab = state.tabs[state.activeTabIndex];
 
             if (this.isMarpPresentation()) {
-                // Marp → use marp-cli for PDF export
                 await this.exportMarpPdf(tab.path);
             } else {
-                // Regular Markdown → use browser print
                 this.browserPrint(tab.name);
             }
         },
@@ -1249,12 +1222,9 @@
 
     const ShutdownManager = {
         async shutdown() {
-            try {
-                elements.statusText.textContent = 'Stopping...';
-                await fetch('/api/shutdown', { method: 'POST' });
-            } catch (e) {
-                // Server stopped, connection will fail - expected
-            }
+            elements.statusText.textContent = 'Stopping...';
+            // Connection failure is expected when server stops
+            fetch('/api/shutdown', { method: 'POST' }).catch(() => {});
         },
 
         init() {
@@ -1272,11 +1242,13 @@
 
         show(title, options = {}) {
             elements.dialogTitle.textContent = title;
-            elements.dialogInput.style.display = options.showInput ? 'block' : 'none';
-            elements.dialogMessage.textContent = options.message || '';
-            elements.dialogMessage.style.display = options.message ? 'block' : 'none';
+            const hasInput = options.showInput;
+            const hasMessage = options.message;
+            elements.dialogInput.style.display = hasInput ? 'block' : 'none';
+            elements.dialogMessage.textContent = hasMessage || '';
+            elements.dialogMessage.style.display = hasMessage ? 'block' : 'none';
 
-            if (options.showInput) {
+            if (hasInput) {
                 elements.dialogInput.value = options.defaultValue || '';
             }
 
@@ -1288,7 +1260,7 @@
 
             elements.dialogOverlay.classList.remove('hidden');
 
-            if (options.showInput) {
+            if (hasInput) {
                 setTimeout(() => {
                     elements.dialogInput.focus();
                     elements.dialogInput.select();
@@ -1477,7 +1449,7 @@
             this.currentPath = path;
             this.isDirectory = isDir;
 
-            const items = this.getMenuItems(isDir, path);
+            const items = this.getMenuItems(isDir);
             elements.contextMenu.innerHTML = items.map(item => {
                 if (item.separator) {
                     return '<div class="context-menu-separator"></div>';
@@ -1499,8 +1471,7 @@
             this.currentPath = null;
         },
 
-        getMenuItems(isDir, path) {
-            const pathDisplay = state.rootPath ? `${state.rootPath}/${path}` : path;
+        getMenuItems(isDir) {
             if (isDir) {
                 return [
                     { label: '新規フォルダ', action: 'newFolder' },
@@ -1511,17 +1482,16 @@
                     { separator: true },
                     { label: '削除', action: 'delete', danger: true }
                 ];
-            } else {
-                return [
-                    { label: '開く', action: 'open' },
-                    { label: 'ダウンロード', action: 'download' },
-                    { separator: true },
-                    { label: '名前を変更', action: 'rename' },
-                    { label: 'パスをコピー', action: 'copyPath' },
-                    { separator: true },
-                    { label: '削除', action: 'delete', danger: true }
-                ];
             }
+            return [
+                { label: '開く', action: 'open' },
+                { label: 'ダウンロード', action: 'download' },
+                { separator: true },
+                { label: '名前を変更', action: 'rename' },
+                { label: 'パスをコピー', action: 'copyPath' },
+                { separator: true },
+                { label: '削除', action: 'delete', danger: true }
+            ];
         },
 
         handleAction(action) {
@@ -1529,35 +1499,25 @@
             const isDir = this.isDirectory;
             this.hide();
 
-            switch (action) {
-                case 'open':
-                    TabManager.open(path);
-                    break;
-                case 'download':
-                    FileOperationsManager.download(path);
-                    break;
-                case 'rename':
-                    FileOperationsManager.renameItem(path, isDir);
-                    break;
-                case 'delete':
-                    FileOperationsManager.deleteItem(path, isDir);
-                    break;
-                case 'newFolder':
-                    FileOperationsManager.createDirectory(path);
-                    break;
-                case 'upload':
-                    state.uploadTargetPath = path;
-                    elements.fileInput.click();
-                    break;
-                case 'copyPath':
-                    const fullPath = state.rootPath ? `${state.rootPath}/${path}` : path;
-                    navigator.clipboard.writeText(fullPath).then(() => {
-                        console.log('パスをコピーしました:', fullPath);
-                    }).catch(err => {
-                        console.error('コピーに失敗:', err);
-                        alert('パスのコピーに失敗しました');
-                    });
-                    break;
+            if (action === 'open') {
+                TabManager.open(path);
+            } else if (action === 'download') {
+                FileOperationsManager.download(path);
+            } else if (action === 'rename') {
+                FileOperationsManager.renameItem(path, isDir);
+            } else if (action === 'delete') {
+                FileOperationsManager.deleteItem(path, isDir);
+            } else if (action === 'newFolder') {
+                FileOperationsManager.createDirectory(path);
+            } else if (action === 'upload') {
+                state.uploadTargetPath = path;
+                elements.fileInput.click();
+            } else if (action === 'copyPath') {
+                const fullPath = state.rootPath ? `${state.rootPath}/${path}` : path;
+                navigator.clipboard.writeText(fullPath).catch(err => {
+                    console.error('コピーに失敗:', err);
+                    alert('パスのコピーに失敗しました');
+                });
             }
         },
 
@@ -1831,6 +1791,7 @@
     }
 
     async function init() {
+        // Initialize all managers
         ThemeManager.init();
         SidebarManager.init();
         ResizeHandler.init();
@@ -1841,7 +1802,7 @@
         ContextMenuManager.init();
         DragDropManager.init();
         KeyboardManager.init();
-        TabManager.render(); // 初期状態でタブバーを非表示
+        TabManager.render();
 
         try {
             const infoResponse = await fetch('/api/info');
@@ -1854,20 +1815,14 @@
         await FileTreeManager.load();
         WebSocketManager.connect();
 
-        // ブラウザタブがアクティブになった時に最新データを取得
+        // Refresh content when window regains focus
+        const handleFocusChange = () => refreshCurrentTab();
         document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible') {
-                refreshCurrentTab();
-            }
+            if (document.visibilityState === 'visible') handleFocusChange();
         });
+        window.addEventListener('focus', handleFocusChange);
 
-        // ウィンドウがフォーカスされた時も取得
-        window.addEventListener('focus', () => {
-            refreshCurrentTab();
-        });
-
-        const params = new URLSearchParams(window.location.search);
-        const initialFile = params.get('file');
+        const initialFile = new URLSearchParams(window.location.search).get('file');
         if (initialFile) {
             TabManager.open(initialFile);
         }

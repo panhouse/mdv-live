@@ -5,18 +5,20 @@
  * Compatible with the original Python mdv-live CLI
  */
 
-import { createMdvServer } from '../src/server.js';
+import { execSync } from 'node:child_process';
+import fs from 'node:fs/promises';
+import { createServer as createNetServer } from 'node:net';
+import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { execSync, spawn } from 'child_process';
-import { createServer as createNetServer } from 'net';
-import path from 'path';
-import fs from 'fs/promises';
+
 import open from 'open';
 
-const DEFAULT_PORT = 8642;
+import { createMdvServer } from '../src/server.js';
 
-// Parse command line arguments
-const options = {
+const DEFAULT_PORT = 8642;
+const MARP_FRONTMATTER_PATTERN = /^---\s*\n[\s\S]*?marp:\s*true[\s\S]*?\n---/;
+
+const OPTIONS = {
   port: {
     type: 'string',
     short: 'p',
@@ -60,6 +62,9 @@ const options = {
   }
 };
 
+/**
+ * Display help message
+ */
 function showHelp() {
   console.log(`
 MDV - Markdown Viewer with file tree + live preview + Marp support
@@ -99,6 +104,7 @@ Examples:
 
 /**
  * Get running MDV server processes
+ * @returns {{pid: string, port: string, command: string}[]} Array of process info
  */
 function getMdvProcesses() {
   try {
@@ -139,7 +145,8 @@ function getMdvProcesses() {
 }
 
 /**
- * List running MDV servers
+ * List running MDV servers to console
+ * @returns {number} Exit code (0 = success)
  */
 function listServers() {
   const processes = getMdvProcesses();
@@ -165,6 +172,9 @@ function listServers() {
 
 /**
  * Kill MDV server(s)
+ * @param {string|null} target - Specific PID to kill, or null for all
+ * @param {boolean} killAll - Whether to kill all servers
+ * @returns {number} Exit code (0 = success, 1 = error)
  */
 function killServers(target, killAll) {
   if (target) {
@@ -213,23 +223,26 @@ function killServers(target, killAll) {
 
 /**
  * Check if markdown content is a Marp presentation
+ * @param {string} content - Markdown file content
+ * @returns {boolean} True if content has Marp frontmatter
  */
 function isMarpFile(content) {
-  const MARP_PATTERN = /^---\s*\n[\s\S]*?marp:\s*true[\s\S]*?\n---/;
-  return MARP_PATTERN.test(content);
+  return MARP_FRONTMATTER_PATTERN.test(content);
 }
 
 /**
- * Convert markdown to PDF
+ * Convert markdown to PDF using appropriate tool
  * - Marp slides: use marp-cli
- * - Regular markdown: use marp-cli with document-like settings
+ * - Regular markdown: use md-to-pdf for A4 document format
+ * @param {string} inputPath - Input markdown file path
+ * @param {string} [outputPath] - Output PDF file path
+ * @returns {Promise<number>} Exit code (0 = success, 1 = error)
  */
 async function convertToPdf(inputPath, outputPath) {
   const resolved = path.resolve(inputPath);
 
-  try {
-    await fs.access(resolved);
-  } catch {
+  const fileExists = await fs.access(resolved).then(() => true).catch(() => false);
+  if (!fileExists) {
     console.error(`Error: File not found: ${inputPath}`);
     return 1;
   }
@@ -242,77 +255,96 @@ async function convertToPdf(inputPath, outputPath) {
 
   const content = await fs.readFile(resolved, 'utf-8');
   const isMarp = isMarpFile(content);
-
   const defaultOutput = resolved.replace(/\.(md|markdown)$/i, '.pdf');
   const finalOutput = outputPath ? path.resolve(outputPath) : defaultOutput;
 
   console.log(`Converting ${inputPath} to PDF...`);
 
   if (isMarp) {
-    // Marp slide: use marp-cli directly
-    try {
-      execSync(`npx @marp-team/marp-cli --no-stdin "${resolved}" --pdf -o "${finalOutput}"`, {
-        encoding: 'utf-8',
-        stdio: 'inherit'
-      });
-      console.log(`PDF saved: ${finalOutput}`);
-      return 0;
-    } catch (err) {
-      console.error('Error: PDF conversion failed');
-      return 1;
-    }
-  } else {
-    // Regular markdown: use md-to-pdf for proper A4 document format
-    console.log('Converting as document (A4 portrait)...');
+    return convertMarpToPdf(resolved, finalOutput);
+  }
+  return convertMarkdownToPdf(resolved, finalOutput);
+}
 
-    try {
-      execSync(`npx md-to-pdf "${resolved}" --pdf-options '{"format":"A4","margin":{"top":"20mm","right":"20mm","bottom":"20mm","left":"20mm"}}'`, {
-        encoding: 'utf-8',
-        stdio: 'inherit',
-        cwd: path.dirname(resolved)
-      });
-
-      // md-to-pdf outputs to same directory with .pdf extension
-      const generatedPdf = resolved.replace(/\.(md|markdown)$/i, '.pdf');
-      if (generatedPdf !== finalOutput) {
-        await fs.rename(generatedPdf, finalOutput);
-      }
-
-      console.log(`PDF saved: ${finalOutput}`);
-      return 0;
-    } catch (err) {
-      console.error('Error: PDF conversion failed');
-      console.error('Make sure md-to-pdf is available (npx md-to-pdf)');
-      return 1;
-    }
+/**
+ * Convert Marp presentation to PDF using marp-cli
+ * @param {string} inputPath - Resolved input file path
+ * @param {string} outputPath - Resolved output file path
+ * @returns {Promise<number>} Exit code
+ */
+async function convertMarpToPdf(inputPath, outputPath) {
+  try {
+    execSync(`npx @marp-team/marp-cli --no-stdin "${inputPath}" --pdf -o "${outputPath}"`, {
+      encoding: 'utf-8',
+      stdio: 'inherit'
+    });
+    console.log(`PDF saved: ${outputPath}`);
+    return 0;
+  } catch {
+    console.error('Error: PDF conversion failed');
+    return 1;
   }
 }
 
 /**
- * Check if a port is available
+ * Convert regular markdown to PDF using md-to-pdf (A4 format)
+ * @param {string} inputPath - Resolved input file path
+ * @param {string} outputPath - Resolved output file path
+ * @returns {Promise<number>} Exit code
  */
-async function isPortAvailable(port) {
+async function convertMarkdownToPdf(inputPath, outputPath) {
+  console.log('Converting as document (A4 portrait)...');
+
+  try {
+    const pdfOptions = '{"format":"A4","margin":{"top":"20mm","right":"20mm","bottom":"20mm","left":"20mm"}}';
+    execSync(`npx md-to-pdf "${inputPath}" --pdf-options '${pdfOptions}'`, {
+      encoding: 'utf-8',
+      stdio: 'inherit',
+      cwd: path.dirname(inputPath)
+    });
+
+    // md-to-pdf outputs to same directory with .pdf extension
+    const generatedPdf = inputPath.replace(/\.(md|markdown)$/i, '.pdf');
+    if (generatedPdf !== outputPath) {
+      await fs.rename(generatedPdf, outputPath);
+    }
+
+    console.log(`PDF saved: ${outputPath}`);
+    return 0;
+  } catch {
+    console.error('Error: PDF conversion failed');
+    console.error('Make sure md-to-pdf is available (npx md-to-pdf)');
+    return 1;
+  }
+}
+
+/**
+ * Check if a port is available for binding
+ * @param {number} port - Port number to check
+ * @returns {Promise<boolean>} True if port is available
+ */
+function isPortAvailable(port) {
   return new Promise((resolve) => {
     const server = createNetServer();
     server.once('error', () => resolve(false));
-    server.once('listening', () => {
-      server.close(() => resolve(true));
-    });
+    server.once('listening', () => server.close(() => resolve(true)));
     server.listen(port);
   });
 }
 
 /**
  * Find an available port starting from the given port
+ * @param {number} startPort - Starting port number
+ * @param {number} [maxRetries=100] - Maximum ports to try
+ * @returns {Promise<number|null>} Available port or null if none found
  */
 async function findAvailablePort(startPort, maxRetries = 100) {
-  for (let i = 0; i < maxRetries; i++) {
-    const port = startPort + i;
-    const available = await isPortAvailable(port);
-    if (available) {
+  for (let offset = 0; offset < maxRetries; offset++) {
+    const port = startPort + offset;
+    if (await isPortAvailable(port)) {
       return port;
     }
-    if (i > 0) {
+    if (offset > 0) {
       console.log(`ポート ${port - 1} は使用中です。${port} を試します...`);
     }
   }
@@ -320,29 +352,40 @@ async function findAvailablePort(startPort, maxRetries = 100) {
 }
 
 /**
- * Start MDV server with auto port increment
+ * Resolve target path to root directory and optional initial file
+ * @param {string} targetPath - User-provided path
+ * @returns {Promise<{rootDir: string, initialFile: string|null}>}
  */
-async function startViewer(targetPath, startPort, openBrowser) {
-  let rootDir = process.cwd();
-  let initialFile = null;
-
-  if (targetPath && targetPath !== '.') {
-    const resolved = path.resolve(targetPath);
-    try {
-      const stats = await fs.stat(resolved);
-      if (stats.isDirectory()) {
-        rootDir = resolved;
-      } else if (stats.isFile()) {
-        rootDir = path.dirname(resolved);
-        initialFile = path.basename(resolved);
-      }
-    } catch {
-      console.error(`Error: Path not found: ${targetPath}`);
-      process.exit(1);
-    }
+async function resolveTargetPath(targetPath) {
+  if (!targetPath || targetPath === '.') {
+    return { rootDir: process.cwd(), initialFile: null };
   }
 
-  // Find available port
+  const resolved = path.resolve(targetPath);
+  try {
+    const stats = await fs.stat(resolved);
+    if (stats.isDirectory()) {
+      return { rootDir: resolved, initialFile: null };
+    }
+    if (stats.isFile()) {
+      return { rootDir: path.dirname(resolved), initialFile: path.basename(resolved) };
+    }
+  } catch {
+    console.error(`Error: Path not found: ${targetPath}`);
+    process.exit(1);
+  }
+  return { rootDir: process.cwd(), initialFile: null };
+}
+
+/**
+ * Start MDV server with auto port increment
+ * @param {string} targetPath - Target directory or file path
+ * @param {number} startPort - Starting port number
+ * @param {boolean} openBrowser - Whether to open browser automatically
+ */
+async function startViewer(targetPath, startPort, openBrowser) {
+  const { rootDir, initialFile } = await resolveTargetPath(targetPath);
+
   const port = await findAvailablePort(startPort);
   if (!port) {
     console.error('Error: 利用可能なポートが見つかりませんでした');
@@ -353,7 +396,6 @@ async function startViewer(targetPath, startPort, openBrowser) {
     console.log(`ポート ${startPort} は使用中のため、${port} で起動します`);
   }
 
-  // Create and start server
   const mdv = createMdvServer({ rootDir, port });
   await mdv.start();
 
@@ -375,11 +417,14 @@ async function startViewer(targetPath, startPort, openBrowser) {
   }
 }
 
-async function main() {
-  let args;
+/**
+ * Parse command line arguments safely
+ * @returns {{values: object, positionals: string[]}}
+ */
+function parseCommandLineArgs() {
   try {
-    args = parseArgs({
-      options,
+    return parseArgs({
+      options: OPTIONS,
       allowPositionals: true,
       strict: false
     });
@@ -388,33 +433,33 @@ async function main() {
     showHelp();
     process.exit(1);
   }
+}
 
-  const { values, positionals } = args;
+/**
+ * Main entry point
+ */
+async function main() {
+  const { values, positionals } = parseCommandLineArgs();
 
-  // Help
   if (values.help) {
     showHelp();
     process.exit(0);
   }
 
-  // Version
   if (values.version) {
     console.log('mdv v0.3.1');
     process.exit(0);
   }
 
-  // List servers
   if (values.list) {
     process.exit(listServers());
   }
 
-  // Kill servers
   if (values.kill) {
     const pid = positionals[0] || null;
     process.exit(killServers(pid, values.all));
   }
 
-  // PDF conversion
   if (values.pdf) {
     const inputPath = positionals[0];
     if (!inputPath) {

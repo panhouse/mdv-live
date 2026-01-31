@@ -4,20 +4,20 @@
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { createMdvServer } from '../src/server.js';
-import fs from 'fs/promises';
-import path from 'path';
-import os from 'os';
+
+const TEST_PORT = 19996;
 
 describe('Markdown Rendering', () => {
   let server;
   let tempDir;
-  const port = 19996;
 
   before(async () => {
-    // Create temp directory for tests
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-render-test-'));
-    server = createMdvServer({ rootDir: tempDir, port });
+    server = createMdvServer({ rootDir: tempDir, port: TEST_PORT });
     await server.start();
   });
 
@@ -28,9 +28,15 @@ describe('Markdown Rendering', () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
+  /**
+   * Creates a file and fetches its rendered content via API
+   * @param {string} filename - Name of the file to create
+   * @param {string} content - Content to write to the file
+   * @returns {Promise<object>} Parsed JSON response from API
+   */
   async function createAndFetch(filename, content) {
     await fs.writeFile(path.join(tempDir, filename), content);
-    const response = await fetch(`http://localhost:${port}/api/file?path=${filename}`);
+    const response = await fetch(`http://localhost:${TEST_PORT}/api/file?path=${filename}`);
     return response.json();
   }
 
@@ -99,14 +105,15 @@ describe('Markdown Rendering', () => {
 
   describe('YAML Frontmatter', () => {
     it('should handle YAML frontmatter', async () => {
-      const content = `---
-title: Test
-author: Me
----
-
-# Content`;
+      const content = [
+        '---',
+        'title: Test',
+        'author: Me',
+        '---',
+        '',
+        '# Content'
+      ].join('\n');
       const data = await createAndFetch('frontmatter.md', content);
-      // Frontmatter should be rendered as code block
       assert.ok(data.content.includes('language-yaml') || data.content.includes('title'));
     });
   });
@@ -121,50 +128,54 @@ author: Me
 
   describe('Special Characters', () => {
     it('should handle HTML in markdown (html enabled)', async () => {
-      // Note: markdown-it has html:true for rendering HTML in markdown
       const data = await createAndFetch('html-test.md', '<div class="custom">Content</div>');
-      // HTML should be preserved when html option is enabled
       assert.ok(data.content.includes('custom') || data.content.includes('div'));
     });
 
     it('should handle special characters in code blocks', async () => {
-      const data = await createAndFetch('code-special.md', '```\n<script>alert("test")</script>\n```');
-      // In code blocks, HTML should be escaped
+      const codeContent = '```\n<script>alert("test")</script>\n```';
+      const data = await createAndFetch('code-special.md', codeContent);
       assert.ok(data.content.includes('&lt;') || data.content.includes('script'));
     });
   });
 
   describe('Marp Detection', () => {
     it('should detect Marp files', async () => {
-      const content = `---
-marp: true
-theme: default
----
-
-# Slide 1`;
+      const content = [
+        '---',
+        'marp: true',
+        'theme: default',
+        '---',
+        '',
+        '# Slide 1'
+      ].join('\n');
       const data = await createAndFetch('marp-slide.md', content);
       assert.strictEqual(data.isMarp, true);
-      assert.ok(data.css); // Marp files should include CSS
+      assert.ok(data.css, 'Marp files should include CSS');
     });
 
     it('should NOT detect regular markdown as Marp', async () => {
-      const content = `# Regular Markdown
-
-This is not a Marp file.`;
+      const content = [
+        '# Regular Markdown',
+        '',
+        'This is not a Marp file.'
+      ].join('\n');
       const data = await createAndFetch('regular.md', content);
       assert.strictEqual(data.isMarp, false);
     });
 
     it('should NOT detect Marp in code examples', async () => {
-      const content = `# README
-
-Example:
-
-\`\`\`markdown
----
-marp: true
----
-\`\`\``;
+      const content = [
+        '# README',
+        '',
+        'Example:',
+        '',
+        '```markdown',
+        '---',
+        'marp: true',
+        '---',
+        '```'
+      ].join('\n');
       const data = await createAndFetch('marp-example.md', content);
       assert.strictEqual(data.isMarp, false);
     });

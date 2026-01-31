@@ -4,20 +4,45 @@
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createMdvServer } from '../src/server.js';
-import path from 'path';
-import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const testRootDir = path.join(__dirname, '..');
 
+const PORT = 19998;
+
+/**
+ * Assert that the response status indicates the request was blocked.
+ * Security endpoints may return 403 (forbidden) or 404 (not found).
+ */
+function assertBlocked(response, message) {
+  const blockedStatuses = [403, 404];
+  assert.ok(
+    blockedStatuses.includes(response.status),
+    `${message}: expected 403 or 404, got ${response.status}`
+  );
+}
+
+/**
+ * Assert that the response status indicates the request was blocked,
+ * including 400 for malformed requests (e.g., null byte injection).
+ */
+function assertBlockedOrBadRequest(response, message) {
+  const blockedStatuses = [400, 403, 404];
+  assert.ok(
+    blockedStatuses.includes(response.status),
+    `${message}: expected 400, 403, or 404, got ${response.status}`
+  );
+}
+
 describe('Security', () => {
   let server;
-  const port = 19998;
 
   before(async () => {
-    server = createMdvServer({ rootDir: testRootDir, port });
+    server = createMdvServer({ rootDir: testRootDir, port: PORT });
     await server.start();
   });
 
@@ -29,79 +54,79 @@ describe('Security', () => {
 
   describe('Path Traversal Prevention', () => {
     it('should block ../ path traversal', async () => {
-      const response = await fetch(`http://localhost:${port}/api/file?path=../secret.txt`);
-      assert.ok([403, 404].includes(response.status));
+      const response = await fetch(`http://localhost:${PORT}/api/file?path=../secret.txt`);
+      assertBlocked(response, '../ traversal');
     });
 
     it('should block ../../ path traversal', async () => {
-      const response = await fetch(`http://localhost:${port}/api/file?path=../../etc/passwd`);
-      assert.ok([403, 404].includes(response.status));
+      const response = await fetch(`http://localhost:${PORT}/api/file?path=../../etc/passwd`);
+      assertBlocked(response, '../../ traversal');
     });
 
     it('should block URL-encoded path traversal', async () => {
-      const response = await fetch(`http://localhost:${port}/api/file?path=..%2F..%2Fetc%2Fpasswd`);
-      assert.ok([403, 404].includes(response.status));
+      const response = await fetch(`http://localhost:${PORT}/api/file?path=..%2F..%2Fetc%2Fpasswd`);
+      assertBlocked(response, 'URL-encoded traversal');
     });
 
     it('should block absolute paths', async () => {
-      const response = await fetch(`http://localhost:${port}/api/file?path=/etc/passwd`);
-      assert.ok([403, 404].includes(response.status));
+      const response = await fetch(`http://localhost:${PORT}/api/file?path=/etc/passwd`);
+      assertBlocked(response, 'absolute path');
     });
 
     it('should block double-encoded path traversal', async () => {
-      const response = await fetch(`http://localhost:${port}/api/file?path=..%252F..%252Fetc%252Fpasswd`);
-      assert.ok([403, 404].includes(response.status));
+      const response = await fetch(`http://localhost:${PORT}/api/file?path=..%252F..%252Fetc%252Fpasswd`);
+      assertBlocked(response, 'double-encoded traversal');
     });
 
     it('should block Windows-style absolute paths', async () => {
-      const response = await fetch(`http://localhost:${port}/api/file?path=C:\\Windows\\System32\\config\\sam`);
-      assert.ok([403, 404].includes(response.status));
+      const response = await fetch(`http://localhost:${PORT}/api/file?path=C:\\Windows\\System32\\config\\sam`);
+      assertBlocked(response, 'Windows absolute path');
     });
 
     it('should block null byte injection', async () => {
-      const response = await fetch(`http://localhost:${port}/api/file?path=test.md%00.txt`);
-      assert.ok([400, 403, 404].includes(response.status));
+      const response = await fetch(`http://localhost:${PORT}/api/file?path=test.md%00.txt`);
+      assertBlockedOrBadRequest(response, 'null byte injection');
     });
 
     it('should block path traversal in POST /api/file', async () => {
-      const response = await fetch(`http://localhost:${port}/api/file`, {
+      const response = await fetch(`http://localhost:${PORT}/api/file`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: '../../../tmp/evil.txt', content: 'evil' })
       });
-      assert.ok([403, 404].includes(response.status));
+      assertBlocked(response, 'POST path traversal');
     });
 
     it('should block path traversal in DELETE /api/file', async () => {
-      const response = await fetch(`http://localhost:${port}/api/file?path=../../../tmp/evil.txt`, {
+      const response = await fetch(`http://localhost:${PORT}/api/file?path=../../../tmp/evil.txt`, {
         method: 'DELETE'
       });
-      assert.ok([403, 404].includes(response.status));
+      assertBlocked(response, 'DELETE path traversal');
     });
 
     it('should block path traversal in POST /api/mkdir', async () => {
-      const response = await fetch(`http://localhost:${port}/api/mkdir`, {
+      const response = await fetch(`http://localhost:${PORT}/api/mkdir`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: '../../../tmp/evil_dir' })
       });
-      assert.ok([403, 404].includes(response.status));
+      assertBlocked(response, 'mkdir path traversal');
     });
 
     it('should allow valid nested paths', async () => {
-      const response = await fetch(`http://localhost:${port}/api/file?path=src/server.js`);
+      const response = await fetch(`http://localhost:${PORT}/api/file?path=src/server.js`);
       assert.strictEqual(response.status, 200);
     });
   });
 
   describe('API Security', () => {
     it('should require path parameter for file operations', async () => {
-      const response = await fetch(`http://localhost:${port}/api/file`);
+      const response = await fetch(`http://localhost:${PORT}/api/file`);
       assert.strictEqual(response.status, 400);
     });
 
     it('should return 404 for non-existent files', async () => {
-      const response = await fetch(`http://localhost:${port}/api/file?path=nonexistent-file-12345.md`);
+      const response = await fetch(`http://localhost:${PORT}/api/file?path=nonexistent-file-12345.md`);
       assert.strictEqual(response.status, 404);
     });
   });

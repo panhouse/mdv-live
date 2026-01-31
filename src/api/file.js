@@ -6,45 +6,102 @@ import fs from 'fs/promises';
 import { createReadStream } from 'fs';
 import path from 'path';
 import mime from 'mime-types';
+import WebSocket from 'ws';
 import { getFileType } from '../utils/fileTypes.js';
 import { renderFile } from '../rendering/index.js';
 import { validatePath } from '../utils/path.js';
 
 /**
+ * Validate path and resolve to full path
+ * @param {string} relativePath - Relative path to validate
+ * @param {string} rootDir - Root directory
+ * @returns {{ valid: boolean, fullPath: string }} Validation result with full path
+ */
+function resolveAndValidate(relativePath, rootDir) {
+  if (!relativePath || !validatePath(relativePath, rootDir)) {
+    return { valid: false, fullPath: '' };
+  }
+  return { valid: true, fullPath: path.join(rootDir, relativePath) };
+}
+
+/**
  * Broadcast tree_update to all WebSocket clients
  * @param {Express} app - Express app instance
+ * @returns {void}
  */
 function broadcastTreeUpdate(app) {
   const wss = app.locals.wss;
-  if (wss) {
-    const message = JSON.stringify({ type: 'tree_update' });
-    wss.clients.forEach(client => {
-      if (client.readyState === 1) { // WebSocket.OPEN
-        client.send(message);
-      }
-    });
+  if (!wss) return;
+
+  const message = JSON.stringify({ type: 'tree_update' });
+  for (const client of wss.clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(message);
+    }
   }
+}
+
+/**
+ * Build download URL for a file
+ * @param {string} relativePath - Relative path to file
+ * @returns {string} Download URL
+ */
+function buildDownloadUrl(relativePath) {
+  return `/api/download?path=${encodeURIComponent(relativePath)}`;
+}
+
+/**
+ * Build response for binary files with appropriate media URLs
+ * @param {string} name - File name
+ * @param {object} fileType - File type info
+ * @param {string} downloadUrl - Download URL
+ * @returns {object} Response object
+ */
+function buildBinaryFileResponse(name, fileType, downloadUrl) {
+  const response = {
+    name,
+    fileType: fileType.type,
+    icon: fileType.icon,
+    downloadUrl
+  };
+
+  switch (fileType.type) {
+    case 'image':
+      response.imageUrl = downloadUrl;
+      break;
+    case 'pdf':
+      response.pdfUrl = downloadUrl;
+      break;
+    case 'video':
+    case 'audio':
+      response.mediaUrl = downloadUrl;
+      break;
+  }
+
+  return response;
 }
 
 /**
  * Setup file routes
  * @param {Express} app - Express app instance
+ * @returns {void}
  */
 export function setupFileRoutes(app) {
+  const { rootDir } = app.locals;
+
   // Get file content
   app.get('/api/file', async (req, res) => {
+    const { path: relativePath } = req.query;
+    const { valid, fullPath } = resolveAndValidate(relativePath, rootDir);
+
+    if (!relativePath) {
+      return res.status(400).json({ error: 'Path is required' });
+    }
+    if (!valid) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
     try {
-      const { path: relativePath } = req.query;
-      if (!relativePath) {
-        return res.status(400).json({ error: 'Path is required' });
-      }
-
-      // Security check (must use relativePath, not fullPath)
-      if (!validatePath(relativePath, app.locals.rootDir)) {
-        return res.status(403).json({ error: 'Access denied' });
-      }
-
-      const fullPath = path.join(app.locals.rootDir, relativePath);
       const stats = await fs.stat(fullPath);
       if (stats.isDirectory()) {
         return res.status(400).json({ error: 'Cannot read directory' });
@@ -53,33 +110,13 @@ export function setupFileRoutes(app) {
       const fileType = getFileType(relativePath);
       const name = path.basename(relativePath);
 
-      // Handle binary files
       if (fileType.binary) {
-        return res.json({
-          name,
-          fileType: fileType.type,
-          icon: fileType.icon,
-          downloadUrl: `/api/download?path=${encodeURIComponent(relativePath)}`,
-          // Special URLs for media types
-          ...(fileType.type === 'image' && {
-            imageUrl: `/api/download?path=${encodeURIComponent(relativePath)}`
-          }),
-          ...(fileType.type === 'pdf' && {
-            pdfUrl: `/api/download?path=${encodeURIComponent(relativePath)}`
-          }),
-          ...(['video', 'audio'].includes(fileType.type) && {
-            mediaUrl: `/api/download?path=${encodeURIComponent(relativePath)}`
-          })
-        });
+        const downloadUrl = buildDownloadUrl(relativePath);
+        return res.json(buildBinaryFileResponse(name, fileType, downloadUrl));
       }
 
-      // Read and render text files
       const rendered = await renderFile(fullPath);
-
-      res.json({
-        name,
-        ...rendered
-      });
+      res.json({ name, ...rendered });
     } catch (err) {
       if (err.code === 'ENOENT') {
         return res.status(404).json({ error: 'File not found' });
@@ -90,18 +127,17 @@ export function setupFileRoutes(app) {
 
   // Save file content
   app.post('/api/file', async (req, res) => {
+    const { path: relativePath, content } = req.body;
+    const { valid, fullPath } = resolveAndValidate(relativePath, rootDir);
+
+    if (!relativePath) {
+      return res.status(400).json({ error: 'Path is required' });
+    }
+    if (!valid) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
     try {
-      const { path: relativePath, content } = req.body;
-      if (!relativePath) {
-        return res.status(400).json({ error: 'Path is required' });
-      }
-
-      // Security check (must use relativePath, not fullPath)
-      if (!validatePath(relativePath, app.locals.rootDir)) {
-        return res.status(403).json({ error: 'Access denied' });
-      }
-
-      const fullPath = path.join(app.locals.rootDir, relativePath);
       await fs.writeFile(fullPath, content, 'utf-8');
       broadcastTreeUpdate(app);
       res.json({ success: true });
@@ -112,18 +148,17 @@ export function setupFileRoutes(app) {
 
   // Delete file or directory
   app.delete('/api/file', async (req, res) => {
+    const { path: relativePath } = req.query;
+    const { valid, fullPath } = resolveAndValidate(relativePath, rootDir);
+
+    if (!relativePath) {
+      return res.status(400).json({ error: 'Path is required' });
+    }
+    if (!valid) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
     try {
-      const { path: relativePath } = req.query;
-      if (!relativePath) {
-        return res.status(400).json({ error: 'Path is required' });
-      }
-
-      // Security check (must use relativePath, not fullPath)
-      if (!validatePath(relativePath, app.locals.rootDir)) {
-        return res.status(403).json({ error: 'Access denied' });
-      }
-
-      const fullPath = path.join(app.locals.rootDir, relativePath);
       const stats = await fs.stat(fullPath);
       if (stats.isDirectory()) {
         await fs.rm(fullPath, { recursive: true });
@@ -143,18 +178,17 @@ export function setupFileRoutes(app) {
 
   // Create directory
   app.post('/api/mkdir', async (req, res) => {
+    const { path: relativePath } = req.body;
+    const { valid, fullPath } = resolveAndValidate(relativePath, rootDir);
+
+    if (!relativePath) {
+      return res.status(400).json({ error: 'Path is required' });
+    }
+    if (!valid) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
     try {
-      const { path: relativePath } = req.body;
-      if (!relativePath) {
-        return res.status(400).json({ error: 'Path is required' });
-      }
-
-      // Security check (must use relativePath, not fullPath)
-      if (!validatePath(relativePath, app.locals.rootDir)) {
-        return res.status(403).json({ error: 'Access denied' });
-      }
-
-      const fullPath = path.join(app.locals.rootDir, relativePath);
       await fs.mkdir(fullPath, { recursive: true });
       broadcastTreeUpdate(app);
       res.json({ success: true });
@@ -165,21 +199,21 @@ export function setupFileRoutes(app) {
 
   // Move/rename file or directory
   app.post('/api/move', async (req, res) => {
+    const { source, destination } = req.body;
+
+    if (!source || !destination) {
+      return res.status(400).json({ error: 'Source and destination are required' });
+    }
+
+    const sourceResult = resolveAndValidate(source, rootDir);
+    const destResult = resolveAndValidate(destination, rootDir);
+
+    if (!sourceResult.valid || !destResult.valid) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
     try {
-      const { source, destination } = req.body;
-      if (!source || !destination) {
-        return res.status(400).json({ error: 'Source and destination are required' });
-      }
-
-      // Security check (must use relative paths, not full paths)
-      if (!validatePath(source, app.locals.rootDir) ||
-          !validatePath(destination, app.locals.rootDir)) {
-        return res.status(403).json({ error: 'Access denied' });
-      }
-
-      const sourcePath = path.join(app.locals.rootDir, source);
-      const destPath = path.join(app.locals.rootDir, destination);
-      await fs.rename(sourcePath, destPath);
+      await fs.rename(sourceResult.fullPath, destResult.fullPath);
       broadcastTreeUpdate(app);
       res.json({ success: true });
     } catch (err) {
@@ -190,16 +224,14 @@ export function setupFileRoutes(app) {
   // Download file (with Range Request support for video/audio streaming)
   app.get('/api/download', async (req, res) => {
     const { path: relativePath } = req.query;
+    const { valid, fullPath } = resolveAndValidate(relativePath, rootDir);
+
     if (!relativePath) {
       return res.status(400).json({ error: 'Path is required' });
     }
-
-    // Security check (must use relativePath, not fullPath)
-    if (!validatePath(relativePath, app.locals.rootDir)) {
+    if (!valid) {
       return res.status(403).json({ error: 'Access denied' });
     }
-
-    const fullPath = path.join(app.locals.rootDir, relativePath);
 
     try {
       const stat = await fs.stat(fullPath);
@@ -207,30 +239,27 @@ export function setupFileRoutes(app) {
         return res.status(400).json({ error: 'Not a file' });
       }
 
-      const fileSize = stat.size;
-      const range = req.headers.range;
-
-      if (range) {
-        // Range Request対応（動画/音声ストリーミング用）
-        const parts = range.replace(/bytes=/, '').split('-');
-        const start = parseInt(parts[0], 10);
-        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-        const chunkSize = end - start + 1;
-
-        const mimeType = mime.lookup(fullPath) || 'application/octet-stream';
-        res.writeHead(206, {
-          'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-          'Accept-Ranges': 'bytes',
-          'Content-Length': chunkSize,
-          'Content-Type': mimeType,
-        });
-
-        const stream = createReadStream(fullPath, { start, end });
-        stream.pipe(res);
-      } else {
-        // 通常のファイル送信
-        res.sendFile(fullPath);
+      const rangeHeader = req.headers.range;
+      if (!rangeHeader) {
+        return res.sendFile(fullPath);
       }
+
+      // Range Request for video/audio streaming
+      const fileSize = stat.size;
+      const parts = rangeHeader.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunkSize = end - start + 1;
+      const mimeType = mime.lookup(fullPath) || 'application/octet-stream';
+
+      res.writeHead(206, {
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunkSize,
+        'Content-Type': mimeType,
+      });
+
+      createReadStream(fullPath, { start, end }).pipe(res);
     } catch (err) {
       if (err.code === 'ENOENT') {
         return res.status(404).json({ error: 'File not found' });

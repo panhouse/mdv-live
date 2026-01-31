@@ -4,21 +4,19 @@
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createMdvServer } from '../src/server.js';
-import path from 'path';
-import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const testRootDir = path.join(__dirname, '..');
+const port = 19999;
 
 describe('MDV Server', () => {
   let server;
-  let port;
 
   before(async () => {
-    // Find available port
-    port = 19999;
     server = createMdvServer({ rootDir: testRootDir, port });
     await server.start();
   });
