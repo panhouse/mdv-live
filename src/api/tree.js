@@ -7,7 +7,7 @@ import path from 'path';
 import { getFileType } from '../utils/fileTypes.js';
 import { getRelativePath, validatePath } from '../utils/path.js';
 
-const IGNORED_PATTERNS = new Set(['node_modules', '__pycache__']);
+const IGNORED_PATTERNS = new Set(['node_modules', '__pycache__', '.git']);
 const MAX_INITIAL_DEPTH = 1;
 
 /**
@@ -16,7 +16,7 @@ const MAX_INITIAL_DEPTH = 1;
  * @returns {boolean} True if should be ignored
  */
 function shouldIgnore(name) {
-  return name.startsWith('.') || IGNORED_PATTERNS.has(name);
+  return IGNORED_PATTERNS.has(name);
 }
 
 /**
