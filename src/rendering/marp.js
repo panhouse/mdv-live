@@ -7,11 +7,20 @@
 
 import { Marp } from '@marp-team/marp-core';
 
-// Initialize Marp with options
+// Initialize Marp with full HTML support
 const marp = new Marp({
   html: true,
-  math: true,  // Enable KaTeX math
+  math: true,
+  markdown: {
+    html: true,
+    breaks: false,
+    linkify: true,
+  }
 });
+
+// Disable indented code blocks (4-space indent → code)
+// This allows HTML with indentation to render properly
+marp.markdown.disable('code');
 
 /**
  * Render Marp presentation to HTML
