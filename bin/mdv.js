@@ -237,7 +237,7 @@ async function convertToPdf(inputPath, outputPath) {
 
   try {
     // Use marp-cli for PDF conversion (supports Marp slides)
-    execSync(`npx @marp-team/marp-cli "${resolved}" --pdf -o "${finalOutput}"`, {
+    execSync(`npx @marp-team/marp-cli --no-stdin "${resolved}" --pdf -o "${finalOutput}"`, {
       encoding: 'utf-8',
       stdio: 'inherit'
     });
