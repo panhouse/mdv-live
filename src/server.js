@@ -12,6 +12,7 @@ import { setupWatcher } from './watcher.js';
 import { setupTreeRoutes } from './api/tree.js';
 import { setupFileRoutes } from './api/file.js';
 import { setupUploadRoutes } from './api/upload.js';
+import { setupPdfRoutes } from './api/pdf.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -44,12 +45,13 @@ export function createMdvServer(options) {
   setupTreeRoutes(app);
   setupFileRoutes(app);
   setupUploadRoutes(app);
+  setupPdfRoutes(app);
 
   // Server info endpoint
   app.get('/api/info', (req, res) => {
     res.json({
       rootPath: app.locals.rootDir,
-      version: '1.0.0'
+      version: '0.3.0'
     });
   });
 

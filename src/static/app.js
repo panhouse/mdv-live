@@ -560,7 +560,23 @@
                         display: block;
                     }
                     @media print {
-                        .marpit > svg[data-marpit-svg] { display: block !important; }
+                        .marpit {
+                            padding: 0 !important;
+                            background: transparent !important;
+                        }
+                        .marpit > svg[data-marpit-svg] {
+                            display: block !important;
+                            width: 100% !important;
+                            height: auto !important;
+                            max-width: none !important;
+                            box-shadow: none !important;
+                            border-radius: 0 !important;
+                            page-break-after: always;
+                            page-break-inside: avoid;
+                        }
+                        .marpit > svg[data-marpit-svg]:last-child {
+                            page-break-after: avoid;
+                        }
                         .marp-nav { display: none !important; }
                     }
                 `;
@@ -1152,16 +1168,74 @@
     // ============================================================
 
     const PrintManager = {
-        print() {
+        isMarpPresentation() {
+            // Check if current content has .marpit class (Marp presentation)
+            return !!elements.content.querySelector('.marpit');
+        },
+
+        async print() {
             if (state.activeTabIndex < 0) return;
 
             const tab = state.tabs[state.activeTabIndex];
-            const pdfName = tab.name.replace(/\.(md|txt)$/, '.pdf');
+
+            if (this.isMarpPresentation()) {
+                // Marp → use marp-cli for PDF export
+                await this.exportMarpPdf(tab.path);
+            } else {
+                // Regular Markdown → use browser print
+                this.browserPrint(tab.name);
+            }
+        },
+
+        browserPrint(fileName) {
+            const pdfName = fileName.replace(/\.(md|txt)$/, '.pdf');
             const originalTitle = document.title;
 
             document.title = pdfName;
             window.print();
             document.title = originalTitle;
+        },
+
+        async exportMarpPdf(filePath) {
+            const statusText = elements.statusText;
+            const originalStatus = statusText.textContent;
+
+            try {
+                statusText.textContent = 'Generating PDF...';
+
+                const response = await fetch('/api/pdf/export', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filePath })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.details || error.error || 'PDF export failed');
+                }
+
+                // Download the PDF
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filePath.replace(/\.md$/, '.pdf').split('/').pop();
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+
+                statusText.textContent = 'PDF exported';
+                setTimeout(() => {
+                    statusText.textContent = originalStatus;
+                }, 2000);
+            } catch (error) {
+                console.error('PDF export error:', error);
+                statusText.textContent = 'PDF export failed';
+                setTimeout(() => {
+                    statusText.textContent = originalStatus;
+                }, 3000);
+            }
         },
 
         init() {
