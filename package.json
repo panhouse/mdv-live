@@ -30,11 +30,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/panhouse/mdv.git"
+    "url": "git+https://github.com/panhouse/mdv-live.git"
   },
-  "homepage": "https://github.com/panhouse/mdv#readme",
+  "homepage": "https://github.com/panhouse/mdv-live#readme",
   "bugs": {
-    "url": "https://github.com/panhouse/mdv/issues"
+    "url": "https://github.com/panhouse/mdv-live/issues"
   },
   "files": [
     "bin/",
