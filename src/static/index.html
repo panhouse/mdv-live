@@ -28,6 +28,22 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+
+    <!-- Tailwind CSS (for Marp slides) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            corePlugins: { preflight: false },
+            theme: {
+                extend: {
+                    colors: {
+                        navy: { DEFAULT: '#1B4565', light: '#2d5a7b', dark: '#0f2d44' },
+                        teal: { DEFAULT: '#3E9BA4', light: '#5bb5bd' },
+                    }
+                }
+            }
+        }
+    </script>
 </head>
 <body>
     <script>document.body.dataset.theme = __mdvTheme;</script>
