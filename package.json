@@ -1,7 +1,7 @@
 {
-  "name": "mdv",
+  "name": "mdv-live",
   "version": "0.3.0",
-  "description": "Markdown Viewer with Marp support",
+  "description": "Markdown Viewer - File tree + Live preview + Marp support + Hot reload",
   "main": "src/server.js",
   "bin": {
     "mdv": "./bin/mdv.js"
@@ -9,21 +9,41 @@
   "scripts": {
     "start": "node bin/mdv.js",
     "dev": "node bin/mdv.js --dev",
-    "test": "node --test tests/*.js"
+    "test": "node --test tests/*.js",
+    "setup-macos": "bash scripts/setup-macos-app.sh"
   },
   "keywords": [
     "markdown",
     "viewer",
     "marp",
     "slides",
-    "preview"
+    "preview",
+    "live-reload",
+    "hot-reload",
+    "file-tree"
   ],
-  "author": "",
+  "author": "PanHouse <hirono.okamoto@panhouse.jp>",
   "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=18.0.0"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/panhouse/mdv.git"
+  },
+  "homepage": "https://github.com/panhouse/mdv#readme",
+  "bugs": {
+    "url": "https://github.com/panhouse/mdv/issues"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "scripts/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "dependencies": {
     "express": "^4.21.2",
     "ws": "^8.18.0",

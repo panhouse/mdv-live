@@ -2,6 +2,9 @@
 
 ファイルツリー + ライブプレビュー + Marp完全対応のMarkdownビューア
 
+[![npm version](https://badge.fury.io/js/mdv-live.svg)](https://www.npmjs.com/package/mdv-live)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 ## Features
 
 - 📁 左側にフォルダツリー表示（遅延読み込み対応）
@@ -21,11 +24,11 @@
 ## Installation
 
 ```bash
-# ローカルインストール
-npm install
+# グローバルインストール（推奨）
+npm install -g mdv-live
 
-# グローバルコマンドとして登録
-npm link
+# または npx で直接実行
+npx mdv-live
 ```
 
 ## Usage
@@ -72,6 +75,33 @@ $ mdv -p 8642
 ポート 8642 は使用中です。8643 を試します...
 MDV server running at http://localhost:8643
 ```
+
+## macOS Finder Integration
+
+macOSで`.md`ファイルをダブルクリックしてMDVで開けるようにする設定です。
+
+### セットアップスクリプトを使用（推奨）
+
+```bash
+# mdvがインストールされていることを確認
+which mdv
+
+# セットアップスクリプトを実行
+curl -fsSL https://raw.githubusercontent.com/panhouse/mdv/main/scripts/setup-macos-app.sh | bash
+```
+
+または、リポジトリをクローンしている場合：
+
+```bash
+npm run setup-macos
+```
+
+### デフォルトアプリに設定
+
+1. Finderで任意の`.md`ファイルを右クリック
+2. 「情報を見る」を選択
+3. 「このアプリケーションで開く」で「MDV」を選択
+4. 「すべてを変更...」をクリック
 
 ## Marp Support
 
@@ -144,6 +174,10 @@ paginate: true
 ## Development
 
 ```bash
+# Clone repository
+git clone https://github.com/panhouse/mdv.git
+cd mdv
+
 # Install dependencies
 npm install
 
@@ -177,12 +211,29 @@ mdv/
 │       ├── index.html
 │       ├── app.js
 │       └── styles.css
+├── scripts/
+│   └── setup-macos-app.sh  # macOS app setup
 └── tests/               # Test files
 ```
 
 ## Requirements
 
 - Node.js 18+
+
+## Migration from Python version
+
+以前のPython版（`pip install mdv-live`）からの移行：
+
+```bash
+# Python版をアンインストール
+pip uninstall mdv-live
+
+# Node.js版をインストール
+npm install -g mdv-live
+
+# macOSアプリを再設定（必要な場合）
+npm run setup-macos
+```
 
 ## License
 
