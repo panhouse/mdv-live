@@ -34,7 +34,7 @@ describe('MDV Server', () => {
 
       const data = await response.json();
       assert.ok(data.rootPath);
-      assert.strictEqual(data.version, '0.3.1');
+      assert.strictEqual(data.version, '0.3.2');
     });
 
     it('GET /api/tree should return file tree', async () => {

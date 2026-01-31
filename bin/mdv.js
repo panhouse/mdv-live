@@ -447,7 +447,7 @@ async function main() {
   }
 
   if (values.version) {
-    console.log('mdv v0.3.1');
+    console.log('mdv v0.3.2');
     process.exit(0);
   }
 
