@@ -31,7 +31,8 @@ cat << EOF > "$TEMP_DIR/MDV.applescript"
 on open theFiles
     repeat with theFile in theFiles
         set filePath to POSIX path of theFile
-        do shell script "nohup $MDV_PATH " & quoted form of filePath & " > /dev/null 2>&1 &"
+        -- Run launcher (will return after opening browser)
+        do shell script "/Applications/MDV.app/Contents/Resources/launch.sh " & quoted form of filePath
     end repeat
 end open
 
@@ -48,6 +49,48 @@ EOF
 
 echo "Compiling AppleScript..."
 osacompile -o "$TEMP_DIR/$APP_NAME" "$TEMP_DIR/MDV.applescript"
+
+# Create launcher script
+echo "Creating launcher script..."
+cat > "$TEMP_DIR/$APP_NAME/Contents/Resources/launch.sh" << 'LAUNCHSCRIPT'
+#!/bin/bash
+# Set PATH for node (AppleScript environment doesn't have user's PATH)
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+
+exec >> /tmp/mdv-debug.log 2>&1
+echo "=== $(date) ==="
+echo "FILE_PATH: $1"
+
+FILE_PATH="$1"
+FILE_NAME=$(basename "$FILE_PATH")
+LOG="/tmp/mdv-$$.log"
+
+echo "Starting MDV..."
+# Start MDV
+MDV_PATH_HERE --no-browser "$FILE_PATH" > "$LOG" 2>&1 &
+
+# Wait for server (max 5 sec)
+for i in {1..25}; do
+    sleep 0.2
+    PORT=$(grep -o 'localhost:[0-9]*' "$LOG" 2>/dev/null | head -1 | cut -d: -f2)
+    if [ -n "$PORT" ]; then
+        echo "Found port: $PORT"
+        echo "Opening browser..."
+        # Use osascript to open URL (works better from AppleScript context)
+        osascript -e "open location \"http://localhost:$PORT?file=$FILE_NAME\""
+        echo "Done"
+        exit 0
+    fi
+done
+
+echo "Timeout - using fallback"
+# Fallback
+osascript -e "open location \"http://localhost:8642?file=$FILE_NAME\""
+LAUNCHSCRIPT
+
+# Replace placeholder with actual path
+sed -i '' "s|MDV_PATH_HERE|$MDV_PATH|g" "$TEMP_DIR/$APP_NAME/Contents/Resources/launch.sh"
+chmod +x "$TEMP_DIR/$APP_NAME/Contents/Resources/launch.sh"
 
 # Info.plist設定
 cat << 'EOF' > "$TEMP_DIR/$APP_NAME/Contents/Info.plist"
@@ -104,6 +147,10 @@ fi
 
 echo "Installing to $APP_PATH..."
 cp -R "$TEMP_DIR/$APP_NAME" "$APP_PATH"
+
+# Remove quarantine attribute to prevent Gatekeeper warning
+echo "Removing quarantine attribute..."
+xattr -cr "$APP_PATH"
 
 # LaunchServices登録
 echo "Registering with LaunchServices..."
