@@ -777,7 +777,7 @@ body {
 
     .main { width: 100% !important; }
     .content { flex: none !important; }
-    .markdown-body { max-width: 100% !important; }
+    .markdown-body { max-width: 100% !important; padding: 0 20px !important; }
     .markdown-body img { max-width: 100% !important; }
     .markdown-body code { background: #f0f0f0 !important; }
     .markdown-body pre { background: #f8f8f8 !important; border: 1px solid #ddd !important; }
