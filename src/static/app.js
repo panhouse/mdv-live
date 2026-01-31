@@ -303,12 +303,13 @@
                 }
             };
 
-            state.ws.onmessage = (event) => {
+            state.ws.onmessage = async (event) => {
                 const data = JSON.parse(event.data);
                 if (data.type === 'file_update' && state.activeTabIndex >= 0) {
                     this.handleFileUpdate(data);
-                } else if (data.type === 'tree_update' && data.tree) {
-                    FileTreeManager.update(data.tree);
+                } else if (data.type === 'tree_update') {
+                    // tree_update を受信したらAPIから最新ツリーを取得
+                    await FileTreeManager.refresh();
                 }
             };
 
@@ -386,6 +387,17 @@
             }
             // 最後の手段: ページに再読み込みボタンを表示
             elements.fileTree.innerHTML = '<div style="padding: 16px; color: var(--text-muted);">読み込みに失敗しました。<br><button onclick="location.reload()" style="margin-top: 8px; cursor: pointer;">再読み込み</button></div>';
+        },
+
+        async refresh() {
+            try {
+                const response = await fetch('/api/tree');
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const tree = await response.json();
+                await this.update(tree);
+            } catch (e) {
+                console.error('Failed to refresh tree:', e);
+            }
         },
 
         async update(tree) {
