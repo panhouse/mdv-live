@@ -41,12 +41,12 @@ describe('MDV CLI', () => {
 
     it('--version should show version', () => {
       const output = runCli('--version');
-      assert.ok(output.includes('mdv v1.0.0'));
+      assert.ok(output.includes('mdv v0.3.1'));
     });
 
     it('-v should show version', () => {
       const output = runCli('-v');
-      assert.ok(output.includes('mdv v1.0.0'));
+      assert.ok(output.includes('mdv v0.3.1'));
     });
   });
 

@@ -24,3 +24,5 @@ test*.md
 # Build artifacts
 coverage/
 .cache/
+README.pdf
+*.pdf

@@ -212,7 +212,17 @@ function killServers(target, killAll) {
 }
 
 /**
- * Convert markdown to PDF using marp-cli
+ * Check if markdown content is a Marp presentation
+ */
+function isMarpFile(content) {
+  const MARP_PATTERN = /^---\s*\n[\s\S]*?marp:\s*true[\s\S]*?\n---/;
+  return MARP_PATTERN.test(content);
+}
+
+/**
+ * Convert markdown to PDF
+ * - Marp slides: use marp-cli
+ * - Regular markdown: use marp-cli with document-like settings
  */
 async function convertToPdf(inputPath, outputPath) {
   const resolved = path.resolve(inputPath);
@@ -230,23 +240,51 @@ async function convertToPdf(inputPath, outputPath) {
     return 1;
   }
 
+  const content = await fs.readFile(resolved, 'utf-8');
+  const isMarp = isMarpFile(content);
+
   const defaultOutput = resolved.replace(/\.(md|markdown)$/i, '.pdf');
   const finalOutput = outputPath ? path.resolve(outputPath) : defaultOutput;
 
   console.log(`Converting ${inputPath} to PDF...`);
 
-  try {
-    // Use marp-cli for PDF conversion (supports Marp slides)
-    execSync(`npx @marp-team/marp-cli --no-stdin "${resolved}" --pdf -o "${finalOutput}"`, {
-      encoding: 'utf-8',
-      stdio: 'inherit'
-    });
-    console.log(`PDF saved: ${finalOutput}`);
-    return 0;
-  } catch (err) {
-    console.error('Error: PDF conversion failed');
-    console.error('Make sure Node.js and npx are installed');
-    return 1;
+  if (isMarp) {
+    // Marp slide: use marp-cli directly
+    try {
+      execSync(`npx @marp-team/marp-cli --no-stdin "${resolved}" --pdf -o "${finalOutput}"`, {
+        encoding: 'utf-8',
+        stdio: 'inherit'
+      });
+      console.log(`PDF saved: ${finalOutput}`);
+      return 0;
+    } catch (err) {
+      console.error('Error: PDF conversion failed');
+      return 1;
+    }
+  } else {
+    // Regular markdown: use md-to-pdf for proper A4 document format
+    console.log('Converting as document (A4 portrait)...');
+
+    try {
+      execSync(`npx md-to-pdf "${resolved}" --pdf-options '{"format":"A4","margin":{"top":"20mm","right":"20mm","bottom":"20mm","left":"20mm"}}'`, {
+        encoding: 'utf-8',
+        stdio: 'inherit',
+        cwd: path.dirname(resolved)
+      });
+
+      // md-to-pdf outputs to same directory with .pdf extension
+      const generatedPdf = resolved.replace(/\.(md|markdown)$/i, '.pdf');
+      if (generatedPdf !== finalOutput) {
+        await fs.rename(generatedPdf, finalOutput);
+      }
+
+      console.log(`PDF saved: ${finalOutput}`);
+      return 0;
+    } catch (err) {
+      console.error('Error: PDF conversion failed');
+      console.error('Make sure md-to-pdf is available (npx md-to-pdf)');
+      return 1;
+    }
   }
 }
 
@@ -361,7 +399,7 @@ async function main() {
 
   // Version
   if (values.version) {
-    console.log('mdv v0.3.0');
+    console.log('mdv v0.3.1');
     process.exit(0);
   }
 

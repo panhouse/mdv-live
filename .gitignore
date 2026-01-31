@@ -50,3 +50,8 @@ temp/
 # Test markdown files (development only)
 test*.md
 !tests/
+
+# Test files
+test-marp*.md
+test.md
+*.pdf

@@ -51,7 +51,7 @@ export function createMdvServer(options) {
   app.get('/api/info', (req, res) => {
     res.json({
       rootPath: app.locals.rootDir,
-      version: '0.3.0'
+      version: '0.3.1'
     });
   });
 

@@ -43,7 +43,7 @@ Usage:
 - Double-click any .md file
 - Drag & drop .md files onto this app
 
-Version: 0.3.0 (Node.js)" buttons {"OK"} default button "OK" with title "MDV"
+Version: 0.3.1 (Node.js)" buttons {"OK"} default button "OK" with title "MDV"
 end run
 EOF
 
@@ -127,9 +127,9 @@ cat << 'EOF' > "$TEMP_DIR/$APP_NAME/Contents/Info.plist"
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.3.0</string>
+	<string>0.3.1</string>
 	<key>CFBundleVersion</key>
-	<string>0.3.0</string>
+	<string>0.3.1</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>10.13</string>
 </dict>
