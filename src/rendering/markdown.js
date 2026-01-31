@@ -23,8 +23,11 @@ md.use(taskLists, { enabled: true, label: true, labelAfter: true });
 // Pattern to detect Marp frontmatter (must be at very start of file, not using 'm' flag)
 const MARP_PATTERN = /^---\s*\n[\s\S]*?marp:\s*true[\s\S]*?\n---/;
 
-// Pattern to detect YAML frontmatter
+// Pattern to detect YAML frontmatter at start of file
 const FRONTMATTER_PATTERN = /^---\s*\n([\s\S]*?)\n---\s*(\n|$)/;
+
+// Pattern to detect metadata block after h1 heading (Claude Agent format)
+const HEADING_METADATA_PATTERN = /^(#[^\n]+\n+)(---\s*\n)([\s\S]*?)(\n---\s*)(\n|$)/;
 
 // Pattern for Mermaid code blocks
 const MERMAID_PATTERN = /```mermaid\s*\n([\s\S]*?)\n```/g;
@@ -44,12 +47,23 @@ export function isMarp(content) {
  * @returns {string} Content with frontmatter converted
  */
 function convertFrontmatter(content) {
+  // Check for standard frontmatter at start of file
   const match = content.match(FRONTMATTER_PATTERN);
   if (match) {
     const frontmatter = match[1];
     const rest = content.slice(match[0].length);
     return `\`\`\`yaml\n${frontmatter}\n\`\`\`\n${rest}`;
   }
+
+  // Check for metadata block after h1 heading (Claude Agent format)
+  const headingMatch = content.match(HEADING_METADATA_PATTERN);
+  if (headingMatch) {
+    const heading = headingMatch[1];
+    const metadata = headingMatch[3];
+    const rest = content.slice(headingMatch[0].length);
+    return `${heading}\`\`\`yaml\n${metadata}\n\`\`\`\n${rest}`;
+  }
+
   return content;
 }
 
