@@ -950,7 +950,9 @@ body.marp-fullscreen .content {
 
 body.marp-fullscreen .marp-nav {
     bottom: 32px;
-    right: 32px;
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
 }
 
 body.marp-fullscreen .marpit {

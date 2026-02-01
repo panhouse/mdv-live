@@ -676,8 +676,15 @@
 
             // Fullscreen toggle
             const fullscreenBtn = elements.content.querySelector('.marp-fullscreen-btn');
+            const expandIcon = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" /></svg>';
+            const shrinkIcon = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 9V4m0 5H4m5 0L4 4m11 5h5m-5 0V4m0 5l5-5M9 15v5m0-5H4m5 0l-5 5m11-5h5m-5 0v5m0-5l5 5" /></svg>';
             const toggleFullscreen = () => {
                 document.body.classList.toggle('marp-fullscreen');
+                const isFullscreen = document.body.classList.contains('marp-fullscreen');
+                if (fullscreenBtn) {
+                    fullscreenBtn.innerHTML = isFullscreen ? shrinkIcon : expandIcon;
+                    fullscreenBtn.title = isFullscreen ? 'Exit Fullscreen (Esc)' : 'Fullscreen (F)';
+                }
             };
             if (fullscreenBtn) fullscreenBtn.addEventListener('click', toggleFullscreen);
 
@@ -698,7 +705,7 @@
                     toggleFullscreen();
                 } else if (e.key === 'Escape' && document.body.classList.contains('marp-fullscreen')) {
                     e.preventDefault();
-                    document.body.classList.remove('marp-fullscreen');
+                    toggleFullscreen();
                 }
             };
             document.addEventListener('keydown', marpKeyHandler);
