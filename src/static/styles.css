@@ -967,9 +967,7 @@ body.marp-fullscreen .marpit > svg[data-marpit-svg] {
 }
 
 .marp-fullscreen-btn {
-    margin-left: 8px;
-    border-left: 1px solid var(--border);
-    padding-left: 12px !important;
+    margin-left: 4px;
 }
 
 /* Print styles for Marp */
