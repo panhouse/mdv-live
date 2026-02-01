@@ -700,8 +700,9 @@
                 let dragStartX, dragStartY, navStartX, navStartY;
 
                 nav.addEventListener('mousedown', (e) => {
-                    // Don't drag when clicking buttons
+                    // Don't drag when clicking buttons or not in fullscreen
                     if (e.target.closest('button')) return;
+                    if (!document.body.classList.contains('marp-fullscreen')) return;
                     isDragging = true;
                     nav.classList.add('dragging');
                     dragStartX = e.clientX;

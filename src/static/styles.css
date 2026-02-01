@@ -875,7 +875,6 @@ body {
     border-radius: 8px;
     border: 1px solid var(--border);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-    cursor: grab;
     user-select: none;
 }
 
@@ -911,15 +910,18 @@ body {
     color: var(--text-secondary);
     min-width: 60px;
     text-align: center;
+}
+
+body.marp-fullscreen .marp-nav .slide-counter {
     cursor: grab;
 }
 
-.marp-nav.dragging {
+body.marp-fullscreen .marp-nav.dragging {
     cursor: grabbing;
     opacity: 0.9;
 }
 
-.marp-nav.dragging .slide-counter {
+body.marp-fullscreen .marp-nav.dragging .slide-counter {
     cursor: grabbing;
 }
 
@@ -965,6 +967,7 @@ body.marp-fullscreen .marp-nav {
     left: 50%;
     right: auto;
     transform: translateX(-50%);
+    cursor: grab;
 }
 
 body.marp-fullscreen .marpit {
