@@ -690,6 +690,15 @@
                     fullscreenBtn.innerHTML = isFullscreen ? shrinkIcon : expandIcon;
                     fullscreenBtn.title = isFullscreen ? 'Exit Fullscreen (Esc)' : 'Fullscreen (F)';
                 }
+                // Reset nav position when exiting fullscreen
+                const nav = elements.content.querySelector('.marp-nav');
+                if (!isFullscreen && nav) {
+                    nav.style.left = '';
+                    nav.style.top = '';
+                    nav.style.right = '';
+                    nav.style.bottom = '';
+                    nav.style.transform = '';
+                }
             };
             if (fullscreenBtn) fullscreenBtn.addEventListener('click', toggleFullscreen);
 
