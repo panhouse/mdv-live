@@ -875,6 +875,8 @@ body {
     border-radius: 8px;
     border: 1px solid var(--border);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    cursor: grab;
+    user-select: none;
 }
 
 .marp-nav button {
@@ -909,6 +911,16 @@ body {
     color: var(--text-secondary);
     min-width: 60px;
     text-align: center;
+    cursor: grab;
+}
+
+.marp-nav.dragging {
+    cursor: grabbing;
+    opacity: 0.9;
+}
+
+.marp-nav.dragging .slide-counter {
+    cursor: grabbing;
 }
 
 .marp-nav .keyboard-hint {
@@ -970,6 +982,19 @@ body.marp-fullscreen .marpit > svg[data-marpit-svg] {
 
 .marp-fullscreen-btn {
     margin-left: 4px;
+}
+
+.marp-close-nav {
+    margin-left: 4px;
+}
+
+.marp-close-nav:hover:not(:disabled) {
+    background: var(--danger) !important;
+    border-color: var(--danger) !important;
+}
+
+.marp-nav.hidden {
+    display: none !important;
 }
 
 /* Print styles for Marp */

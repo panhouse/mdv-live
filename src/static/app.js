@@ -613,6 +613,11 @@
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
                         </svg>
                     </button>
+                    <button class="marp-close-nav" title="Hide (N to show)">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
                 `;
                 marpit.appendChild(nav);
             }
@@ -688,12 +693,61 @@
             };
             if (fullscreenBtn) fullscreenBtn.addEventListener('click', toggleFullscreen);
 
+            // Make nav draggable and closeable
+            const nav = elements.content.querySelector('.marp-nav');
+            if (nav) {
+                let isDragging = false;
+                let dragStartX, dragStartY, navStartX, navStartY;
+
+                nav.addEventListener('mousedown', (e) => {
+                    // Don't drag when clicking buttons
+                    if (e.target.closest('button')) return;
+                    isDragging = true;
+                    nav.classList.add('dragging');
+                    dragStartX = e.clientX;
+                    dragStartY = e.clientY;
+                    const rect = nav.getBoundingClientRect();
+                    navStartX = rect.left;
+                    navStartY = rect.top;
+                    e.preventDefault();
+                });
+
+                document.addEventListener('mousemove', (e) => {
+                    if (!isDragging) return;
+                    const dx = e.clientX - dragStartX;
+                    const dy = e.clientY - dragStartY;
+                    const newX = Math.max(0, Math.min(window.innerWidth - nav.offsetWidth, navStartX + dx));
+                    const newY = Math.max(0, Math.min(window.innerHeight - nav.offsetHeight, navStartY + dy));
+                    nav.style.left = newX + 'px';
+                    nav.style.top = newY + 'px';
+                    nav.style.right = 'auto';
+                    nav.style.bottom = 'auto';
+                    nav.style.transform = 'none';
+                });
+
+                document.addEventListener('mouseup', () => {
+                    if (isDragging) {
+                        isDragging = false;
+                        nav.classList.remove('dragging');
+                    }
+                });
+
+                // Close button to hide nav
+                const closeBtn = nav.querySelector('.marp-close-nav');
+                if (closeBtn) {
+                    closeBtn.addEventListener('click', () => {
+                        nav.classList.add('hidden');
+                    });
+                }
+            }
+
             // Keyboard navigation
             marpKeyHandler = (e) => {
                 // Don't handle if editing or in dialog
                 if (state.isEditMode || !elements.dialogOverlay.classList.contains('hidden')) {
                     return;
                 }
+                const nav = elements.content.querySelector('.marp-nav');
                 if (e.key === 'ArrowRight' || e.key === ' ') {
                     e.preventDefault();
                     nextSlide();
@@ -703,9 +757,16 @@
                 } else if (e.key === 'f' || e.key === 'F') {
                     e.preventDefault();
                     toggleFullscreen();
-                } else if (e.key === 'Escape' && document.body.classList.contains('marp-fullscreen')) {
+                } else if (e.key === 'n' || e.key === 'N') {
                     e.preventDefault();
-                    toggleFullscreen();
+                    if (nav) nav.classList.toggle('hidden');
+                } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    if (document.body.classList.contains('marp-fullscreen')) {
+                        toggleFullscreen();
+                    } else if (nav && nav.classList.contains('hidden')) {
+                        nav.classList.remove('hidden');
+                    }
                 }
             };
             document.addEventListener('keydown', marpKeyHandler);
