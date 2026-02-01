@@ -608,6 +608,11 @@
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
                         </svg>
                     </button>
+                    <button class="marp-fullscreen-btn" title="Fullscreen (F)">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                        </svg>
+                    </button>
                 `;
                 marpit.appendChild(nav);
             }
@@ -669,6 +674,13 @@
             if (prevBtn) prevBtn.addEventListener('click', prevSlide);
             if (nextBtn) nextBtn.addEventListener('click', nextSlide);
 
+            // Fullscreen toggle
+            const fullscreenBtn = elements.content.querySelector('.marp-fullscreen-btn');
+            const toggleFullscreen = () => {
+                document.body.classList.toggle('marp-fullscreen');
+            };
+            if (fullscreenBtn) fullscreenBtn.addEventListener('click', toggleFullscreen);
+
             // Keyboard navigation
             marpKeyHandler = (e) => {
                 // Don't handle if editing or in dialog
@@ -681,6 +693,12 @@
                 } else if (e.key === 'ArrowLeft') {
                     e.preventDefault();
                     prevSlide();
+                } else if (e.key === 'f' || e.key === 'F') {
+                    e.preventDefault();
+                    toggleFullscreen();
+                } else if (e.key === 'Escape' && document.body.classList.contains('marp-fullscreen')) {
+                    e.preventDefault();
+                    document.body.classList.remove('marp-fullscreen');
                 }
             };
             document.addEventListener('keydown', marpKeyHandler);
@@ -688,6 +706,7 @@
 
         cleanupMarp() {
             elements.content.classList.remove('marp-viewer');
+            document.body.classList.remove('marp-fullscreen');
             if (marpKeyHandler) {
                 document.removeEventListener('keydown', marpKeyHandler);
                 marpKeyHandler = null;

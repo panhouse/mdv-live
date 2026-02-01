@@ -917,6 +917,61 @@ body {
     margin-left: 8px;
 }
 
+/* Fullscreen Mode */
+body.marp-fullscreen {
+    overflow: hidden;
+}
+
+body.marp-fullscreen .sidebar,
+body.marp-fullscreen .resize-handle,
+body.marp-fullscreen .toolbar,
+body.marp-fullscreen .tab-bar {
+    display: none !important;
+}
+
+body.marp-fullscreen .container {
+    display: block;
+}
+
+body.marp-fullscreen .main {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 9999;
+    background: #0f172a;
+}
+
+body.marp-fullscreen .content {
+    height: 100vh;
+    padding: 0;
+}
+
+body.marp-fullscreen .marp-nav {
+    bottom: 32px;
+    right: 32px;
+}
+
+body.marp-fullscreen .marpit {
+    padding: 0;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+body.marp-fullscreen .marpit > svg[data-marpit-svg] {
+    max-height: 95vh;
+    max-width: 95vw;
+}
+
+.marp-fullscreen-btn {
+    margin-left: 8px;
+    border-left: 1px solid var(--border);
+    padding-left: 12px !important;
+}
+
 /* Print styles for Marp */
 @media print {
     .marp-nav { display: none !important; }
