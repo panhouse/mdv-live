@@ -49,7 +49,7 @@ export function setupPdfRoutes(app) {
 
     const outputPath = fullPath.replace(/\.md$/, '.pdf');
     const outputFileName = path.basename(outputPath);
-    const command = `"${marpBin}" "${fullPath}" -o "${outputPath}" --allow-local-files --no-stdin`;
+    const command = `"${marpBin}" "${fullPath}" -o "${outputPath}" --html --allow-local-files --no-stdin`;
 
     try {
       await execAsync(command, { timeout: 60000 });

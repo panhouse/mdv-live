@@ -274,7 +274,7 @@ async function convertToPdf(inputPath, outputPath) {
  */
 async function convertMarpToPdf(inputPath, outputPath) {
   try {
-    execSync(`npx @marp-team/marp-cli --no-stdin "${inputPath}" --pdf -o "${outputPath}"`, {
+    execSync(`npx @marp-team/marp-cli --no-stdin "${inputPath}" --pdf --html --allow-local-files -o "${outputPath}"`, {
       encoding: 'utf-8',
       stdio: 'inherit'
     });
