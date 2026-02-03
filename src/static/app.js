@@ -830,6 +830,17 @@
             `;
         },
 
+        renderHTML(htmlUrl, name) {
+            elements.content.style.padding = '0';
+            elements.content.innerHTML = `
+                <div class="html-preview">
+                    <iframe src="${htmlUrl}" title="${name}"
+                        sandbox="allow-scripts allow-same-origin allow-forms">
+                    </iframe>
+                </div>
+            `;
+        },
+
         renderVideo(mediaUrl, name) {
             elements.content.innerHTML = `
                 <div class="video-preview">
@@ -908,6 +919,7 @@
                 css: data.css || null,  // Marp CSS from marp-core
                 imageUrl: data.imageUrl,
                 pdfUrl: data.pdfUrl,
+                htmlUrl: data.htmlUrl,
                 mediaUrl: data.mediaUrl,
                 downloadUrl: data.downloadUrl,
                 scrollTop: 0
@@ -1018,6 +1030,8 @@
                 ContentRenderer.renderImage(tab.imageUrl, tab.name);
             } else if (fileType === 'pdf') {
                 ContentRenderer.renderPDF(tab.pdfUrl, tab.name);
+            } else if (fileType === 'html' && tab.htmlUrl && !state.isEditMode) {
+                ContentRenderer.renderHTML(tab.htmlUrl, tab.name);
             } else if (fileType === 'video') {
                 ContentRenderer.renderVideo(tab.mediaUrl, tab.name);
             } else if (fileType === 'audio') {

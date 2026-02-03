@@ -89,6 +89,32 @@ function buildBinaryFileResponse(name, fileType, downloadUrl) {
 export function setupFileRoutes(app) {
   const { rootDir } = app.locals;
 
+  // Serve raw files (for HTML preview with relative paths)
+  app.get('/raw/*', async (req, res) => {
+    const relativePath = req.params[0];
+    const { valid, fullPath } = resolveAndValidate(relativePath, rootDir);
+
+    if (!relativePath || !valid) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    try {
+      const stat = await fs.stat(fullPath);
+      if (!stat.isFile()) {
+        return res.status(400).json({ error: 'Not a file' });
+      }
+
+      const mimeType = mime.lookup(fullPath) || 'application/octet-stream';
+      res.setHeader('Content-Type', mimeType);
+      res.sendFile(fullPath);
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        return res.status(404).json({ error: 'File not found' });
+      }
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Get file content
   app.get('/api/file', async (req, res) => {
     const { path: relativePath } = req.query;
@@ -113,6 +139,25 @@ export function setupFileRoutes(app) {
       if (fileType.binary) {
         const downloadUrl = buildDownloadUrl(relativePath);
         return res.json(buildBinaryFileResponse(name, fileType, downloadUrl));
+      }
+
+      // HTML files: return htmlUrl for iframe preview + raw content for editing
+      if (fileType.type === 'html') {
+        const content = await fs.readFile(fullPath, 'utf-8');
+        const escaped = content
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#x27;');
+        return res.json({
+          name,
+          fileType: 'html',
+          icon: 'html',
+          htmlUrl: `/raw/${relativePath}`,
+          content: `<pre><code class="language-html">${escaped}</code></pre>`,
+          raw: content
+        });
       }
 
       const rendered = await renderFile(fullPath);

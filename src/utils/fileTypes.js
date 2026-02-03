@@ -29,8 +29,8 @@ const FILE_TYPES = {
   jsx: code('react', 'jsx'),
 
   // Code - Web
-  html: code('html', 'html'),
-  htm: code('html', 'html'),
+  html: { type: 'html', icon: 'html', lang: 'html', binary: false },
+  htm: { type: 'html', icon: 'html', lang: 'html', binary: false },
   css: code('css', 'css'),
   scss: code('css', 'scss'),
   less: code('css', 'less'),
