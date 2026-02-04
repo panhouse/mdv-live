@@ -835,7 +835,7 @@
             elements.content.innerHTML = `
                 <div class="html-preview">
                     <iframe src="${htmlUrl}" title="${name}"
-                        sandbox="allow-scripts allow-same-origin allow-forms">
+                        sandbox="allow-scripts allow-same-origin allow-forms allow-modals">
                     </iframe>
                 </div>
             `;
@@ -1271,6 +1271,10 @@
             return !!elements.content.querySelector('.marpit');
         },
 
+        isHtmlPreview() {
+            return !!elements.content.querySelector('.html-preview iframe');
+        },
+
         async print() {
             if (state.activeTabIndex < 0) return;
 
@@ -1278,6 +1282,8 @@
 
             if (this.isMarpPresentation()) {
                 await this.exportMarpPdf(tab.path);
+            } else if (this.isHtmlPreview()) {
+                this.printHtmlPreview(tab.name);
             } else {
                 this.browserPrint(tab.name);
             }
@@ -1290,6 +1296,13 @@
             document.title = pdfName;
             window.print();
             document.title = originalTitle;
+        },
+
+        printHtmlPreview(fileName) {
+            const iframe = elements.content.querySelector('.html-preview iframe');
+            if (iframe && iframe.contentWindow) {
+                iframe.contentWindow.print();
+            }
         },
 
         async exportMarpPdf(filePath) {
