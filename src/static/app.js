@@ -493,9 +493,8 @@
         },
 
         async expandToPath(filePath) {
-            // パスを分割して親フォルダのリストを作成
+            // パスを分割して順番に展開
             const parts = filePath.split('/');
-            parts.pop(); // ファイル名を除外
 
             let currentPath = '';
             for (const part of parts) {
@@ -507,6 +506,7 @@
                 const children = item.querySelector('.tree-children');
                 const chevron = item.querySelector('.chevron');
 
+                // ディレクトリの場合のみ展開
                 if (children && children.classList.contains('collapsed')) {
                     // 未読み込みの場合は子要素を取得
                     if (item.dataset.loaded !== 'true') {
@@ -1941,6 +1941,11 @@
 
             chevron.classList.toggle('expanded');
             children.classList.toggle('collapsed');
+
+            // 展開時にURLを更新（ディレクトリは末尾に/）
+            if (isExpanding) {
+                updateUrlPath(path + '/');
+            }
         }
     };
 
@@ -2008,8 +2013,16 @@
 
         const initialPath = new URLSearchParams(window.location.search).get('path');
         if (initialPath) {
-            await FileTreeManager.expandToPath(initialPath);
-            await TabManager.open(initialPath);
+            // 末尾の/でディレクトリ判定
+            const isDirectoryPath = initialPath.endsWith('/');
+            const cleanPath = isDirectoryPath ? initialPath.slice(0, -1) : initialPath;
+
+            await FileTreeManager.expandToPath(cleanPath);
+
+            // ファイルの場合のみ開く
+            if (!isDirectoryPath) {
+                await TabManager.open(cleanPath);
+            }
         }
     }
 
