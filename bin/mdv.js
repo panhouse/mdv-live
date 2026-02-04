@@ -23,6 +23,10 @@ const OPTIONS = {
     type: 'string',
     short: 'p',
   },
+  depth: {
+    type: 'string',
+    short: 'd',
+  },
   'no-browser': {
     type: 'boolean',
     default: false
@@ -76,6 +80,7 @@ Arguments:
 
 Server Options:
   -p, --port <n>      Server port (default: ${DEFAULT_PORT})
+  -d, --depth <n>     Directory watch depth (default: 3, prevents EMFILE errors)
   --no-browser        Don't open browser automatically
 
 Server Management:
@@ -382,8 +387,9 @@ async function resolveTargetPath(targetPath) {
  * @param {string} targetPath - Target directory or file path
  * @param {number} startPort - Starting port number
  * @param {boolean} openBrowser - Whether to open browser automatically
+ * @param {number} depth - Directory watch depth
  */
-async function startViewer(targetPath, startPort, openBrowser) {
+async function startViewer(targetPath, startPort, openBrowser, depth) {
   const { rootDir, initialFile } = await resolveTargetPath(targetPath);
 
   const port = await findAvailablePort(startPort);
@@ -396,11 +402,11 @@ async function startViewer(targetPath, startPort, openBrowser) {
     console.log(`ポート ${startPort} は使用中のため、${port} で起動します`);
   }
 
-  const mdv = createMdvServer({ rootDir, port });
+  const mdv = createMdvServer({ rootDir, port, depth });
   await mdv.start();
 
   const url = initialFile
-    ? `http://localhost:${port}?file=${encodeURIComponent(initialFile)}`
+    ? `http://localhost:${port}?path=${encodeURIComponent(initialFile)}`
     : `http://localhost:${port}`;
 
   console.log(`
@@ -472,9 +478,10 @@ async function main() {
   // Default: start viewer
   const targetPath = positionals[0] || '.';
   const port = parseInt(values.port, 10) || DEFAULT_PORT;
+  const depth = parseInt(values.depth, 10) || 3;
   const openBrowser = !values['no-browser'];
 
-  await startViewer(targetPath, port, openBrowser);
+  await startViewer(targetPath, port, openBrowser, depth);
 }
 
 main().catch(err => {

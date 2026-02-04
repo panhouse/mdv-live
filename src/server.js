@@ -47,10 +47,11 @@ function setupApiRoutes(app) {
  * @param {Object} options - Server options
  * @param {string} options.rootDir - Root directory to serve
  * @param {number} [options.port=8080] - Port to listen on
+ * @param {number} [options.depth=3] - Directory watch depth (prevents EMFILE errors)
  * @returns {{ app: express.Application, server: http.Server, watcher: FSWatcher, wss: WebSocketServer, port: number, start: () => Promise<{port: number}>, stop: () => Promise<void> }}
  */
 export function createMdvServer(options) {
-  const { rootDir, port = 8080 } = options;
+  const { rootDir, port = 8080, depth = 3 } = options;
 
   const app = express();
   const server = createServer(app);
@@ -68,7 +69,7 @@ export function createMdvServer(options) {
   });
 
   const wss = setupWebSocket(server);
-  const watcher = setupWatcher(app.locals.rootDir, wss);
+  const watcher = setupWatcher(app.locals.rootDir, wss, { depth });
 
   app.locals.watcher = watcher;
   app.locals.wss = wss;

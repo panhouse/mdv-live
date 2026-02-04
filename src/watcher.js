@@ -34,13 +34,18 @@ const TREE_CHANGE_EVENTS = ['add', 'unlink', 'addDir', 'unlinkDir'];
  * Setup file watcher
  * @param {string} rootDir - Root directory to watch
  * @param {WebSocketServer} wss - WebSocket server for broadcasting
+ * @param {Object} [options] - Watcher options
+ * @param {number} [options.depth=3] - Directory depth to watch (prevents EMFILE errors)
  * @returns {FSWatcher} Chokidar watcher instance
  */
-export function setupWatcher(rootDir, wss) {
+export function setupWatcher(rootDir, wss, options = {}) {
+  const { depth = 3 } = options;
+
   const watcher = chokidar.watch(rootDir, {
     ignored: IGNORED_PATTERNS,
     persistent: true,
     ignoreInitial: true,
+    depth,
     awaitWriteFinish: {
       stabilityThreshold: 100,
       pollInterval: 50

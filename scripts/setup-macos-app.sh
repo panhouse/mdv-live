@@ -77,7 +77,7 @@ for i in {1..25}; do
         echo "Found port: $PORT"
         echo "Opening browser..."
         # Use osascript to open URL (works better from AppleScript context)
-        osascript -e "open location \"http://localhost:$PORT?file=$FILE_NAME\""
+        osascript -e "open location \"http://localhost:$PORT?path=$FILE_NAME\""
         echo "Done"
         exit 0
     fi
@@ -85,7 +85,7 @@ done
 
 echo "Timeout - using fallback"
 # Fallback
-osascript -e "open location \"http://localhost:8642?file=$FILE_NAME\""
+osascript -e "open location \"http://localhost:8642?path=$FILE_NAME\""
 LAUNCHSCRIPT
 
 # Replace placeholder with actual path

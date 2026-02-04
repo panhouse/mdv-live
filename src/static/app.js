@@ -89,6 +89,21 @@
     };
 
     // ============================================================
+    // URL State Management
+    // ============================================================
+
+    function updateUrlPath(path) {
+        const url = new URL(window.location);
+        if (path) {
+            // パスの/をエンコードせずに表示
+            url.search = '?path=' + encodeURIComponent(path).replace(/%2F/g, '/');
+        } else {
+            url.search = '';
+        }
+        history.replaceState(null, '', url);
+    }
+
+    // ============================================================
     // DOM Elements
     // ============================================================
 
@@ -475,6 +490,35 @@
             } catch (e) {
                 console.error('Failed to expand directory:', e);
             }
+        },
+
+        async expandToPath(filePath) {
+            // パスを分割して親フォルダのリストを作成
+            const parts = filePath.split('/');
+            parts.pop(); // ファイル名を除外
+
+            let currentPath = '';
+            for (const part of parts) {
+                currentPath = currentPath ? `${currentPath}/${part}` : part;
+
+                const item = document.querySelector(`.tree-item[data-path="${currentPath}"]`);
+                if (!item) continue;
+
+                const children = item.querySelector('.tree-children');
+                const chevron = item.querySelector('.chevron');
+
+                if (children && children.classList.contains('collapsed')) {
+                    // 未読み込みの場合は子要素を取得
+                    if (item.dataset.loaded !== 'true') {
+                        await this.expandDirectory(currentPath, children);
+                    }
+                    children.classList.remove('collapsed');
+                    if (chevron) chevron.classList.add('expanded');
+                }
+            }
+
+            // ファイルをハイライト
+            this.updateHighlight();
         },
 
         renderFile(item) {
@@ -935,6 +979,7 @@
             this.renderActive();
             WebSocketManager.watchFile(path);
             FileTreeManager.updateHighlight();
+            updateUrlPath(path);
         },
 
         switch(index) {
@@ -965,6 +1010,7 @@
             this.renderActive();
             WebSocketManager.watchFile(state.tabs[index].path);
             FileTreeManager.updateHighlight();
+            updateUrlPath(state.tabs[index].path);
         },
 
         close(index) {
@@ -975,6 +1021,7 @@
                 this.render();
                 ContentRenderer.showWelcome();
                 FileTreeManager.updateHighlight();
+                updateUrlPath(null);
                 return;
             }
 
@@ -986,6 +1033,7 @@
             this.render();
             this.renderActive();
             FileTreeManager.updateHighlight();
+            updateUrlPath(state.tabs[state.activeTabIndex].path);
         },
 
         render() {
@@ -1958,9 +2006,10 @@
         });
         window.addEventListener('focus', handleFocusChange);
 
-        const initialFile = new URLSearchParams(window.location.search).get('file');
-        if (initialFile) {
-            TabManager.open(initialFile);
+        const initialPath = new URLSearchParams(window.location.search).get('path');
+        if (initialPath) {
+            await FileTreeManager.expandToPath(initialPath);
+            await TabManager.open(initialPath);
         }
     }
 
