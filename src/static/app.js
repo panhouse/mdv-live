@@ -204,6 +204,7 @@
     const ThemeManager = {
         set(theme) {
             state.theme = theme;
+            document.documentElement.dataset.theme = theme;
             document.body.dataset.theme = theme;
             localStorage.setItem(STORAGE_KEYS.THEME, theme);
 
