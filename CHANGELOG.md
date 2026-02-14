@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.3] - 2026-02-15
+
+### Fixed
+
+- macOS app: Japanese filenames garbled when opening via Finder double-click
+  - `osascript open location` corrupted UTF-8 characters in URL
+  - Now URL-encodes filename with `python3 urllib.parse.quote()` and uses `open` command
+
 ## [0.3.3] - 2026-01-31
 
 ### Fixed

@@ -65,6 +65,9 @@ FILE_PATH="$1"
 FILE_NAME=$(basename "$FILE_PATH")
 LOG="/tmp/mdv-$$.log"
 
+# URL-encode the filename (handles Japanese characters)
+ENCODED_NAME=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1]))" "$FILE_NAME")
+
 echo "Starting MDV..."
 # Start MDV
 MDV_PATH_HERE --no-browser "$FILE_PATH" > "$LOG" 2>&1 &
@@ -76,8 +79,7 @@ for i in {1..25}; do
     if [ -n "$PORT" ]; then
         echo "Found port: $PORT"
         echo "Opening browser..."
-        # Use osascript to open URL (works better from AppleScript context)
-        osascript -e "open location \"http://localhost:$PORT?path=$FILE_NAME\""
+        open "http://localhost:$PORT?path=$ENCODED_NAME"
         echo "Done"
         exit 0
     fi
@@ -85,7 +87,7 @@ done
 
 echo "Timeout - using fallback"
 # Fallback
-osascript -e "open location \"http://localhost:8642?path=$FILE_NAME\""
+open "http://localhost:8642?path=$ENCODED_NAME"
 LAUNCHSCRIPT
 
 # Replace placeholder with actual path
