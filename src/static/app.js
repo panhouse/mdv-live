@@ -1615,7 +1615,7 @@
         download(path) {
             const a = document.createElement('a');
             a.href = `/api/download?path=${encodeURIComponent(path)}`;
-            a.download = '';
+            a.download = path.split('/').pop() || 'download';
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
