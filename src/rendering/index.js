@@ -3,6 +3,7 @@
  */
 
 import fs from 'fs/promises';
+import path from 'path';
 import { getFileType } from '../utils/fileTypes.js';
 import { renderMarkdown, isMarp } from './markdown.js';
 import { renderMarp } from './marp.js';
@@ -44,16 +45,35 @@ function renderText(content) {
 }
 
 /**
+ * Rewrite relative image/video/audio src paths to /raw/ URLs
+ * @param {string} html - Rendered HTML
+ * @param {string} relativeDir - Directory of the source file relative to rootDir
+ * @returns {string} HTML with rewritten paths
+ */
+function rewriteMediaPaths(html, relativeDir) {
+  // Match src="..." that are not absolute URLs or data URIs
+  return html.replace(
+    /(<(?:img|video|audio|source)\s[^>]*?\bsrc=")([^"]+)(")/gi,
+    (match, before, src, after) => {
+      if (/^(https?:\/\/|data:|\/raw\/|\/)/.test(src)) return match;
+      const resolved = relativeDir ? `${relativeDir}/${src}` : src;
+      return `${before}/raw/${resolved}${after}`;
+    }
+  );
+}
+
+/**
  * Render a file and return content for the frontend
  * @param {string} filePath - Full path to the file
+ * @param {string} [relativeDir] - Directory of the file relative to rootDir (for resolving relative paths)
  * @returns {Promise<Object>} Rendered content and metadata
  */
-export async function renderFile(filePath) {
+export async function renderFile(filePath, relativeDir) {
   const content = await fs.readFile(filePath, 'utf-8');
   const fileType = getFileType(filePath);
 
   if (fileType.type === 'markdown') {
-    return renderMarkdownFile(content);
+    return renderMarkdownFile(content, relativeDir);
   }
 
   if (fileType.type === 'code') {
@@ -74,13 +94,14 @@ export async function renderFile(filePath) {
 /**
  * Render markdown content, detecting Marp presentations
  * @param {string} content - Raw markdown content
+ * @param {string} [relativeDir] - Directory relative to rootDir for resolving image paths
  * @returns {Object} Rendered content and metadata
  */
-function renderMarkdownFile(content) {
+function renderMarkdownFile(content, relativeDir) {
   if (isMarp(content)) {
     const { html, css } = renderMarp(content);
     return {
-      content: html,
+      content: rewriteMediaPaths(html, relativeDir),
       css,
       raw: content,
       fileType: 'markdown',
@@ -89,7 +110,7 @@ function renderMarkdownFile(content) {
   }
 
   return {
-    content: renderMarkdown(content),
+    content: rewriteMediaPaths(renderMarkdown(content), relativeDir),
     raw: content,
     fileType: 'markdown',
     isMarp: false

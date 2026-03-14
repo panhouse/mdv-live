@@ -12,7 +12,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const cliPath = path.join(__dirname, '..', 'bin', 'mdv.js');
 
-const VERSION_STRING = 'mdv v0.3.3';
+const VERSION_STRING = 'mdv v0.5.0';
 const TITLE_STRING = 'MDV - Markdown Viewer';
 const SERVER_LIST_ACTIVE = '稼働中のMDVサーバー';
 const SERVER_LIST_NONE = '稼働中のMDVサーバーはありません';

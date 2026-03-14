@@ -453,7 +453,7 @@ async function main() {
   }
 
   if (values.version) {
-    console.log('mdv v0.3.3');
+    console.log('mdv v0.5.0');
     process.exit(0);
   }
 

@@ -17,7 +17,7 @@ import { setupWebSocket } from './websocket.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_DIR = path.join(__dirname, 'static');
-const VERSION = '0.3.3';
+const VERSION = '0.5.0';
 
 /**
  * Setup API routes for the Express app

@@ -160,7 +160,8 @@ export function setupFileRoutes(app) {
         });
       }
 
-      const rendered = await renderFile(fullPath);
+      const relativeDir = path.dirname(relativePath);
+      const rendered = await renderFile(fullPath, relativeDir === '.' ? '' : relativeDir);
       res.json({ name, ...rendered });
     } catch (err) {
       if (err.code === 'ENOENT') {
