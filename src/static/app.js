@@ -1329,7 +1329,12 @@
 
             const tab = state.tabs[state.activeTabIndex];
 
-            if (this.isMarpPresentation()) {
+            // editモード中は閉じてからPDF生成
+            if (state.isEditMode) {
+                await EditorManager.toggle();
+            }
+
+            if (tab.isMarp || this.isMarpPresentation()) {
                 await this.exportMarpPdf(tab.path);
             } else if (this.isHtmlPreview()) {
                 this.printHtmlPreview(tab.name);

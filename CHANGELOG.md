@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-03-20
+
+### Fixed
+
+- Edit mode + PDF export bug: exporting PDF while in edit mode produced raw markdown text instead of rendered slides
+  - Now auto-exits edit mode before PDF generation
+  - Uses `tab.isMarp` fallback for Marp detection when DOM is not yet rendered
+
 ## [0.4.3] - 2026-02-15
 
 ### Fixed
