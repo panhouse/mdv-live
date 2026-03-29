@@ -5,6 +5,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { execSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -12,7 +13,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const cliPath = path.join(__dirname, '..', 'bin', 'mdv.js');
 
-const VERSION_STRING = 'mdv v0.5.0';
+const { version: PKG_VERSION } = JSON.parse(
+  readFileSync(path.join(__dirname, '..', 'package.json'), 'utf-8')
+);
+const VERSION_STRING = `mdv v${PKG_VERSION}`;
 const TITLE_STRING = 'MDV - Markdown Viewer';
 const SERVER_LIST_ACTIVE = '稼働中のMDVサーバー';
 const SERVER_LIST_NONE = '稼働中のMDVサーバーはありません';

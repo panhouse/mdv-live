@@ -5,10 +5,12 @@
  * Compatible with the original Python mdv-live CLI
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { createServer as createNetServer } from 'node:net';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import open from 'open';
@@ -184,12 +186,17 @@ function listServers() {
 function killServers(target, killAll) {
   if (target) {
     // Kill specific PID
+    if (!/^\d+$/.test(target)) {
+      console.log(`無効なPID: ${target}`);
+      return 1;
+    }
+    const pid = Number(target);
     try {
-      execSync(`kill ${target}`, { encoding: 'utf-8' });
-      console.log(`PID ${target} を停止しました`);
+      process.kill(pid);
+      console.log(`PID ${pid} を停止しました`);
       return 0;
     } catch {
-      console.log(`PID ${target} の停止に失敗しました`);
+      console.log(`PID ${pid} の停止に失敗しました`);
       return 1;
     }
   }
@@ -214,7 +221,7 @@ function killServers(target, killAll) {
   let killed = 0;
   for (const proc of processes) {
     try {
-      execSync(`kill ${proc.pid}`, { encoding: 'utf-8' });
+      process.kill(proc.pid);
       console.log(`  PID ${proc.pid} (port ${proc.port}) を停止`);
       killed++;
     } catch {
@@ -279,7 +286,7 @@ async function convertToPdf(inputPath, outputPath) {
  */
 async function convertMarpToPdf(inputPath, outputPath) {
   try {
-    execSync(`npx @marp-team/marp-cli --no-stdin "${inputPath}" --pdf --html --allow-local-files -o "${outputPath}"`, {
+    execFileSync('npx', ['@marp-team/marp-cli', '--no-stdin', inputPath, '--pdf', '--html', '--allow-local-files', '-o', outputPath], {
       encoding: 'utf-8',
       stdio: 'inherit'
     });
@@ -302,7 +309,7 @@ async function convertMarkdownToPdf(inputPath, outputPath) {
 
   try {
     const pdfOptions = '{"format":"A4","margin":{"top":"20mm","right":"20mm","bottom":"20mm","left":"20mm"}}';
-    execSync(`npx md-to-pdf "${inputPath}" --pdf-options '${pdfOptions}'`, {
+    execFileSync('npx', ['md-to-pdf', inputPath, '--pdf-options', pdfOptions], {
       encoding: 'utf-8',
       stdio: 'inherit',
       cwd: path.dirname(inputPath)
@@ -453,7 +460,11 @@ async function main() {
   }
 
   if (values.version) {
-    console.log('mdv v0.5.0');
+    const __cliDir = path.dirname(fileURLToPath(import.meta.url));
+    const { version } = JSON.parse(
+      readFileSync(path.join(__cliDir, '..', 'package.json'), 'utf-8')
+    );
+    console.log(`mdv v${version}`);
     process.exit(0);
   }
 

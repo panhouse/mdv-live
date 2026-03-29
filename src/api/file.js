@@ -292,9 +292,15 @@ export function setupFileRoutes(app) {
 
       // Range Request for video/audio streaming
       const fileSize = stat.size;
-      const parts = rangeHeader.replace(/bytes=/, '').split('-');
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const match = /^bytes=(\d+)-(\d+)?$/.exec(rangeHeader);
+      if (!match) {
+        return res.status(416).set('Content-Range', `bytes */${fileSize}`).end();
+      }
+      const start = Number(match[1]);
+      if (start >= fileSize) {
+        return res.status(416).set('Content-Range', `bytes */${fileSize}`).end();
+      }
+      const end = Math.min(match[2] ? Number(match[2]) : fileSize - 1, fileSize - 1);
       const chunkSize = end - start + 1;
       const mimeType = mime.lookup(fullPath) || 'application/octet-stream';
 

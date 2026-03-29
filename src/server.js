@@ -4,6 +4,7 @@
  */
 
 import express from 'express';
+import { readFileSync } from 'fs';
 import { createServer } from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -17,7 +18,9 @@ import { setupWebSocket } from './websocket.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_DIR = path.join(__dirname, 'static');
-const VERSION = '0.5.0';
+const { version: VERSION } = JSON.parse(
+  readFileSync(path.join(__dirname, '..', 'package.json'), 'utf-8')
+);
 
 /**
  * Setup API routes for the Express app

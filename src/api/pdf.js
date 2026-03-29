@@ -3,14 +3,14 @@
  * Uses marp-cli for Marp presentations
  */
 
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { validatePath } from '../utils/path.js';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 const marpBin = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   '..',
@@ -49,10 +49,9 @@ export function setupPdfRoutes(app) {
 
     const outputPath = fullPath.replace(/\.md$/, '.pdf');
     const outputFileName = path.basename(outputPath);
-    const command = `"${marpBin}" "${fullPath}" -o "${outputPath}" --html --allow-local-files --no-stdin`;
 
     try {
-      await execAsync(command, { timeout: 60000 });
+      await execFileAsync(marpBin, [fullPath, '-o', outputPath, '--html', '--allow-local-files', '--no-stdin'], { timeout: 60000 });
       res.download(outputPath, outputFileName, (err) => {
         if (err) {
           console.error('Download error:', err);

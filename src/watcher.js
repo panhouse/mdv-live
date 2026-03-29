@@ -65,9 +65,10 @@ export function setupWatcher(rootDir, wss, options = {}) {
 
   watcher.on('change', async (filePath) => {
     const relativePath = toRelativePath(filePath);
+    const relativeDir = path.dirname(relativePath);
 
     try {
-      const rendered = await renderFile(filePath);
+      const rendered = await renderFile(filePath, relativeDir === '.' ? '' : relativeDir);
       wss.broadcastFileUpdate(relativePath, {
         type: 'file_update',
         path: relativePath,

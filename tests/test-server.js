@@ -4,12 +4,16 @@
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createMdvServer } from '../src/server.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const { version: PKG_VERSION } = JSON.parse(
+  readFileSync(path.join(__dirname, '..', 'package.json'), 'utf-8')
+);
 const testRootDir = path.join(__dirname, '..');
 const port = 19999;
 
@@ -34,7 +38,7 @@ describe('MDV Server', () => {
 
       const data = await response.json();
       assert.ok(data.rootPath);
-      assert.strictEqual(data.version, '0.5.0');
+      assert.strictEqual(data.version, PKG_VERSION);
     });
 
     it('GET /api/tree should return file tree', async () => {
