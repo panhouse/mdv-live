@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] - 2026-03-29
+
+### Fixed
+
+- Security: exec/execSync → execFile/process.kill でコマンドインジェクション防止（PDF生成・サーバーkill）
+- Security: PIDバリデーション厳密化（数字のみ許可、部分一致を拒否）
+- Range Requestのバリデーション追加（不正ヘッダで416、end超過はRFC準拠でclamp）
+- ファイル監視の再描画でrelativeDirを渡すように修正（サブフォルダ内Markdownの画像パス解決）
+- バージョン表示をpackage.jsonから動的取得に統一（CLI・サーバー・テスト全箇所）
+
+## [0.5.2] - 2026-03-27
+
+### Fixed
+
+- CJK + Unicode句読点で太字・斜体が壊れる問題を修正
+
 ## [0.5.1] - 2026-03-20
 
 ### Fixed
