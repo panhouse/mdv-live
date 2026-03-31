@@ -6,19 +6,6 @@
     'use strict';
 
     // ============================================================
-    // Utilities
-    // ============================================================
-
-    function escapeHtml(str) {
-        return str
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#x27;');
-    }
-
-    // ============================================================
     // Constants
     // ============================================================
 
@@ -442,7 +429,7 @@
 
             // 展開済みディレクトリを復元（子要素も再取得）
             for (const path of expandedPaths) {
-                const item = document.querySelector(`.tree-item[data-path="${path}"]`);
+                const item = document.querySelector(`.tree-item[data-path="${CSS.escape(path)}"]`);
                 if (item) {
                     const children = item.querySelector('.tree-children');
                     const chevron = item.querySelector('.chevron');
@@ -515,7 +502,7 @@
             for (const part of parts) {
                 currentPath = currentPath ? `${currentPath}/${part}` : part;
 
-                const item = document.querySelector(`.tree-item[data-path="${currentPath}"]`);
+                const item = document.querySelector(`.tree-item[data-path="${CSS.escape(currentPath)}"]`);
                 if (!item) continue;
 
                 const children = item.querySelector('.tree-children');
@@ -873,29 +860,32 @@
 
         renderImage(imageUrl, name) {
             const url = imageUrl + '&t=' + Date.now();
+            const safeName = escapeHtml(name);
             elements.content.innerHTML = `
                 <div class="image-preview">
-                    <img src="${url}" alt="${name}" />
-                    <div class="image-info">${name}</div>
+                    <img src="${url}" alt="${safeName}" />
+                    <div class="image-info">${safeName}</div>
                 </div>
             `;
         },
 
         renderPDF(pdfUrl, name) {
             const url = pdfUrl + '&t=' + Date.now();
+            const safeName = escapeHtml(name);
             elements.content.style.padding = '0';
             elements.content.innerHTML = `
                 <div class="pdf-viewer">
-                    <iframe src="${url}" title="${name}"></iframe>
+                    <iframe src="${url}" title="${safeName}"></iframe>
                 </div>
             `;
         },
 
         renderHTML(htmlUrl, name) {
+            const safeName = escapeHtml(name);
             elements.content.style.padding = '0';
             elements.content.innerHTML = `
                 <div class="html-preview">
-                    <iframe src="${htmlUrl}" title="${name}"
+                    <iframe src="${htmlUrl}" title="${safeName}"
                         sandbox="allow-scripts allow-same-origin allow-forms allow-modals">
                     </iframe>
                 </div>
@@ -903,35 +893,38 @@
         },
 
         renderVideo(mediaUrl, name) {
+            const safeName = escapeHtml(name);
             elements.content.innerHTML = `
                 <div class="video-preview">
                     <video controls>
                         <source src="${mediaUrl}" type="video/mp4">
                         お使いのブラウザは動画再生に対応していません。
                     </video>
-                    <div class="media-info">${name}</div>
+                    <div class="media-info">${safeName}</div>
                 </div>
             `;
         },
 
         renderAudio(mediaUrl, name) {
+            const safeName = escapeHtml(name);
             elements.content.innerHTML = `
                 <div class="audio-preview">
                     <audio controls>
                         <source src="${mediaUrl}">
                         お使いのブラウザは音声再生に対応していません。
                     </audio>
-                    <div class="media-info">${name}</div>
+                    <div class="media-info">${safeName}</div>
                 </div>
             `;
         },
 
         renderBinary(name, icon) {
+            const safeName = escapeHtml(name);
             const iconSvg = getFileIcon(icon);
             elements.content.innerHTML = `
                 <div class="binary-preview">
                     <div class="binary-icon">${iconSvg}</div>
-                    <div class="binary-info">${name}</div>
+                    <div class="binary-info">${safeName}</div>
                 </div>
             `;
         },
@@ -1917,7 +1910,7 @@
             const isTextInput = document.activeElement.tagName === 'INPUT' ||
                                 document.activeElement.tagName === 'TEXTAREA';
 
-            const activeItem = document.querySelector(`.tree-item[data-path="${this.selectedTreePath}"]`);
+            const activeItem = document.querySelector(`.tree-item[data-path="${CSS.escape(this.selectedTreePath)}"]`);
             const isDir = activeItem && !!activeItem.querySelector('.tree-children');
 
             if ((key === 'Delete' || key === 'Backspace') && !isTextInput) {
