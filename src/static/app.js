@@ -93,14 +93,13 @@
     // ============================================================
 
     function updateUrlPath(path) {
-        const url = new URL(window.location);
         if (path) {
-            // パスの/をエンコードせずに表示
-            url.search = '?path=' + encodeURIComponent(path).replace(/%2F/g, '/');
+            // パスベースURL: /README.md, /04_提案/10億円戦略.md
+            const encoded = path.split('/').map(s => encodeURIComponent(s)).join('/');
+            history.replaceState(null, '', '/' + encoded);
         } else {
-            url.search = '';
+            history.replaceState(null, '', '/');
         }
-        history.replaceState(null, '', url);
     }
 
     // ============================================================
@@ -2017,19 +2016,72 @@
         });
         window.addEventListener('focus', handleFocusChange);
 
-        const initialPath = new URLSearchParams(window.location.search).get('path');
+        // パスベースURL: /README.md → path = "README.md"
+        // ?path= も後方互換で対応
+        let initialPath = decodeURIComponent(window.location.pathname).replace(/^\//, '');
+        if (!initialPath) {
+            initialPath = new URLSearchParams(window.location.search).get('path') || '';
+        }
         if (initialPath) {
-            // 末尾の/でディレクトリ判定
             const isDirectoryPath = initialPath.endsWith('/');
             const cleanPath = isDirectoryPath ? initialPath.slice(0, -1) : initialPath;
 
             await FileTreeManager.expandToPath(cleanPath);
 
-            // ファイルの場合のみ開く
             if (!isDirectoryPath) {
                 await TabManager.open(cleanPath);
             }
         }
+
+        // Markdown内リンクのクリックをインターセプト
+        elements.content.addEventListener('click', (e) => {
+            const link = e.target.closest('a[href]');
+            if (!link) return;
+
+            const href = link.getAttribute('href');
+            if (!href) return;
+
+            // 外部リンク・非HTTPスキーム・アンカーはブラウザに任せる
+            if (href.startsWith('#') || href.startsWith('http') || href.startsWith('//') ||
+                /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
+
+            e.preventDefault();
+
+            // フラグメントとクエリを除去し、パスだけ取り出す
+            const urlPath = href.split('#')[0].split('?')[0];
+            // パーセントエンコードをデコード
+            const decoded = decodeURIComponent(urlPath);
+
+            // 相対パスを現在のファイルパスから解決
+            let targetPath = decoded;
+            if (!decoded.startsWith('/')) {
+                const currentTab = state.tabs[state.activeTabIndex];
+                const currentDir = currentTab ? currentTab.path.replace(/[^/]*$/, '') : '';
+                targetPath = currentDir + decoded;
+            } else {
+                targetPath = decoded.replace(/^\//, '');
+            }
+
+            // 末尾スラッシュ（ディレクトリ）を保持
+            const isDirectory = targetPath.endsWith('/');
+
+            // パス正規化（foo/../bar → bar）
+            const parts = targetPath.split('/');
+            const resolved = [];
+            for (const part of parts) {
+                if (part === '..') resolved.pop();
+                else if (part !== '.' && part !== '') resolved.push(part);
+            }
+            targetPath = resolved.join('/');
+
+            if (isDirectory) {
+                // ディレクトリはツリーを展開
+                FileTreeManager.expandToPath(targetPath);
+                updateUrlPath(targetPath + '/');
+            } else {
+                TabManager.open(targetPath);
+            }
+        });
     }
 
     // DOMContentLoadedを待ってから初期化

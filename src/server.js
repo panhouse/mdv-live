@@ -67,7 +67,8 @@ export function createMdvServer(options) {
 
   setupApiRoutes(app);
 
-  app.get('/', (req, res) => {
+  // Catch-all: serve index.html for all non-API/non-static routes (path-based routing)
+  app.get(/^\/(?!api\/|static\/).*/, (req, res) => {
     res.sendFile(path.join(STATIC_DIR, 'index.html'));
   });
 
