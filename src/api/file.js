@@ -9,16 +9,16 @@ import mime from 'mime-types';
 import WebSocket from 'ws';
 import { getFileType } from '../utils/fileTypes.js';
 import { renderFile } from '../rendering/index.js';
-import { validatePath } from '../utils/path.js';
+import { validatePathReal } from '../utils/path.js';
 
 /**
- * Validate path and resolve to full path
+ * Validate path and resolve to full path (with symlink protection)
  * @param {string} relativePath - Relative path to validate
  * @param {string} rootDir - Root directory
- * @returns {{ valid: boolean, fullPath: string }} Validation result with full path
+ * @returns {Promise<{ valid: boolean, fullPath: string }>} Validation result with full path
  */
-function resolveAndValidate(relativePath, rootDir) {
-  if (!relativePath || !validatePath(relativePath, rootDir)) {
+async function resolveAndValidate(relativePath, rootDir) {
+  if (!relativePath || !await validatePathReal(relativePath, rootDir)) {
     return { valid: false, fullPath: '' };
   }
   return { valid: true, fullPath: path.join(rootDir, relativePath) };
@@ -92,7 +92,7 @@ export function setupFileRoutes(app) {
   // Serve raw files (for HTML preview with relative paths)
   app.get('/raw/*', async (req, res) => {
     const relativePath = req.params[0];
-    const { valid, fullPath } = resolveAndValidate(relativePath, rootDir);
+    const { valid, fullPath } = await resolveAndValidate(relativePath, rootDir);
 
     if (!relativePath || !valid) {
       return res.status(403).json({ error: 'Access denied' });
@@ -118,7 +118,7 @@ export function setupFileRoutes(app) {
   // Get file content
   app.get('/api/file', async (req, res) => {
     const { path: relativePath } = req.query;
-    const { valid, fullPath } = resolveAndValidate(relativePath, rootDir);
+    const { valid, fullPath } = await resolveAndValidate(relativePath, rootDir);
 
     if (!relativePath) {
       return res.status(400).json({ error: 'Path is required' });
@@ -174,7 +174,7 @@ export function setupFileRoutes(app) {
   // Save file content
   app.post('/api/file', async (req, res) => {
     const { path: relativePath, content } = req.body;
-    const { valid, fullPath } = resolveAndValidate(relativePath, rootDir);
+    const { valid, fullPath } = await resolveAndValidate(relativePath, rootDir);
 
     if (!relativePath) {
       return res.status(400).json({ error: 'Path is required' });
@@ -195,7 +195,7 @@ export function setupFileRoutes(app) {
   // Delete file or directory
   app.delete('/api/file', async (req, res) => {
     const { path: relativePath } = req.query;
-    const { valid, fullPath } = resolveAndValidate(relativePath, rootDir);
+    const { valid, fullPath } = await resolveAndValidate(relativePath, rootDir);
 
     if (!relativePath) {
       return res.status(400).json({ error: 'Path is required' });
@@ -225,7 +225,7 @@ export function setupFileRoutes(app) {
   // Create directory
   app.post('/api/mkdir', async (req, res) => {
     const { path: relativePath } = req.body;
-    const { valid, fullPath } = resolveAndValidate(relativePath, rootDir);
+    const { valid, fullPath } = await resolveAndValidate(relativePath, rootDir);
 
     if (!relativePath) {
       return res.status(400).json({ error: 'Path is required' });
@@ -251,8 +251,8 @@ export function setupFileRoutes(app) {
       return res.status(400).json({ error: 'Source and destination are required' });
     }
 
-    const sourceResult = resolveAndValidate(source, rootDir);
-    const destResult = resolveAndValidate(destination, rootDir);
+    const sourceResult = await resolveAndValidate(source, rootDir);
+    const destResult = await resolveAndValidate(destination, rootDir);
 
     if (!sourceResult.valid || !destResult.valid) {
       return res.status(403).json({ error: 'Access denied' });
@@ -270,7 +270,7 @@ export function setupFileRoutes(app) {
   // Download file (with Range Request support for video/audio streaming)
   app.get('/api/download', async (req, res) => {
     const { path: relativePath } = req.query;
-    const { valid, fullPath } = resolveAndValidate(relativePath, rootDir);
+    const { valid, fullPath } = await resolveAndValidate(relativePath, rootDir);
 
     if (!relativePath) {
       return res.status(400).json({ error: 'Path is required' });
@@ -301,6 +301,9 @@ export function setupFileRoutes(app) {
         return res.status(416).set('Content-Range', `bytes */${fileSize}`).end();
       }
       const end = Math.min(match[2] ? Number(match[2]) : fileSize - 1, fileSize - 1);
+      if (end < start) {
+        return res.status(416).set('Content-Range', `bytes */${fileSize}`).end();
+      }
       const chunkSize = end - start + 1;
       const mimeType = mime.lookup(fullPath) || 'application/octet-stream';
 

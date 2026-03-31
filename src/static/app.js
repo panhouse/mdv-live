@@ -6,6 +6,19 @@
     'use strict';
 
     // ============================================================
+    // Utilities
+    // ============================================================
+
+    function escapeHtml(str) {
+        return str
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#x27;');
+    }
+
+    // ============================================================
     // Constants
     // ============================================================
 
@@ -460,8 +473,10 @@
 
         renderDirectory(item) {
             const loaded = item.loaded !== false;
+            const safePath = escapeHtml(item.path);
+            const safeName = escapeHtml(item.name);
             return `
-                <div class="tree-item" data-path="${item.path}" data-loaded="${loaded}" draggable="true">
+                <div class="tree-item" data-path="${safePath}" data-loaded="${loaded}" draggable="true">
                     <div class="tree-item-content" onclick="MDV.toggleDirectory(this)">
                         <svg class="chevron" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
@@ -469,7 +484,7 @@
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
                         </svg>
-                        <span class="name">${item.name}</span>
+                        <span class="name">${safeName}</span>
                     </div>
                     <div class="tree-children collapsed">${this.renderItems(item.children)}</div>
                 </div>
@@ -524,13 +539,15 @@
         renderFile(item) {
             const iconClass = item.icon ? `icon-${item.icon}` : '';
             const iconSvg = getFileIcon(item.icon);
+            const safePath = escapeHtml(item.path);
+            const safeName = escapeHtml(item.name);
             return `
-                <div class="tree-item" data-path="${item.path}" draggable="true">
-                    <div class="tree-item-content" onclick="MDV.openFile('${item.path}')">
+                <div class="tree-item" data-path="${safePath}" draggable="true">
+                    <div class="tree-item-content" data-action="open">
                         <span class="${iconClass}" style="margin-left: 22px; display: flex; align-items: center;">
                             ${iconSvg}
                         </span>
-                        <span class="name">${item.name}</span>
+                        <span class="name">${safeName}</span>
                     </div>
                 </div>
             `;
@@ -542,7 +559,7 @@
             });
             if (state.activeTabIndex >= 0) {
                 const path = state.tabs[state.activeTabIndex].path;
-                const el = document.querySelector(`.tree-item[data-path="${path}"] > .tree-item-content`);
+                const el = document.querySelector(`.tree-item[data-path="${CSS.escape(path)}"] > .tree-item-content`);
                 if (el) el.classList.add('active');
             }
         }
@@ -1014,6 +1031,22 @@
         },
 
         close(index) {
+            // Warn about unsaved changes
+            if (state.isEditMode && state.hasUnsavedChanges && index === state.activeTabIndex) {
+                DialogManager.show('未保存の変更', {
+                    message: '変更を保存せずにタブを閉じますか？',
+                    isConfirm: true,
+                    danger: true,
+                    confirmText: '閉じる',
+                    onConfirm: () => {
+                        state.hasUnsavedChanges = false;
+                        state.isEditMode = false;
+                        EditorManager.updateButton();
+                        TabManager.close(index);
+                    }
+                });
+                return;
+            }
             state.tabs.splice(index, 1);
 
             if (state.tabs.length === 0) {
@@ -1039,7 +1072,7 @@
         render() {
             elements.tabBar.innerHTML = state.tabs.map((tab, i) => `
                 <button class="tab ${i === state.activeTabIndex ? 'active' : ''}" onclick="MDV.switchTab(${i})">
-                    ${tab.name}
+                    ${escapeHtml(tab.name)}
                     <span class="tab-close" onclick="event.stopPropagation(); MDV.closeTab(${i})">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -1917,6 +1950,14 @@
                 if (treeItem) {
                     this.selectedTreePath = treeItem.dataset.path;
                 }
+                // Event delegation for file open (replaces inline onclick)
+                const openTarget = e.target.closest('[data-action="open"]');
+                if (openTarget) {
+                    const item = openTarget.closest('.tree-item');
+                    if (item && item.dataset.path) {
+                        TabManager.open(item.dataset.path);
+                    }
+                }
             });
         }
     };
@@ -1996,6 +2037,14 @@
         ContextMenuManager.init();
         DragDropManager.init();
         KeyboardManager.init();
+
+        // Warn before leaving with unsaved changes
+        window.addEventListener('beforeunload', (e) => {
+            if (state.isEditMode && state.hasUnsavedChanges) {
+                e.preventDefault();
+                e.returnValue = '';
+            }
+        });
         TabManager.render();
 
         try {
@@ -2047,9 +2096,10 @@
 
             e.preventDefault();
 
-            // フラグメントとクエリを除去し、パスだけ取り出す
-            const urlPath = href.split('#')[0].split('?')[0];
-            // パーセントエンコードをデコード
+            // フラグメントを保持しつつパスを取り出す
+            const hashIndex = href.indexOf('#');
+            const fragment = hashIndex >= 0 ? href.slice(hashIndex + 1) : '';
+            const urlPath = (hashIndex >= 0 ? href.slice(0, hashIndex) : href).split('?')[0];
             const decoded = decodeURIComponent(urlPath);
 
             // 相対パスを現在のファイルパスから解決
@@ -2079,7 +2129,17 @@
                 FileTreeManager.expandToPath(targetPath);
                 updateUrlPath(targetPath + '/');
             } else {
-                TabManager.open(targetPath);
+                TabManager.open(targetPath).then(() => {
+                    // フラグメントがあればアンカーにスクロール
+                    if (fragment) {
+                        const decodedFragment = decodeURIComponent(fragment);
+                        // id一致 → heading textContent一致 の順で検索
+                        const target = elements.content.querySelector(`#${CSS.escape(decodedFragment)}`) ||
+                            Array.from(elements.content.querySelectorAll('h1, h2, h3, h4, h5, h6'))
+                                .find(h => h.textContent.trim().toLowerCase() === decodedFragment.toLowerCase());
+                        if (target) target.scrollIntoView({ behavior: 'smooth' });
+                    }
+                });
             }
         });
     }

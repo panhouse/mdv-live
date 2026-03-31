@@ -5,7 +5,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { getFileType } from '../utils/fileTypes.js';
-import { getRelativePath, validatePath } from '../utils/path.js';
+import { getRelativePath, validatePathReal } from '../utils/path.js';
 
 const IGNORED_PATTERNS = new Set(['node_modules', '__pycache__', '.git']);
 const MAX_INITIAL_DEPTH = 1;
@@ -100,13 +100,12 @@ export function setupTreeRoutes(app) {
         return res.status(400).json({ error: 'Path is required' });
       }
 
-      const fullPath = path.join(app.locals.rootDir, relativePath);
-
-      // Security: ensure path is within root
-      if (!validatePath(relativePath, app.locals.rootDir)) {
+      // Security: validate before resolving path (with symlink check)
+      if (!await validatePathReal(relativePath, app.locals.rootDir)) {
         return res.status(403).json({ error: 'Access denied' });
       }
 
+      const fullPath = path.join(app.locals.rootDir, relativePath);
       const children = await buildFileTree(fullPath, app.locals.rootDir, 0);
       res.json(children);
     } catch (err) {

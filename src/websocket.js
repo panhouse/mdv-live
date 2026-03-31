@@ -19,7 +19,7 @@ function isClientReady(client) {
  * @returns {WebSocketServer} WebSocket server instance
  */
 export function setupWebSocket(server) {
-  const wss = new WebSocketServer({ server });
+  const wss = new WebSocketServer({ server, maxPayload: 64 * 1024 });
   const clientWatches = new Map();
 
   wss.on('connection', (ws) => {
@@ -30,6 +30,7 @@ export function setupWebSocket(server) {
         const message = JSON.parse(data.toString());
 
         if (message.type === 'watch') {
+          if (typeof message.path !== 'string' || message.path.length > 1024) return;
           const watches = clientWatches.get(ws);
           watches.clear();
           watches.add(message.path);

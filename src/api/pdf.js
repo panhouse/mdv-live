@@ -8,6 +8,7 @@ import { promisify } from 'util';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import os from 'os';
 import { validatePath } from '../utils/path.js';
 
 const execFileAsync = promisify(execFile);
@@ -47,22 +48,22 @@ export function setupPdfRoutes(app) {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    const outputPath = fullPath.replace(/\.md$/, '.pdf');
-    const outputFileName = path.basename(outputPath);
+    const baseName = path.basename(fullPath, '.md');
+    const outputPath = path.join(os.tmpdir(), `mdv-${Date.now()}-${baseName}.pdf`);
+    const outputFileName = `${baseName}.pdf`;
 
     try {
       await execFileAsync(marpBin, [fullPath, '-o', outputPath, '--html', '--allow-local-files', '--no-stdin'], { timeout: 60000 });
-      res.download(outputPath, outputFileName, (err) => {
+      res.download(outputPath, outputFileName, async (err) => {
         if (err) {
           console.error('Download error:', err);
         }
+        try { await fs.unlink(outputPath); } catch { /* ignore cleanup errors */ }
       });
     } catch (err) {
       console.error('PDF export error:', err);
-      res.status(500).json({
-        error: 'PDF export failed',
-        details: err.message
-      });
+      try { await fs.unlink(outputPath); } catch { /* ignore */ }
+      res.status(500).json({ error: 'PDF export failed' });
     }
   });
 }
