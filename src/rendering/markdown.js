@@ -88,7 +88,7 @@ md.enable('table');
 md.enable('strikethrough');
 
 // Enable task lists (checkboxes)
-md.use(taskLists, { enabled: true, label: true, labelAfter: true });
+md.use(taskLists);
 
 // Pattern to detect Marp frontmatter (must be at very start of file, not using 'm' flag)
 const MARP_PATTERN = /^---\s*\n[\s\S]*?marp:\s*true[\s\S]*?\n---/;

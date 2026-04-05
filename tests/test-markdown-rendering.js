@@ -83,6 +83,27 @@ describe('Markdown Rendering', () => {
     });
   });
 
+  describe('Task Lists', () => {
+    it('should render task list checkboxes', async () => {
+      const data = await createAndFetch('tasks.md', '- [ ] todo\n- [x] done');
+      assert.ok(data.content.includes('type="checkbox"'));
+      assert.ok(data.content.includes('class="task-list-item'));
+    });
+
+    it('should render inline markdown inside task list items without leaking raw source', async () => {
+      const source = '- [ ] **bold** and [link](https://example.com) and `code`';
+      const data = await createAndFetch('tasks-inline.md', source);
+      // Inline markdown must be rendered
+      assert.ok(data.content.includes('<strong>bold</strong>'));
+      assert.ok(data.content.includes('href="https://example.com"'));
+      assert.ok(data.content.includes('<code>code</code>'));
+      // Raw markdown source must NOT appear in the output
+      assert.ok(!data.content.includes('**bold**'), 'raw **bold** must not appear');
+      assert.ok(!data.content.includes('[link](https://example.com)'), 'raw link syntax must not appear');
+      assert.ok(!data.content.includes('`code`'), 'raw backtick code must not appear');
+    });
+  });
+
   describe('Code Blocks', () => {
     it('should render inline code', async () => {
       const data = await createAndFetch('inline-code.md', 'Use `console.log()` for debugging');
