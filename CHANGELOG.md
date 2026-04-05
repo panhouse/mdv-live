@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.5] - 2026-04-05
+
+### Fixed
+
+- タスクリストのインライン要素（太字・リンク・コード）が二重表示されるバグを修正
+  - markdown-it-task-lists の labelAfter オプション誤用が原因
+- Mermaidプレースホルダがユーザーコンテンツと衝突する問題を修正（nonce付与）
+- 空frontmatter（`---\n\n---`）で空のyamlコードブロックが生成される問題を修正
+
+### Removed
+
+- 未使用の `src/rendering/slides.js` を削除（marp.jsに統合済み）
+
+### Added
+
+- WebSocketテスト7件（接続追跡・watch・broadcast・通知・cleanup・不正入力耐性）
+- レンダリングテスト10件（strikethrough・CJK emphasis・linkify・breaks・mermaid edge cases）
+- テスト総数: 92 → 109
+
+## [0.5.4] - 2026-04-04
+
+### Fixed
+
+- 4件の依存関係脆弱性を修正
+
 ## [0.5.3] - 2026-03-29
 
 ### Fixed
