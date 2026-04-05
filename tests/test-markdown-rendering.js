@@ -102,6 +102,50 @@ describe('Markdown Rendering', () => {
       assert.ok(!data.content.includes('[link](https://example.com)'), 'raw link syntax must not appear');
       assert.ok(!data.content.includes('`code`'), 'raw backtick code must not appear');
     });
+
+    it('should render task list with CJK and bold', async () => {
+      const data = await createAndFetch('tasks-cjk.md', '- [ ] **日本語の太字**テスト');
+      assert.ok(data.content.includes('<strong>日本語の太字</strong>'));
+    });
+  });
+
+  describe('Strikethrough', () => {
+    it('should render strikethrough', async () => {
+      const data = await createAndFetch('strike.md', 'This is ~~deleted~~ text');
+      assert.ok(data.content.includes('<s>deleted</s>') || data.content.includes('<del>deleted</del>'));
+      assert.ok(!data.content.includes('~~deleted~~'), 'raw ~~ must not appear');
+    });
+  });
+
+  describe('CJK Emphasis', () => {
+    it('should render bold adjacent to CJK punctuation', async () => {
+      const data = await createAndFetch('cjk-paren.md', '（**強調**）');
+      assert.ok(data.content.includes('<strong>強調</strong>'));
+    });
+
+    it('should render bold between CJK text', async () => {
+      const data = await createAndFetch('cjk-text.md', 'これは**太字**です');
+      assert.ok(data.content.includes('<strong>太字</strong>'));
+    });
+
+    it('should render bold after CJK brackets', async () => {
+      const data = await createAndFetch('cjk-bracket.md', '「**重要**」：確認');
+      assert.ok(data.content.includes('<strong>重要</strong>'));
+    });
+  });
+
+  describe('Linkify', () => {
+    it('should auto-link URLs', async () => {
+      const data = await createAndFetch('linkify.md', 'Visit https://example.com for more');
+      assert.ok(data.content.includes('href="https://example.com"'));
+    });
+  });
+
+  describe('Line Breaks', () => {
+    it('should convert single newline to br', async () => {
+      const data = await createAndFetch('breaks.md', 'Line 1\nLine 2');
+      assert.ok(data.content.includes('<br>') || data.content.includes('<br />'));
+    });
   });
 
   describe('Code Blocks', () => {
@@ -125,6 +169,12 @@ describe('Markdown Rendering', () => {
   });
 
   describe('YAML Frontmatter', () => {
+    it('should skip empty frontmatter', async () => {
+      const data = await createAndFetch('empty-fm.md', '---\n\n---\n\nbody');
+      assert.ok(!data.content.includes('language-yaml'), 'empty frontmatter should not create yaml code block');
+      assert.ok(data.content.includes('body'));
+    });
+
     it('should handle YAML frontmatter', async () => {
       const content = [
         '---',
@@ -144,6 +194,19 @@ describe('Markdown Rendering', () => {
       const content = '```mermaid\ngraph TD\n    A --> B\n```';
       const data = await createAndFetch('mermaid.md', content);
       assert.ok(data.content.includes('language-mermaid'));
+    });
+
+    it('should handle multiple mermaid blocks', async () => {
+      const content = '```mermaid\nA\n```\n\ntext\n\n```mermaid\nB\n```';
+      const data = await createAndFetch('mermaid-multi.md', content);
+      const matches = data.content.match(/language-mermaid/g);
+      assert.strictEqual(matches.length, 2, 'should have 2 mermaid blocks');
+    });
+
+    it('should not be affected by user placeholder text', async () => {
+      const content = 'text with <!--MERMAID_PLACEHOLDER_0--> in it\n\n```mermaid\ngraph TD\n```';
+      const data = await createAndFetch('mermaid-inject.md', content);
+      assert.ok(data.content.includes('language-mermaid'), 'mermaid block should render');
     });
   });
 

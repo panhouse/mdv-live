@@ -118,6 +118,10 @@ function convertFrontmatter(content) {
   const match = content.match(FRONTMATTER_PATTERN);
   if (match) {
     const frontmatter = match[1];
+    // Skip empty frontmatter (treat as horizontal rules instead)
+    if (!frontmatter.trim()) {
+      return content;
+    }
     const rest = content.slice(match[0].length);
     return `\`\`\`yaml\n${frontmatter}\n\`\`\`\n${rest}`;
   }
@@ -125,18 +129,22 @@ function convertFrontmatter(content) {
   return content;
 }
 
+// Generate a per-render nonce to prevent placeholder collision with user content
+const MERMAID_NONCE = Math.random().toString(36).slice(2, 10);
+
 /**
  * Protect Mermaid blocks from markdown processing
  * @param {string} content - Markdown content
- * @returns {{ content: string, blocks: string[] }}
+ * @returns {{ content: string, blocks: string[], nonce: string }}
  */
 function protectMermaidBlocks(content) {
   const blocks = [];
+  const nonce = MERMAID_NONCE + '_' + Date.now().toString(36);
   const protectedContent = content.replace(MERMAID_PATTERN, (match, code) => {
     blocks.push(code);
-    return `<!--MERMAID_PLACEHOLDER_${blocks.length - 1}-->`;
+    return `<!--MDV_MERMAID_${nonce}_${blocks.length - 1}-->`;
   });
-  return { content: protectedContent, blocks };
+  return { content: protectedContent, blocks, nonce };
 }
 
 /**
@@ -155,17 +163,19 @@ function escapeHtmlEntities(text) {
  * Restore Mermaid blocks after markdown processing
  * @param {string} html - Rendered HTML
  * @param {string[]} blocks - Mermaid code blocks
+ * @param {string} nonce - Nonce used during protection
  * @returns {string}
  */
-function restoreMermaidBlocks(html, blocks) {
+function restoreMermaidBlocks(html, blocks, nonce) {
   let result = html;
   for (let i = 0; i < blocks.length; i++) {
     const escaped = escapeHtmlEntities(blocks[i]);
     const mermaidHtml = `<pre><code class="language-mermaid">${escaped}</code></pre>`;
-    // Replace both paragraph-wrapped and bare placeholders
+    const placeholder = `<!--MDV_MERMAID_${nonce}_${i}-->`;
+    // Replace both paragraph-wrapped and bare placeholders (use split+join for global replace)
     result = result
-      .replace(`<p><!--MERMAID_PLACEHOLDER_${i}--></p>`, mermaidHtml)
-      .replace(`<!--MERMAID_PLACEHOLDER_${i}-->`, mermaidHtml);
+      .split(`<p>${placeholder}</p>`).join(mermaidHtml)
+      .split(placeholder).join(mermaidHtml);
   }
   return result;
 }
@@ -177,9 +187,9 @@ function restoreMermaidBlocks(html, blocks) {
  */
 export function renderMarkdown(content) {
   const withFrontmatter = convertFrontmatter(content);
-  const { content: protectedContent, blocks } = protectMermaidBlocks(withFrontmatter);
+  const { content: protectedContent, blocks, nonce } = protectMermaidBlocks(withFrontmatter);
   const html = md.render(protectedContent);
-  return restoreMermaidBlocks(html, blocks);
+  return restoreMermaidBlocks(html, blocks, nonce);
 }
 
 export default { renderMarkdown, isMarp };
