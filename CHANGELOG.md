@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.6] - 2026-04-27
+
+### Added
+
+- Markdown PDF変換用の `mdv convert` サブコマンドを追加
+- `-s <css-file>` によるPDF変換用CSS指定を追加
+- `--pdf-options <json-file>` によるPuppeteer PDF options指定を追加
+- Web UIのStyleパネルを追加
+  - CSSファイルパスを指定可能
+  - PDF options JSONファイルパスを指定可能
+  - 指定CSSをMarkdownプレビューに反映
+  - `Clear` でスタイル指定を解除可能
+- 通常MarkdownのWeb UI PDF exportを `md-to-pdf` に対応
+- PDFスタイル指定のサンプルを追加
+  - `src/styles/report.example.css`
+  - `src/styles/report.pdf-options.example.json`
+
+### Changed
+
+- PDF出力設定をCSSとPDF options JSONに分離
+- Marp PDF出力は従来どおりMarp CLIを使用し、通常Markdown PDF出力のみ `md-to-pdf` を使用
+
 ## [0.5.5] - 2026-04-05
 
 ### Fixed

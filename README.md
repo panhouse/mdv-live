@@ -16,7 +16,8 @@
 - 🌙 ダーク/ライトテーマ切り替え
 - ✏️ インラインエディタ（Cmd+E）
 - ✅ タスクリスト（チェックボックス）対応
-- 📥 PDF出力（Cmd+P）
+- 📥 PDF出力（Cmd+P / CLI convert）
+- 🎛️ PDF用CSS・PDF options指定（CLI / Web UI）
 - 🎬 動画/音声ストリーミング再生（Range Request対応）
 - 📤 ファイルアップロード（ドラッグ&ドロップ）
 - 🔒 セキュリティ強化（パストラバーサル防止）
@@ -59,12 +60,58 @@ mdv -k 12345
 mdv -k -a
 
 # PDFに変換
-mdv --pdf slide.md
-mdv --pdf slide.md -o output.pdf
+mdv convert -i report.md -o report.pdf
+
+# PDFに変換（CSSとPDF optionsを指定）
+mdv convert \
+  -i report.md \
+  -o report.pdf \
+  -s ./src/styles/report.example.css \
+  --pdf-options ./src/styles/report.pdf-options.example.json
 
 # バージョン表示
 mdv -v
 ```
+
+## PDF Export
+
+Markdown ファイルは CLI または Web UI から PDF に変換できます。
+
+### CLI
+
+```bash
+mdv convert -i input.md -o output.pdf
+```
+
+CSS を指定する場合は `-s` に CSS ファイルパスを渡します。
+
+```bash
+mdv convert \
+  -i input.md \
+  -o output.pdf \
+  -s ./src/styles/report.example.css
+```
+
+`printBackground` や余白などの PDF 生成オプションは、CSS と分離して JSON ファイルで指定できます。
+
+```bash
+mdv convert \
+  -i input.md \
+  -o output.pdf \
+  -s ./src/styles/report.example.css \
+  --pdf-options ./src/styles/report.pdf-options.example.json
+```
+
+`src/styles/report.example.css` と `src/styles/report.pdf-options.example.json` はサンプルです。必要に応じて任意の CSS / JSON ファイルを指定してください。
+
+### Web UI
+
+ビューア上部の `Style` から以下を指定できます。
+
+- CSS ファイルパス
+- PDF options JSON ファイルパス
+
+CSS は Markdown プレビューにも反映されます。指定を解除する場合は `Clear` を押してください。
 
 ### ポート自動増分
 
@@ -159,6 +206,7 @@ paginate: true
 | `/api/move` | POST | ファイル移動/リネーム |
 | `/api/download` | GET | ファイルダウンロード |
 | `/api/upload` | POST | ファイルアップロード |
+| `/api/pdf/export` | POST | PDF出力 |
 | `/api/info` | GET | サーバー情報 |
 
 ## Tech Stack
@@ -198,6 +246,7 @@ mdv/
 │   ├── watcher.js       # File watching (chokidar)
 │   ├── api/
 │   │   ├── file.js      # File operations API
+│   │   ├── pdf.js       # PDF export API
 │   │   ├── tree.js      # File tree API
 │   │   └── upload.js    # Upload API
 │   ├── rendering/
@@ -207,10 +256,14 @@ mdv/
 │   ├── utils/
 │   │   ├── fileTypes.js # File type detection
 │   │   └── path.js      # Path security utilities
-│   └── static/          # Frontend files
+│   ├── static/          # Frontend files
 │       ├── index.html
 │       ├── app.js
 │       └── styles.css
+│   └── styles/
+│       ├── index.js
+│       ├── report.example.css
+│       └── report.pdf-options.example.json
 ├── scripts/
 │   └── setup-macos-app.sh  # macOS app setup
 └── tests/               # Test files
