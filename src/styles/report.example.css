@@ -1,0 +1,201 @@
+/* Report style — matches blue-accented business document layout */
+
+:root {
+  --blue: #1a6496;
+  --blue-light: #2980b9;
+  --border-strong: 2px solid #1a6496;
+  --border-light: 1px solid #ccc;
+  --text: #222;
+  --muted: #555;
+  --table-header-bg: #f0f4f8;
+}
+
+/* ── Base ────────────────────────────────────────────────── */
+
+body {
+  font-family: 'Noto Sans CJK JP', 'Noto Sans JP', sans-serif;
+  font-size: 10.5pt;
+  line-height: 1.75;
+  color: var(--text);
+}
+
+/* ── Headings ────────────────────────────────────────────── */
+
+/* Title page: the very first H1 */
+h1:first-of-type {
+  font-size: 2.4em;
+  font-weight: 700;
+  color: var(--blue);
+  text-align: center;
+  border-bottom: none;
+  margin-top: 5em;
+  margin-bottom: 0.3em;
+}
+
+/* Section H1s (after the first) */
+h1 {
+  font-size: 1.5em;
+  font-weight: 700;
+  color: var(--blue);
+  border-bottom: var(--border-strong);
+  padding-bottom: 4px;
+  margin-top: 2em;
+  margin-bottom: 0.8em;
+}
+
+h2 {
+  font-size: 1.25em;
+  font-weight: 700;
+  color: var(--blue);
+  border-bottom: var(--border-light);
+  padding-bottom: 3px;
+  margin-top: 1.8em;
+  margin-bottom: 0.6em;
+}
+
+h3 {
+  font-size: 1.05em;
+  font-weight: 700;
+  color: var(--blue);
+  margin-top: 1.4em;
+  margin-bottom: 0.4em;
+}
+
+h4, h5, h6 {
+  color: var(--blue);
+  margin-top: 1em;
+  margin-bottom: 0.3em;
+}
+
+/* ── Body text ───────────────────────────────────────────── */
+
+p {
+  margin: 0.5em 0;
+  padding-left: 1em;
+  text-indent: 1em;
+}
+
+/* Subtitle / date line (paragraph immediately after first H1) */
+h1:first-of-type + p {
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.95em;
+  padding-left: 0;
+  text-indent: 0;
+}
+
+li p,
+blockquote p,
+td p,
+th p {
+  padding-left: 0;
+  text-indent: 0;
+}
+
+/* ── Horizontal rule ─────────────────────────────────────── */
+
+hr {
+  border: none;
+  break-after: page;
+  margin: 0;
+}
+
+/* ── Links ───────────────────────────────────────────────── */
+
+a {
+  color: var(--blue-light);
+  text-decoration: underline;
+}
+
+/* ── Tables ──────────────────────────────────────────────── */
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1em 0;
+  font-size: 9.5pt;
+}
+
+th {
+  background: var(--table-header-bg);
+  border: 1px solid #aaa;
+  padding: 6px 10px;
+  font-weight: 700;
+  text-align: center;
+}
+
+td {
+  border: 1px solid #aaa;
+  padding: 6px 10px;
+  vertical-align: top;
+}
+
+/* ── Lists ───────────────────────────────────────────────── */
+
+ul, ol {
+  margin: 0.4em 0 0.4em 1em;
+  padding-left: 1.4em;
+}
+
+li {
+  margin: 0.2em 0;
+}
+
+/* ── Code ────────────────────────────────────────────────── */
+
+pre {
+  background: #282c34;
+  color: #d7dae0;
+  font-family: 'Noto Mono', monospace;
+  font-size: 8.5pt;
+  padding: 0.8em 1em;
+  line-height: 1.5;
+  overflow: auto;
+  border-radius: 4px;
+}
+
+pre code,
+pre code.hljs,
+.hljs {
+  background: #282c34;
+  color: #d7dae0;
+  font-family: 'Noto Mono', monospace;
+  font-size: 8.5pt;
+}
+
+code {
+  border-radius: 2px;
+  padding: 1px 5px;
+}
+
+pre code.hljs .hljs-section,
+pre code.hljs .hljs-title {
+  color: #61afef;
+}
+
+pre code.hljs .hljs-tag,
+pre code.hljs .hljs-name,
+pre code.hljs .hljs-selector-tag {
+  color: #e06c75;
+}
+
+pre code.hljs .hljs-string,
+pre code.hljs .hljs-attr,
+pre code.hljs .hljs-attribute {
+  color: #98c379;
+}
+
+pre code.hljs .hljs-comment,
+pre code.hljs .hljs-quote {
+  color: #8f98a8;
+  font-style: normal;
+}
+
+/* ── Blockquote ──────────────────────────────────────────── */
+
+blockquote {
+  border-left: 3px solid var(--blue);
+  margin: 0.8em 0 0.8em 1em;
+  padding: 0.4em 0.8em;
+  color: var(--muted);
+}
