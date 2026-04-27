@@ -130,6 +130,7 @@
         pdfStylePath: document.getElementById('pdfStylePath'),
         pdfOptionsPath: document.getElementById('pdfOptionsPath'),
         pdfStyleApply: document.getElementById('pdfStyleApply'),
+        pdfStyleClear: document.getElementById('pdfStyleClear'),
         editLabel: document.getElementById('editLabel'),
         editorStatus: document.getElementById('editorStatus'),
         shutdownBtn: document.getElementById('shutdownBtn'),
@@ -262,6 +263,7 @@
                 elements.pdfStylePanel.classList.toggle('hidden');
             });
             elements.pdfStyleApply.addEventListener('click', () => this.applyFromInputs());
+            elements.pdfStyleClear.addEventListener('click', () => this.clear());
             elements.pdfStylePath.addEventListener('keydown', (event) => {
                 if (event.key === 'Enter') this.applyFromInputs();
             });
@@ -287,6 +289,20 @@
             localStorage.setItem(STORAGE_KEYS.PDF_OPTIONS_PATH, state.pdfOptionsPath);
             await this.loadPreviewCss();
             TabManager.renderActive();
+        },
+
+        clear() {
+            state.pdfStylePath = '';
+            state.pdfOptionsPath = '';
+            elements.pdfStylePath.value = '';
+            elements.pdfOptionsPath.value = '';
+            localStorage.removeItem(STORAGE_KEYS.PDF_STYLE_PATH);
+            localStorage.removeItem(STORAGE_KEYS.PDF_OPTIONS_PATH);
+            const oldStyle = document.getElementById(this.scopedCssId);
+            if (oldStyle) oldStyle.remove();
+            TabManager.renderActive();
+            elements.statusText.textContent = 'PDF style cleared';
+            setTimeout(() => { elements.statusText.textContent = 'Connected'; }, 1600);
         },
 
         async loadPreviewCss() {
