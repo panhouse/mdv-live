@@ -102,15 +102,37 @@ describe('MDV CLI', () => {
     });
   });
 
-  describe('PDF Conversion', () => {
-    it('--pdf without file should show error', () => {
-      const output = runCli('--pdf');
-      assertContainsOneOf(output, ['Error', 'requires']);
+  describe('convert subcommand', () => {
+    it('convert --help should show convert usage', () => {
+      const output = runCli('convert --help');
+      assertContains(output, 'convert');
+      assertContains(output, '-i, --input');
+      assertContains(output, '-o, --output');
     });
 
-    it('--pdf with non-existent file should show error', () => {
-      const output = runCli('--pdf nonexistent.md');
+    it('convert -h should show convert usage', () => {
+      const output = runCli('convert -h');
+      assertContains(output, '-i, --input');
+    });
+
+    it('convert without -i should show error', () => {
+      const output = runCli('convert');
+      assertContainsOneOf(output, ['Error', 'required', '-i']);
+    });
+
+    it('convert with non-existent file should show error', () => {
+      const output = runCli('convert -i nonexistent.md');
       assertContainsOneOf(output, ['Error', 'not found']);
+    });
+
+    it('convert with non-markdown file should show error', () => {
+      const output = runCli('convert -i somefile.txt');
+      assertContainsOneOf(output, ['Error', 'not found', 'markdown']);
+    });
+
+    it('--help should mention convert subcommand', () => {
+      const output = runCli('--help');
+      assertContains(output, 'convert');
     });
   });
 });
