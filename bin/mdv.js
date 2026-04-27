@@ -20,62 +20,32 @@ import { createMdvServer } from '../src/server.js';
 const DEFAULT_PORT = 8642;
 const MARP_FRONTMATTER_PATTERN = /^---\s*\n[\s\S]*?marp:\s*true[\s\S]*?\n---/;
 
-const OPTIONS = {
-  port: {
-    type: 'string',
-    short: 'p',
-  },
-  depth: {
-    type: 'string',
-    short: 'd',
-  },
-  'no-browser': {
-    type: 'boolean',
-    default: false
-  },
-  list: {
-    type: 'boolean',
-    short: 'l',
-    default: false
-  },
-  kill: {
-    type: 'boolean',
-    short: 'k',
-    default: false
-  },
-  all: {
-    type: 'boolean',
-    short: 'a',
-    default: false
-  },
-  pdf: {
-    type: 'boolean',
-    default: false
-  },
-  output: {
-    type: 'string',
-    short: 'o',
-  },
-  help: {
-    type: 'boolean',
-    short: 'h',
-    default: false
-  },
-  version: {
-    type: 'boolean',
-    short: 'v',
-    default: false
-  }
+const VIEWER_OPTIONS = {
+  port: { type: 'string', short: 'p' },
+  depth: { type: 'string', short: 'd' },
+  'no-browser': { type: 'boolean', default: false },
+  list: { type: 'boolean', short: 'l', default: false },
+  kill: { type: 'boolean', short: 'k', default: false },
+  all: { type: 'boolean', short: 'a', default: false },
+  help: { type: 'boolean', short: 'h', default: false },
+  version: { type: 'boolean', short: 'v', default: false },
+};
+
+const CONVERT_OPTIONS = {
+  input: { type: 'string', short: 'i' },
+  output: { type: 'string', short: 'o' },
+  help: { type: 'boolean', short: 'h', default: false },
 };
 
 /**
- * Display help message
+ * Display viewer help message
  */
 function showHelp() {
   console.log(`
 MDV - Markdown Viewer with file tree + live preview + Marp support
 
 Usage: mdv [options] [path]
+       mdv convert -i <file.md> -o <file.pdf>
 
 Arguments:
   path                Directory or file path to view (default: current directory)
@@ -90,22 +60,38 @@ Server Management:
   -k, --kill [PID]    Stop server (-k -a for all, -k <PID> for specific)
   -a, --all           Use with -k to stop all servers
 
-PDF Conversion:
-  --pdf               Convert markdown file to PDF
-  -o, --output <file> Output PDF file path
-
 Other:
   -h, --help          Show this help message
   -v, --version       Show version number
 
 Examples:
-  mdv                    Start viewer in current directory
-  mdv /path/to/dir       Start viewer in specified directory
-  mdv README.md          Open specific file
-  mdv --pdf README.md    Convert markdown to PDF
-  mdv -p 3000            Start on port 3000
-  mdv -l                 List running servers
-  mdv -k -a              Stop all servers
+  mdv                          Start viewer in current directory
+  mdv /path/to/dir             Start viewer in specified directory
+  mdv README.md                Open specific file
+  mdv convert -i s.md -o s.pdf Convert markdown to PDF
+  mdv -p 3000                  Start on port 3000
+  mdv -l                       List running servers
+  mdv -k -a                    Stop all servers
+`);
+}
+
+/**
+ * Display convert subcommand help message
+ */
+function showConvertHelp() {
+  console.log(`
+MDV convert - Convert markdown to PDF
+
+Usage: mdv convert -i <input.md> -o <output.pdf>
+
+Options:
+  -i, --input <file>   Input markdown file (.md or .markdown)
+  -o, --output <file>  Output PDF file (default: same name as input)
+  -h, --help           Show this help message
+
+Examples:
+  mdv convert -i slide.md -o slide.pdf
+  mdv convert -i README.md
 `);
 }
 
@@ -431,15 +417,34 @@ async function startViewer(targetPath, startPort, openBrowser, depth) {
 }
 
 /**
- * Parse command line arguments safely
+ * Parse arguments for the convert subcommand
  * @returns {{values: object, positionals: string[]}}
  */
-function parseCommandLineArgs() {
+function parseConvertArgs() {
   try {
     return parseArgs({
-      options: OPTIONS,
+      args: process.argv.slice(3), // skip node, mdv.js, "convert"
+      options: CONVERT_OPTIONS,
+      allowPositionals: false,
+      strict: false,
+    });
+  } catch (err) {
+    console.error('Error parsing arguments:', err.message);
+    showConvertHelp();
+    process.exit(1);
+  }
+}
+
+/**
+ * Parse viewer command line arguments safely
+ * @returns {{values: object, positionals: string[]}}
+ */
+function parseViewerArgs() {
+  try {
+    return parseArgs({
+      options: VIEWER_OPTIONS,
       allowPositionals: true,
-      strict: false
+      strict: false,
     });
   } catch (err) {
     console.error('Error parsing arguments:', err.message);
@@ -449,10 +454,37 @@ function parseCommandLineArgs() {
 }
 
 /**
+ * Handle the convert subcommand
+ */
+async function runConvert() {
+  const { values } = parseConvertArgs();
+
+  if (values.help) {
+    showConvertHelp();
+    process.exit(0);
+  }
+
+  if (!values.input) {
+    console.error('Error: -i <file.md> is required');
+    showConvertHelp();
+    process.exit(1);
+  }
+
+  process.exit(await convertToPdf(values.input, values.output));
+}
+
+/**
  * Main entry point
  */
 async function main() {
-  const { values, positionals } = parseCommandLineArgs();
+  const subcommand = process.argv[2];
+
+  if (subcommand === 'convert') {
+    await runConvert();
+    return;
+  }
+
+  const { values, positionals } = parseViewerArgs();
 
   if (values.help) {
     showHelp();
@@ -475,15 +507,6 @@ async function main() {
   if (values.kill) {
     const pid = positionals[0] || null;
     process.exit(killServers(pid, values.all));
-  }
-
-  if (values.pdf) {
-    const inputPath = positionals[0];
-    if (!inputPath) {
-      console.error('Error: --pdf requires a markdown file path');
-      process.exit(1);
-    }
-    process.exit(await convertToPdf(inputPath, values.output));
   }
 
   // Default: start viewer
