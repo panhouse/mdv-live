@@ -11,7 +11,9 @@
 
     const STORAGE_KEYS = {
         THEME: 'mdv-theme',
-        SIDEBAR_WIDTH: 'mdv-sidebar-width'
+        SIDEBAR_WIDTH: 'mdv-sidebar-width',
+        PDF_STYLE_PATH: 'mdv-pdf-style-path',
+        PDF_OPTIONS_PATH: 'mdv-pdf-options-path'
     };
 
     const HLJS_THEMES = {
@@ -85,7 +87,9 @@
         isResizing: false,
         skipScrollRestore: false,
         uploadTargetPath: '',
-        rootPath: ''
+        rootPath: '',
+        pdfStylePath: localStorage.getItem(STORAGE_KEYS.PDF_STYLE_PATH) || '',
+        pdfOptionsPath: localStorage.getItem(STORAGE_KEYS.PDF_OPTIONS_PATH) || ''
     };
 
     // ============================================================
@@ -121,6 +125,11 @@
         statusText: document.getElementById('statusText'),
         resizeHandle: document.getElementById('resizeHandle'),
         editToggle: document.getElementById('editToggle'),
+        pdfStyleToggle: document.getElementById('pdfStyleToggle'),
+        pdfStylePanel: document.getElementById('pdfStylePanel'),
+        pdfStylePath: document.getElementById('pdfStylePath'),
+        pdfOptionsPath: document.getElementById('pdfOptionsPath'),
+        pdfStyleApply: document.getElementById('pdfStyleApply'),
         editLabel: document.getElementById('editLabel'),
         editorStatus: document.getElementById('editorStatus'),
         shutdownBtn: document.getElementById('shutdownBtn'),
@@ -161,6 +170,10 @@
         requestAnimationFrame(() => {
             element.scrollTop = position;
         });
+    }
+
+    function normalizeUserPath(path) {
+        return path.trim().replace(/^\/+/, '');
     }
 
     async function apiRequest(url, options = {}) {
@@ -232,6 +245,86 @@
         init() {
             this.set(state.theme);
             elements.themeToggle.addEventListener('click', () => this.toggle());
+        }
+    };
+
+    // ============================================================
+    // PDF Style Preview
+    // ============================================================
+
+    const PdfStyleManager = {
+        scopedCssId: 'pdf-style-preview-css',
+
+        init() {
+            elements.pdfStylePath.value = state.pdfStylePath;
+            elements.pdfOptionsPath.value = state.pdfOptionsPath;
+            elements.pdfStyleToggle.addEventListener('click', () => {
+                elements.pdfStylePanel.classList.toggle('hidden');
+            });
+            elements.pdfStyleApply.addEventListener('click', () => this.applyFromInputs());
+            elements.pdfStylePath.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter') this.applyFromInputs();
+            });
+            elements.pdfOptionsPath.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter') this.applyFromInputs();
+            });
+            this.loadPreviewCss();
+        },
+
+        getExportOptions() {
+            return {
+                stylePath: normalizeUserPath(state.pdfStylePath),
+                pdfOptionsPath: normalizeUserPath(state.pdfOptionsPath)
+            };
+        },
+
+        async applyFromInputs() {
+            state.pdfStylePath = normalizeUserPath(elements.pdfStylePath.value);
+            state.pdfOptionsPath = normalizeUserPath(elements.pdfOptionsPath.value);
+            elements.pdfStylePath.value = state.pdfStylePath;
+            elements.pdfOptionsPath.value = state.pdfOptionsPath;
+            localStorage.setItem(STORAGE_KEYS.PDF_STYLE_PATH, state.pdfStylePath);
+            localStorage.setItem(STORAGE_KEYS.PDF_OPTIONS_PATH, state.pdfOptionsPath);
+            await this.loadPreviewCss();
+            TabManager.renderActive();
+        },
+
+        async loadPreviewCss() {
+            const oldStyle = document.getElementById(this.scopedCssId);
+            if (oldStyle) oldStyle.remove();
+            if (!state.pdfStylePath) return;
+
+            try {
+                const response = await fetch(`/raw/${state.pdfStylePath}`);
+                if (!response.ok) throw new Error('CSS file not found');
+                const cssText = await response.text();
+                const style = document.createElement('style');
+                style.id = this.scopedCssId;
+                style.textContent = this.scopeCss(cssText);
+                document.head.appendChild(style);
+                elements.statusText.textContent = 'PDF style applied';
+                setTimeout(() => { elements.statusText.textContent = 'Connected'; }, 1600);
+            } catch (error) {
+                console.error('PDF style preview error:', error);
+                elements.statusText.textContent = 'PDF style failed';
+                setTimeout(() => { elements.statusText.textContent = 'Connected'; }, 2500);
+            }
+        },
+
+        scopeCss(cssText) {
+            const scope = '.markdown-body.pdf-style-preview';
+            const withoutComments = cssText.replace(/\/\*[\s\S]*?\*\//g, '');
+            return withoutComments.replace(/([^{}]+)\{/g, (match, selectorText) => {
+                const selectors = selectorText.trim();
+                if (!selectors || selectors.startsWith('@')) return match;
+                const scopedSelectors = selectors.split(',').map((selector) => {
+                    const trimmed = selector.trim();
+                    if (trimmed === ':root' || trimmed === 'body') return scope;
+                    if (trimmed.startsWith(scope)) return trimmed;
+                    return `${scope} ${trimmed}`;
+                });
+                return `${scopedSelectors.join(', ')} {`;
+            });
         }
     };
 
@@ -564,7 +657,9 @@
         render(htmlContent, fileType) {
             const containerClass = fileType === 'code'
                 ? 'markdown-body code-view-container'
-                : 'markdown-body';
+                : fileType === 'markdown'
+                    ? 'markdown-body pdf-style-preview'
+                    : 'markdown-body';
             elements.content.innerHTML = `<div class="${containerClass}">${htmlContent}</div>`;
 
             elements.content.querySelectorAll('pre code').forEach(block => {
@@ -1360,9 +1455,11 @@
             }
 
             if (tab.isMarp || this.isMarpPresentation()) {
-                await this.exportMarpPdf(tab.path);
+                await this.exportPdf(tab.path);
             } else if (this.isHtmlPreview()) {
                 this.printHtmlPreview(tab.name);
+            } else if (tab.fileType === 'markdown') {
+                await this.exportPdf(tab.path);
             } else {
                 this.browserPrint(tab.name);
             }
@@ -1384,17 +1481,18 @@
             }
         },
 
-        async exportMarpPdf(filePath) {
+        async exportPdf(filePath) {
             const statusText = elements.statusText;
             const originalStatus = statusText.textContent;
 
             try {
                 statusText.textContent = 'Generating PDF...';
+                const exportOptions = PdfStyleManager.getExportOptions();
 
                 const response = await fetch('/api/pdf/export', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ filePath })
+                    body: JSON.stringify({ filePath, ...exportOptions })
                 });
 
                 if (!response.ok) {
@@ -2021,6 +2119,7 @@
     async function init() {
         // Initialize all managers
         ThemeManager.init();
+        PdfStyleManager.init();
         SidebarManager.init();
         ResizeHandler.init();
         EditorManager.init();
