@@ -1709,8 +1709,6 @@
                 await this.exportPdf(tab.path);
             } else if (this.isHtmlPreview()) {
                 this.printHtmlPreview(tab.name);
-            } else if (tab.fileType === 'markdown') {
-                await this.exportPdf(tab.path);
             } else {
                 this.browserPrint(tab.name);
             }
