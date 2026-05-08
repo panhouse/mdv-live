@@ -78,6 +78,15 @@ async function performNoteUpdate({ req, res, rootDir, rel, slideIndex, note, ifM
     return sendError(res, mkError('NOT_MARP', 'not a Marp file'));
   }
 
+  // The mutex was acquired on earlyDeck.realPath. If the symlink target
+  // changed between pre-lock and in-lock reads, our lock no longer covers
+  // the deck we'd be writing — a concurrent request to the new target
+  // could hold a different lock and race us in atomicWrite. Reject so the
+  // client retries (which will re-resolve and re-acquire the right lock).
+  if (deck.realPath !== earlyDeck.realPath) {
+    return sendError(res, mkError('PATH_INVALID', 'path resolution changed during request'));
+  }
+
   const currentEtag = makeEtag(deck.rawSource);
   if (ifMatch !== currentEtag) {
     return res.status(412).json({ ok: false, code: 'STALE', currentEtag });
