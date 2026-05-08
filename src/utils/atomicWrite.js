@@ -10,16 +10,11 @@ import * as fs from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import * as crypto from 'node:crypto';
 import * as path from 'node:path';
+import { mkError } from './errors.js';
 
 const TMP_PREFIX = '.~mdvtmp.';
 const PART_PREFIX = '.~mdvpart.';
 const SWEEP_AGE_MS = 60 * 60 * 1000; // 1 hour
-
-function mkError(code, message) {
-  const err = new Error(message || code);
-  err.code = code;
-  return err;
-}
 
 function isWritable(stat) {
   // Owner-write or group-write (group/world write would already need elevated

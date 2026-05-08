@@ -697,7 +697,9 @@
 
         init() {
             if (typeof BroadcastChannel === 'undefined') return;
-            this.channel = new BroadcastChannel('mdv-marp-presenter');
+            if (!window.MDVPresenterChannel) return;
+            this.channel = (window.MDVPresenterChannel && window.MDVPresenterChannel.create()) || null;
+            if (!this.channel) return;
             this.channel.addEventListener('message', (e) => {
                 const msg = e.data || {};
                 if (msg.type === 'request-slides') {
@@ -784,18 +786,9 @@
                 return;
             }
 
-            const url = `/api/marp/decks/${encodeURIComponent(path)}/slides/${slideIndex}/note`;
             let res, data;
             try {
-                res = await fetch(url, {
-                    method: 'PUT',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'If-Match': ifMatch
-                    },
-                    body: JSON.stringify({ note })
-                });
-                data = await res.json().catch(() => ({}));
+                ({ res, data } = await window.MDVApi.saveMarpNote(path, slideIndex, note, ifMatch));
             } catch (err) {
                 console.error('saveNote network error', err);
                 this.channel.postMessage({
@@ -875,7 +868,17 @@
         broadcastSlides() {
             if (!this.channel) return;
             const tab = state.tabs[state.activeTabIndex];
-            if (!tab || !tab.isMarp) return;
+            if (!tab || !tab.isMarp) {
+                // Active tab is not a Marp deck (or no tab) — clear the
+                // presenter so it doesn't keep showing stale slides /
+                // accept edits against the wrong file.
+                this.channel.postMessage({
+                    type: 'slides',
+                    empty: true,
+                    reason: 'main-switched-away'
+                });
+                return;
+            }
             this.channel.postMessage({
                 type: 'slides',
                 path: tab.path,

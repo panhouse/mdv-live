@@ -90,23 +90,16 @@ md.enable('strikethrough');
 // Enable task lists (checkboxes)
 md.use(taskLists);
 
-// Pattern to detect Marp frontmatter (must be at very start of file, not using 'm' flag)
-const MARP_PATTERN = /^---\s*\n[\s\S]*?marp:\s*true[\s\S]*?\n---/;
-
 // Pattern to detect YAML frontmatter at start of file
 const FRONTMATTER_PATTERN = /^---\s*\n([\s\S]*?)\n---\s*(\n|$)/;
 
 // Pattern for Mermaid code blocks
 const MERMAID_PATTERN = /```mermaid\s*\n([\s\S]*?)\n```/g;
 
-/**
- * Check if content is a Marp presentation
- * @param {string} content - Markdown content
- * @returns {boolean}
- */
-export function isMarp(content) {
-  return MARP_PATTERN.test(content);
-}
+// Re-export the SSOT version of isMarp so callers don't import a separate
+// (and previously slightly different) regex from this module.
+import { isMarp } from './marpitAdapter.js';
+export { isMarp };
 
 /**
  * Convert YAML frontmatter to code block for display

@@ -14,6 +14,7 @@
  */
 
 import { Marp } from '@marp-team/marp-core';
+import { mkError } from '../utils/errors.js';
 
 const marp = new Marp({
   html: true,
@@ -21,12 +22,6 @@ const marp = new Marp({
   markdown: { html: true, breaks: false, linkify: true }
 });
 marp.markdown.disable('code');
-
-function mkError(code, message) {
-  const err = new Error(message || code);
-  err.code = code;
-  return err;
-}
 
 /**
  * Marp deck を解析し、slide 範囲・classified notes・comment 位置を返す。

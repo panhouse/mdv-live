@@ -244,9 +244,10 @@
     </div>
   </div>
 
+<script src="/static/lib/presenterChannel.js"></script>
 <script>
 (function () {
-  const channel = ('BroadcastChannel' in window) ? new BroadcastChannel('mdv-marp-presenter') : null;
+  const channel = (window.MDVPresenterChannel && window.MDVPresenterChannel.create()) || null;
   if (!channel) {
     document.querySelector('.empty-state').textContent =
       'このブラウザは BroadcastChannel に未対応です。';
@@ -384,6 +385,25 @@
   }
 
   function loadSlides(payload) {
+    if (payload.empty) {
+      // Main window switched to a non-Marp tab or closed the deck — clear
+      // everything so the user can't keep editing notes that would land in
+      // the wrong file. saveQueue retains nothing because path mismatches.
+      slidesHtml = '';
+      cssText = '';
+      applyCss('');
+      fillStage(stageCurrent, '<div class="empty-state">メイン画面で Marp ファイルを開いてください。</div>');
+      fillStage(stageNext, '');
+      notes = [];
+      notesMultiplicity = [];
+      deckEtag = null;
+      deckPath = '';
+      slideCount = 0;
+      counter.textContent = '– / –';
+      setNotesText('');
+      applyReadOnlyState();
+      return;
+    }
     const html = payload.html || '';
     const css = payload.css || '';
     const changed = (html !== slidesHtml) || (css !== cssText);

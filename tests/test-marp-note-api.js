@@ -164,7 +164,7 @@ describe('PUT /api/marp/decks/:path/slides/:n/note', () => {
     assert.strictEqual(data.code, 'ORIGIN_REJECTED');
   });
 
-  it('returns 415/400 INVALID_NOTE for non-JSON Content-Type', async () => {
+  it('returns 415 UNSUPPORTED_MEDIA_TYPE for non-JSON Content-Type', async () => {
     await fs.writeFile(path.join(tmpRoot, 'deck.md'), SAMPLE, 'utf-8');
     const before = await getDeck('deck.md');
     const { res, data } = await putNote('deck.md', 0, 'x', {
@@ -172,7 +172,7 @@ describe('PUT /api/marp/decks/:path/slides/:n/note', () => {
       contentType: 'text/plain'
     });
     assert.strictEqual(res.status, 415);
-    assert.strictEqual(data.code, 'INVALID_NOTE');
+    assert.strictEqual(data.code, 'UNSUPPORTED_MEDIA_TYPE');
   });
 
   it('returns 413 PAYLOAD_TOO_LARGE for body > 128KB', async () => {
@@ -205,6 +205,25 @@ describe('PUT /api/marp/decks/:path/slides/:n/note', () => {
     const { res, data } = await putNote('multi.md', 0, 'merged', { ifMatch: before.etag });
     assert.strictEqual(res.status, 409);
     assert.strictEqual(data.code, 'MULTI_NOTE_READONLY');
+  });
+});
+
+describe('PUT mutex / parallel requests', () => {
+  it('serializes two concurrent PUTs with the same If-Match (no lost write)', async () => {
+    await fs.writeFile(path.join(tmpRoot, 'deck.md'), SAMPLE, 'utf-8');
+    const { data: before } = await getDeck('deck.md');
+    const etag = before.etag;
+    // Both requests use the same If-Match. Without a per-path mutex, both
+    // would read the old source, both would pass If-Match, and both would
+    // write — last-write-wins. With the chain mutex, only one wins (200);
+    // the second sees the file the first wrote and 412.
+    const [r1, r2] = await Promise.all([
+      putNote('deck.md', 0, 'A', { ifMatch: etag }),
+      putNote('deck.md', 1, 'B', { ifMatch: etag })
+    ]);
+    const statuses = [r1.res.status, r2.res.status].sort();
+    assert.deepStrictEqual(statuses, [200, 412],
+      'one PUT must succeed and the other must STALE');
   });
 });
 

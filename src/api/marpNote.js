@@ -7,54 +7,29 @@
  *  PUT    .../decks/:encodedPath/slides/:N/note  (If-Match required)
  *  OPTIONS  .../decks/:encodedPath/...          CORS preflight (same-origin only)
  *
- * Concurrency: stateless. ETag (sha256 of raw source) provides optimistic
- * locking. Server does not hold a per-path mutex.
+ * Concurrency: ETag (sha256 of raw source) provides optimistic locking
+ * across processes/clients; per-path async mutex serializes read-check-write
+ * within this server process so two concurrent PUTs with the same If-Match
+ * cannot race the atomicWrite call.
  */
 
 import * as fs from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import * as path from 'node:path';
-import * as crypto from 'node:crypto';
 
 import { validatePathReal, validatePath } from '../utils/path.js';
 import { parseDeck, isMarp, renderDeck } from '../rendering/marpitAdapter.js';
 import { rewriteSlideNote, validateNoteText } from '../rendering/marpNoteWriter.js';
 import { analyseSource } from '../utils/lineMath.js';
 import { atomicWrite } from '../utils/atomicWrite.js';
+import { mkError, sendError as sendCodedError } from '../utils/errors.js';
+import { makeEtag } from '../utils/etag.js';
+import { withLock } from '../concurrency/pathLock.js';
 
-const MAX_BODY_BYTES = 128 * 1024;
-const MAX_NOTE_BYTES = 64 * 1024;
 const MAX_SLIDE_INDEX = 1000;
 
-/**
- * Per-path async mutex to atomically serialize read-check-write for
- * the same file. Without this, two concurrent PUTs with the same
- * If-Match can both read the old source, both pass ETag validation,
- * and then race their `atomicWrite` calls — last-write-wins, lost edit.
- */
-const pathLocks = new Map(); // realPath → Promise (the in-flight request)
-
-async function withPathLock(realPath, fn) {
-  while (pathLocks.has(realPath)) {
-    try { await pathLocks.get(realPath); } catch { /* ignore */ }
-  }
-  let resolve;
-  const wait = new Promise((r) => { resolve = r; });
-  pathLocks.set(realPath, wait);
-  try {
-    return await fn();
-  } finally {
-    pathLocks.delete(realPath);
-    resolve();
-  }
-}
-
-function makeEtag(rawSource) {
-  return 'sha256:' + crypto.createHash('sha256').update(rawSource).digest('hex');
-}
-
 function sendError(res, status, code, error) {
-  return res.status(status).json({ ok: false, code, error });
+  return sendCodedError(res, mkError(code, error || code));
 }
 
 function isAllowedOrigin(req, allowedHosts) {
@@ -100,11 +75,11 @@ function sanitiseRelativePath(decoded) {
 
 async function readDeckSafely(rootDir, relativePath) {
   if (!validatePath(relativePath, rootDir)) {
-    throw Object.assign(new Error('PATH_INVALID'), { code: 'PATH_INVALID' });
+    throw mkError('PATH_INVALID');
   }
   const ok = await validatePathReal(relativePath, rootDir);
   if (!ok) {
-    throw Object.assign(new Error('PATH_INVALID'), { code: 'PATH_INVALID' });
+    throw mkError('PATH_INVALID');
   }
 
   const fullPath = path.resolve(rootDir, relativePath);
@@ -113,7 +88,7 @@ async function readDeckSafely(rootDir, relativePath) {
     realPath = await fs.realpath(fullPath);
   } catch (err) {
     if (err.code === 'ENOENT') {
-      throw Object.assign(new Error('NOT_FOUND'), { code: 'NOT_FOUND' });
+      throw mkError('NOT_FOUND');
     }
     throw err;
   }
@@ -123,10 +98,10 @@ async function readDeckSafely(rootDir, relativePath) {
     fd = await fs.open(realPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
   } catch (err) {
     if (err.code === 'ELOOP') {
-      throw Object.assign(new Error('PATH_INVALID: symlink at terminal'), { code: 'PATH_INVALID' });
+      throw mkError('PATH_INVALID', 'symlink at terminal');
     }
     if (err.code === 'ENOENT') {
-      throw Object.assign(new Error('NOT_FOUND'), { code: 'NOT_FOUND' });
+      throw mkError('NOT_FOUND');
     }
     throw err;
   }
@@ -226,7 +201,7 @@ export function setupMarpNoteRoutes(app, options = {}) {
       return sendError(res, 403, 'ORIGIN_REJECTED', 'origin not allowed');
     }
     if (!isJsonContent(req)) {
-      return sendError(res, 415, 'INVALID_NOTE', 'Content-Type must be application/json');
+      return sendError(res, 415, 'UNSUPPORTED_MEDIA_TYPE', 'Content-Type must be application/json');
     }
 
     const ifMatch = req.get('If-Match');
@@ -271,7 +246,7 @@ export function setupMarpNoteRoutes(app, options = {}) {
       return sendError(res, 500, 'WRITE_FAILED', 'read failed');
     }
 
-    return withPathLock(earlyDeck.realPath, async () => {
+    return withLock(earlyDeck.realPath, async () => {
       // Re-read inside the lock so the etag check sees the most recent
       // contents written by any predecessor in the queue.
       let deck;

@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.7] - 2026-05-08
+
+### Added
+
+- **Presenter View** (Marp スピーカーノート別ウィンドウ表示・編集)
+  - P キー (Cmd/Ctrl 修飾なし) または Marp ナビボタンで起動
+  - Current / Next スライド + Speaker Notes + 経過タイマーを並列表示
+  - パネルサイズはドラッグハンドルで変更可能 (localStorage 永続化)
+  - BroadcastChannel `mdv-marp-presenter` でメイン⇄presenter 双方向同期
+- **スピーカーノートの自動保存**: presenter ノートパネルをクリック→編集→
+  800ms デバウンスでサーバへ PUT。ソース markdown の HTML コメントを書き換え
+- **`/api/marp/decks/:path` エンドポイント** (GET/PUT/OPTIONS)
+  - **ETag 楽観ロック** (`sha256:`) で外部編集との衝突検出
+  - **per-path 非同期 mutex** で同時 PUT を直列化
+  - **Multi-note Guard**: 1 slide に複数ノートがある場合は read-only
+  - **CSRF**: Origin + Sec-Fetch-Site + Content-Type 厳密検証
+  - **PNA preflight 拒否** (localhost 同一オリジン要求)
+  - **128KB body limit + 専用 413 ハンドラ** で情報漏洩防止
+
+### Architecture
+
+- Marp スライド範囲・ノート位置の特定を **Marpit token** に委譲する
+  `marpitAdapter` を新設。regex 再実装の脆弱性を構造的に解消
+- `validatePathReal` + `O_NOFOLLOW` + realpath 二重解決で symlink swap
+  best-effort 防御
+- `atomicWrite` で `O_EXCL` temp + chmod EPERM 限定 + EXDEV 二段 rename +
+  uid+mtime sweep
+- BOM/CRLF/CR/UTF-8 surrogate pair 安全な行↔バイト変換ヘルパに集約
+- 共通 error コード/HTTP status マッピングを `utils/errors.js` に SSOT 化
+- promise-chain ベースの正しい mutex (`concurrency/pathLock.js`) で
+  thundering-herd race を排除
+- HTTP client / BroadcastChannel 名 / message schema を専用ライブラリに分離
+- セキュリティ脆弱性 5 件 (basic-ftp / ip-address / postcss) を `npm audit fix`
+
+### Tests
+
+- 既存 119 → **228 件 (+109)** すべて PASS
+- 性能: 500 slides / 155 KiB ファイルで parseDeck+rewrite 86ms
+
 ## [0.5.6] - 2026-04-27
 
 ### Added

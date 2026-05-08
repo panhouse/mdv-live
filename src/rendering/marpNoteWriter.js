@@ -13,12 +13,7 @@
 
 import { pickNoteComments } from './marpitAdapter.js';
 import { lineRangeToOffsets } from '../utils/lineMath.js';
-
-function mkError(code, message) {
-  const err = new Error(message || code);
-  err.code = code;
-  return err;
-}
+import { mkError } from '../utils/errors.js';
 
 /** Speaker notes are stored as HTML comments. Reject text that would close
  *  or invalidate the comment on the markdown side. */

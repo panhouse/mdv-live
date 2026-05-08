@@ -4,15 +4,11 @@
 
 import fs from 'fs/promises';
 import path from 'path';
-import crypto from 'crypto';
 import { getFileType } from '../utils/fileTypes.js';
 import { renderMarkdown, isMarp } from './markdown.js';
 import { renderMarp } from './marp.js';
 import { analyseSource } from '../utils/lineMath.js';
-
-function makeEtag(rawSource) {
-  return 'sha256:' + crypto.createHash('sha256').update(rawSource).digest('hex');
-}
+import { makeEtag } from '../utils/etag.js';
 
 /**
  * Escape HTML entities
