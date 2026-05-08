@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.8] - 2026-05-08
+
+### Fixed
+
+- **Symlink TOCTOU on note auto-save** (codex-loop で 4 round 連鎖修正):
+  - 旧コードの TOCTOU guard が `earlyDeck.realPath` (lock 取得前) と比較
+    していた → 進入後 swap、戻し、書き込みで別ファイル読み出しが original
+    path に書ける race を塞ぐため `deck.realPath` (in-lock) と比較に修正
+  - in-lock で realpath が変わったら mutex 範囲外の書込みになる →
+    detection を入れて再 lock 取得
+  - 再 lock 取得を server-side 自動 retry で実装 (client は STALE 以外を
+    terminal 扱いするため)
+  - retarget retry の入れ子 lock が opposite retarget で deadlock し得る
+    → trampoline で **outer lock 解放後に新 realpath を取得**
+
+### Added
+
+- TOCTOU 正常系の API regression test
+- SaveQueue coalesce/serialize/dropPath/例外耐性 5 件
+- Sec-Fetch-Site=same-origin の B 受理パス + cross-site 拒否
+
+### Architecture (refactor)
+
+- `src/api/marpNote.js` orchestration を 38 行に。実装は `src/api/marpNote/`
+  配下の `guards.js` / `readDeck.js` / `handleGet.js` / `handlePut.js` に分割
+- `src/static/lib/saveQueue.js` (per-deck queue + per-slide coalesce、純 JS)
+- `src/static/lib/tabRegistry.js` (tab close hook → メモリリーク解消)
+- `src/static/lib/apiClient.js` を deck/file/tree/info/pdf 用に拡張、
+  app.js の fetch 直叩きを 13 → 2 (WebSocket / /raw/ のみ残存)
+- `src/concurrency/pathLock.js`: promise-chain ベースの正しい mutex
+  (旧 naive Map 実装の thundering-herd race を排除)
+- `src/utils/errors.js`: mkError + ERROR_STATUS テーブル + sendError SSOT
+- `src/utils/etag.js`: ETag 計算 SSOT
+- placeholder を CSS pseudo-element 化 (`:empty::before`) で
+  contenteditable に placeholder text が混入する罠を構造的に解消
+- STALE 通知時に編集テキストを localStorage に自動退避
+
+### Tests
+
+- 222 → **236 件 (+14)**、全 PASS
+
 ## [0.5.7] - 2026-05-08
 
 ### Added
