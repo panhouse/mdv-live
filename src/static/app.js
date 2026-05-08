@@ -480,7 +480,9 @@
 
             if (tab.isMarp) {
                 if (data.css) tab.css = data.css;
+                if (data.notes) tab.notes = data.notes;
                 ContentRenderer.renderMarp(data.content, tab.css);
+                PresenterView.broadcastSlides();
             } else {
                 const currentScroll = saveScrollPosition(elements.content);
                 ContentRenderer.render(data.content, data.fileType || tab.fileType);
@@ -669,6 +671,169 @@
     let marpCurrentSlide = 0;
     let marpKeyHandler = null;
 
+    // ============================================================
+    // Presenter View (separate window with speaker notes)
+    // ============================================================
+
+    const PresenterView = {
+        channel: null,
+        presenterWindow: null,
+        // Pending edits awaiting persistence. Saves are processed strictly
+        // serially so each rewrite sees the latest tab.raw, and a newer edit
+        // for the same slide replaces an older queued one.
+        saveQueue: [],
+        saveInFlight: false,
+
+        init() {
+            if (typeof BroadcastChannel === 'undefined') return;
+            this.channel = new BroadcastChannel('mdv-marp-presenter');
+            this.channel.addEventListener('message', (e) => {
+                const msg = e.data || {};
+                if (msg.type === 'request-slides') {
+                    this.broadcastSlides();
+                } else if (msg.type === 'goto') {
+                    this.gotoSlide(msg.index);
+                } else if (msg.type === 'edit-note') {
+                    // The presenter echoes back the deck path it captured at
+                    // edit time, so a tab switch in the main window cannot
+                    // re-target the save to a different file.
+                    if (!msg.path) return;
+                    this.enqueueSaveNote(msg.path, msg.slideIndex, msg.note);
+                }
+            });
+            window.addEventListener('beforeunload', () => {
+                if (this.presenterWindow && !this.presenterWindow.closed) {
+                    this.presenterWindow.close();
+                }
+            });
+        },
+
+        enqueueSaveNote(path, slideIndex, note) {
+            const existingIdx = this.saveQueue.findIndex(
+                (q) => q.path === path && q.slideIndex === slideIndex
+            );
+            if (existingIdx >= 0) {
+                this.saveQueue[existingIdx] = { path, slideIndex, note };
+            } else {
+                this.saveQueue.push({ path, slideIndex, note });
+            }
+            this.processSaveQueue();
+        },
+
+        async processSaveQueue() {
+            if (this.saveInFlight) return;
+            const next = this.saveQueue.shift();
+            if (!next) return;
+            this.saveInFlight = true;
+            try {
+                await this.saveNote(next.path, next.slideIndex, next.note);
+            } finally {
+                this.saveInFlight = false;
+                if (this.saveQueue.length > 0) this.processSaveQueue();
+            }
+        },
+
+        // Persist a speaker note edit back to the source markdown file.
+        // The originating deck is identified by `path` so a tab switch
+        // between debounce and save still writes to the right file.
+        // Tab state is only updated after the server confirms the write so
+        // a failed save can be retried with the same input.
+        async saveNote(path, slideIndex, note) {
+            const tab = state.tabs.find((t) => t.path === path);
+            if (!tab || !tab.isMarp || !tab.raw) return;
+
+            let updated;
+            try {
+                updated = MarpNoteRewriter.updateMarpNoteInRaw(tab.raw, slideIndex, note);
+            } catch (err) {
+                this.channel.postMessage({
+                    type: 'note-saved',
+                    slideIndex,
+                    ok: false,
+                    reason: err && err.code === 'INVALID_NOTE' ? err.message : 'Failed to update note'
+                });
+                return;
+            }
+            if (updated === tab.raw) {
+                this.channel.postMessage({ type: 'note-saved', slideIndex, ok: true });
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/file', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: tab.path, content: updated })
+                });
+                if (!res.ok) {
+                    this.channel.postMessage({ type: 'note-saved', slideIndex, ok: false });
+                    return;
+                }
+                tab.raw = updated;
+                if (Array.isArray(tab.notes)) {
+                    tab.notes = tab.notes.slice();
+                    tab.notes[slideIndex] = (note || '').trim();
+                }
+                this.channel.postMessage({ type: 'note-saved', slideIndex, ok: true });
+            } catch (err) {
+                console.error('Failed to save Marp note:', err);
+                this.channel.postMessage({ type: 'note-saved', slideIndex, ok: false });
+            }
+        },
+
+        open() {
+            const tab = state.tabs[state.activeTabIndex];
+            if (!tab || !tab.isMarp) return;
+
+            if (this.presenterWindow && !this.presenterWindow.closed) {
+                this.presenterWindow.focus();
+                this.broadcastSlides();
+                return;
+            }
+
+            this.presenterWindow = window.open(
+                '/static/presenter.html',
+                'mdv-presenter',
+                'width=1280,height=720,resizable=yes,scrollbars=yes'
+            );
+
+            // presenter sends `request-slides` on load, but broadcast as a fallback
+            setTimeout(() => this.broadcastSlides(), 300);
+        },
+
+        broadcastSlides() {
+            if (!this.channel) return;
+            const tab = state.tabs[state.activeTabIndex];
+            if (!tab || !tab.isMarp) return;
+            this.channel.postMessage({
+                type: 'slides',
+                path: tab.path,
+                html: tab.content,
+                css: tab.css,
+                notes: tab.notes || [],
+                current: marpCurrentSlide
+            });
+        },
+
+        broadcastIndex(index) {
+            if (!this.channel) return;
+            this.channel.postMessage({ type: 'index', index });
+        },
+
+        gotoSlide(index) {
+            const slides = elements.content.querySelectorAll('.marpit > svg[data-marpit-svg]');
+            if (!slides.length || index < 0 || index >= slides.length) return;
+            slides.forEach((s, i) => s.classList.toggle('active', i === index));
+            marpCurrentSlide = index;
+            const counter = elements.content.querySelector('.slide-counter');
+            if (counter) counter.textContent = `${index + 1} / ${slides.length}`;
+            const prevBtn = elements.content.querySelector('.marp-prev');
+            const nextBtn = elements.content.querySelector('.marp-next');
+            if (prevBtn) prevBtn.disabled = index === 0;
+            if (nextBtn) nextBtn.disabled = index === slides.length - 1;
+        }
+    };
+
     const ContentRenderer = {
         render(htmlContent, fileType) {
             const containerClass = fileType === 'code'
@@ -772,6 +937,11 @@
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
                         </svg>
                     </button>
+                    <button class="marp-presenter-btn" title="Presenter View (P)">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                        </svg>
+                    </button>
                     <button class="marp-close-nav" title="Hide (N to show)">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -817,6 +987,7 @@
                 }
                 if (prevBtn) prevBtn.disabled = index === 0;
                 if (nextBtn) nextBtn.disabled = index === slides.length - 1;
+                PresenterView.broadcastIndex(index);
             };
 
             const nextSlide = () => {
@@ -860,6 +1031,10 @@
                 }
             };
             if (fullscreenBtn) fullscreenBtn.addEventListener('click', toggleFullscreen);
+
+            // Presenter view button
+            const presenterBtn = elements.content.querySelector('.marp-presenter-btn');
+            if (presenterBtn) presenterBtn.addEventListener('click', () => PresenterView.open());
 
             // Make nav draggable and closeable
             const nav = elements.content.querySelector('.marp-nav');
@@ -929,6 +1104,11 @@
                 } else if (e.key === 'n' || e.key === 'N') {
                     e.preventDefault();
                     if (nav) nav.classList.toggle('hidden');
+                } else if ((e.key === 'p' || e.key === 'P') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+                    // Skip if modifiers are held — Cmd/Ctrl+P is the print
+                    // shortcut and must not also open the presenter view.
+                    e.preventDefault();
+                    PresenterView.open();
                 } else if (e.key === 'Escape') {
                     e.preventDefault();
                     if (document.body.classList.contains('marp-fullscreen')) {
@@ -1082,6 +1262,7 @@
                 fileType: data.fileType,
                 isMarp: data.isMarp || false,
                 css: data.css || null,  // Marp CSS from marp-core
+                notes: data.notes || [],  // Marp speaker notes per slide
                 imageUrl: data.imageUrl,
                 pdfUrl: data.pdfUrl,
                 htmlUrl: data.htmlUrl,
@@ -1205,6 +1386,7 @@
 
             if (tab.isMarp) {
                 ContentRenderer.renderMarp(tab.content, tab.css);
+                PresenterView.broadcastSlides();
                 return;
             }
 
@@ -1346,6 +1528,9 @@
                 const data = await response.json();
                 if (data.content) tab.content = data.content;
                 if (data.raw) tab.raw = data.raw;
+                if (data.css) tab.css = data.css;
+                if (data.notes) tab.notes = data.notes;
+                if (typeof data.isMarp !== 'undefined') tab.isMarp = data.isMarp;
             } catch (e) {
                 console.error('Failed to fetch updated content:', e);
             }
@@ -2145,6 +2330,7 @@
         ContextMenuManager.init();
         DragDropManager.init();
         KeyboardManager.init();
+        PresenterView.init();
 
         // Warn before leaving with unsaved changes
         window.addEventListener('beforeunload', (e) => {

@@ -25,19 +25,27 @@ marp.markdown.disable('code');
 /**
  * Render Marp presentation to HTML
  * @param {string} content - Markdown content with Marp frontmatter
- * @returns {{ html: string, css: string, slideCount: number }}
+ * @returns {{ html: string, css: string, slideCount: number, notes: string[] }}
  */
 export function renderMarp(content) {
-  const { html, css } = marp.render(content);
+  const { html, css, comments } = marp.render(content);
 
   // Count slides by counting <section> tags
   const slideCount = (html.match(/<section[^>]*>/g) || []).length;
+
+  // Flatten per-slide comments into a single notes string per slide.
+  // marp-core returns `comments` as a 2D array (one inner array per slide).
+  const notes = (comments || []).map((slideComments) =>
+    Array.isArray(slideComments) ? slideComments.join('\n\n').trim() : ''
+  );
+  while (notes.length < slideCount) notes.push('');
 
   // Return Marp's HTML output AS-IS to preserve CSS selector compatibility
   return {
     html,
     css,
-    slideCount
+    slideCount,
+    notes
   };
 }
 

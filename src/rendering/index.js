@@ -99,10 +99,11 @@ export async function renderFile(filePath, relativeDir) {
  */
 function renderMarkdownFile(content, relativeDir) {
   if (isMarp(content)) {
-    const { html, css } = renderMarp(content);
+    const { html, css, notes } = renderMarp(content);
     return {
       content: rewriteMediaPaths(html, relativeDir),
       css,
+      notes,
       raw: content,
       fileType: 'markdown',
       isMarp: true

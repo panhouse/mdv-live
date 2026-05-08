@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>Presenter View - MDV</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0e0e10;
+    --panel: #1a1a1d;
+    --border: #2a2a2e;
+    --text: #e8e8ea;
+    --muted: #9a9aa2;
+    --accent: #4f8cff;
+    --col-left: 1.6fr;
+    --col-right: 1fr;
+    --row-top: 1fr;
+    --row-bottom: 1fr;
+    --gutter: 6px;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", "Yu Gothic", sans-serif;
+    overflow: hidden;
+  }
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 8px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    height: 48px;
+  }
+  .topbar .title { font-weight: 600; }
+  .topbar .spacer { flex: 1; }
+  .topbar .timer {
+    font-variant-numeric: tabular-nums;
+    font-size: 18px;
+    color: var(--accent);
+  }
+  .topbar .counter { color: var(--muted); }
+  .topbar .save-status {
+    font-size: 12px;
+    color: var(--muted);
+    min-width: 60px;
+    text-align: right;
+  }
+  .topbar .save-status.ok { color: #5fc97f; }
+  .topbar .save-status.err { color: #ff6b6b; }
+  .topbar button {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 10px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .topbar button:hover { background: var(--border); }
+
+  /* Layout: two columns, the right column splits into two rows.
+     Custom drag handles let the user resize columns and the right-column rows. */
+  .layout {
+    display: grid;
+    grid-template-columns: var(--col-left) var(--gutter) var(--col-right);
+    grid-template-rows: 1fr;
+    gap: 0;
+    padding: 12px;
+    height: calc(100% - 48px);
+  }
+  .right-col {
+    display: grid;
+    grid-template-rows: var(--row-top) var(--gutter) var(--row-bottom);
+    min-width: 0;
+    min-height: 0;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+  }
+  .panel-label {
+    padding: 6px 12px;
+    font-size: 12px;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    user-select: none;
+  }
+  .panel-body {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* Drag gutters between panels. */
+  .gutter {
+    background: transparent;
+    position: relative;
+  }
+  .gutter::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    background: var(--border);
+    border-radius: 2px;
+    transition: background 120ms;
+  }
+  .gutter.col {
+    cursor: col-resize;
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .gutter.col::after { width: 2px; }
+  .gutter.row {
+    cursor: row-resize;
+    grid-row: 2;
+  }
+  .gutter.row::after { height: 2px; }
+  .gutter:hover::after { background: var(--accent); }
+  .gutter.dragging::after { background: var(--accent); }
+
+  .slide-stage {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #000;
+  }
+  .slide-stage .marpit {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .slide-stage .marpit > svg[data-marpit-svg] {
+    display: none;
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+  }
+  .slide-stage .marpit > svg[data-marpit-svg].active {
+    display: block;
+  }
+
+  .notes-body {
+    padding: 16px 20px;
+    overflow: auto;
+    font-size: 18px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    height: 100%;
+    outline: none;
+    color: var(--text);
+    caret-color: var(--accent);
+  }
+  .notes-body:focus {
+    background: rgba(79, 140, 255, 0.04);
+  }
+  .notes-body.placeholder {
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  .empty-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--muted);
+    flex-direction: column;
+    gap: 12px;
+    padding: 24px;
+    text-align: center;
+  }
+  .empty-state code {
+    background: var(--border);
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <span class="title">Presenter View</span>
+    <span class="counter" id="counter">– / –</span>
+    <span class="save-status" id="saveStatus"></span>
+    <span class="spacer"></span>
+    <span class="timer" id="timer">00:00</span>
+    <button id="resetTimer" title="Reset timer">Reset</button>
+    <button id="prevBtn" title="Previous (←)">◀</button>
+    <button id="nextBtn" title="Next (→)">▶</button>
+  </div>
+
+  <div class="layout" id="layout">
+    <section class="panel slide-current">
+      <div class="panel-label">Current</div>
+      <div class="panel-body">
+        <div class="slide-stage" id="stageCurrent">
+          <div class="empty-state">
+            メイン画面で Marp プレビューを開いて <code>P</code> を押してください。
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="gutter col" id="gutterCol" title="左右の幅を調整"></div>
+
+    <div class="right-col">
+      <section class="panel slide-next">
+        <div class="panel-label">Next</div>
+        <div class="panel-body">
+          <div class="slide-stage" id="stageNext"></div>
+        </div>
+      </section>
+
+      <div class="gutter row" id="gutterRow" title="上下の比率を調整"></div>
+
+      <section class="panel notes">
+        <div class="panel-label">Speaker Notes <span style="text-transform:none; opacity:0.7;">(クリックで編集)</span></div>
+        <div class="panel-body">
+          <div class="notes-body placeholder" id="notesBody" contenteditable="true" spellcheck="false">（ノートなし）</div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+<script>
+(function () {
+  const channel = ('BroadcastChannel' in window) ? new BroadcastChannel('mdv-marp-presenter') : null;
+  if (!channel) {
+    document.querySelector('.empty-state').textContent =
+      'このブラウザは BroadcastChannel に未対応です。';
+    return;
+  }
+
+  const stageCurrent = document.getElementById('stageCurrent');
+  const stageNext = document.getElementById('stageNext');
+  const notesBody = document.getElementById('notesBody');
+  const counter = document.getElementById('counter');
+  const prevBtn = document.getElementById('prevBtn');
+  const nextBtn = document.getElementById('nextBtn');
+  const timerEl = document.getElementById('timer');
+  const resetBtn = document.getElementById('resetTimer');
+  const saveStatus = document.getElementById('saveStatus');
+  const layout = document.getElementById('layout');
+
+  const PLACEHOLDER = '（ノートなし）';
+  const STORAGE_KEY_LAYOUT = 'mdv-presenter-layout';
+
+  let slidesHtml = '';
+  let cssText = '';
+  let notes = [];
+  let slideCount = 0;
+  let currentIndex = 0;
+  let cssEl = null;
+  let editing = false;
+  let editingSlideIndex = -1;
+  let editingPath = '';
+  let deckPath = '';
+  let saveTimer = null;
+
+  function applyCss(css) {
+    if (cssEl) cssEl.remove();
+    cssEl = document.createElement('style');
+    cssEl.textContent = css || '';
+    document.head.appendChild(cssEl);
+  }
+
+  function fillStage(stage, html) {
+    stage.innerHTML = html;
+  }
+
+  function showSlideAt(stage, index) {
+    const svgs = stage.querySelectorAll('.marpit > svg[data-marpit-svg]');
+    svgs.forEach((s, i) => s.classList.toggle('active', i === index));
+  }
+
+  function setNotesText(text) {
+    if (text) {
+      notesBody.textContent = text;
+      notesBody.classList.remove('placeholder');
+    } else {
+      notesBody.textContent = PLACEHOLDER;
+      notesBody.classList.add('placeholder');
+    }
+  }
+
+  // contenteditable inserts <div>/<br> nodes for line breaks, and
+  // textContent flattens those without separators. Walk the DOM and emit
+  // \n at block boundaries so two-line edits arrive as `line1\nline2`.
+  function readEditableText(el) {
+    let out = '';
+    function walk(node) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        out += node.textContent;
+        return;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
+      const tag = node.tagName;
+      if (tag === 'BR') { out += '\n'; return; }
+      const isBlock = tag === 'DIV' || tag === 'P' || tag === 'LI';
+      if (isBlock && out && !out.endsWith('\n')) out += '\n';
+      for (const child of node.childNodes) walk(child);
+      if (isBlock && !out.endsWith('\n')) out += '\n';
+    }
+    for (const child of el.childNodes) walk(child);
+    return out.replace(/\n+$/, '');
+  }
+
+  function getNotesText() {
+    if (notesBody.classList.contains('placeholder')) return '';
+    return readEditableText(notesBody);
+  }
+
+  function render(index) {
+    if (!slideCount) return;
+    currentIndex = Math.max(0, Math.min(slideCount - 1, index));
+
+    showSlideAt(stageCurrent, currentIndex);
+    if (currentIndex + 1 < slideCount) {
+      showSlideAt(stageNext, currentIndex + 1);
+    } else {
+      const svgs = stageNext.querySelectorAll('.marpit > svg[data-marpit-svg]');
+      svgs.forEach((s) => s.classList.remove('active'));
+    }
+
+    counter.textContent = `${currentIndex + 1} / ${slideCount}`;
+    if (!editing) {
+      const note = (notes[currentIndex] || '').trim();
+      setNotesText(note);
+    }
+
+    prevBtn.disabled = currentIndex === 0;
+    nextBtn.disabled = currentIndex === slideCount - 1;
+  }
+
+  function loadSlides(payload) {
+    const html = payload.html || '';
+    const css = payload.css || '';
+    const changed = (html !== slidesHtml) || (css !== cssText);
+
+    if (changed) {
+      slidesHtml = html;
+      cssText = css;
+      applyCss(css);
+      fillStage(stageCurrent, html);
+      fillStage(stageNext, html);
+    }
+    notes = Array.isArray(payload.notes) ? payload.notes : [];
+    deckPath = payload.path || deckPath;
+    slideCount = stageCurrent.querySelectorAll('.marpit > svg[data-marpit-svg]').length;
+    render(typeof payload.current === 'number' ? payload.current : currentIndex);
+  }
+
+  function gotoIndex(index) {
+    // Commit any pending edit before navigating away.
+    flushPendingNoteSave();
+    render(index);
+    channel.postMessage({ type: 'goto', index: currentIndex });
+  }
+
+  function setSaveStatus(text, kind) {
+    saveStatus.textContent = text || '';
+    saveStatus.classList.remove('ok', 'err');
+    if (kind) saveStatus.classList.add(kind);
+  }
+
+  function scheduleNoteSave() {
+    setSaveStatus('編集中…');
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      saveTimer = null;
+      sendNoteSave();
+    }, 800);
+  }
+
+  function flushPendingNoteSave() {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+      sendNoteSave();
+    }
+  }
+
+  function sendNoteSave() {
+    // Use the slide and deck captured when the user started editing — not
+    // the live currentIndex/deckPath, which can change while the debounce
+    // timer is in flight if the main window navigates or switches tabs.
+    const idx = editingSlideIndex >= 0 ? editingSlideIndex : currentIndex;
+    const path = editingPath || deckPath;
+    const value = getNotesText();
+    notes[idx] = value.trim();
+    setSaveStatus('保存中…');
+    channel.postMessage({
+      type: 'edit-note',
+      path,
+      slideIndex: idx,
+      note: value
+    });
+  }
+
+  // Notes editing
+  notesBody.addEventListener('focus', () => {
+    editing = true;
+    editingSlideIndex = currentIndex;
+    editingPath = deckPath;
+    if (notesBody.classList.contains('placeholder')) {
+      notesBody.textContent = '';
+      notesBody.classList.remove('placeholder');
+    }
+  });
+  notesBody.addEventListener('blur', () => {
+    editing = false;
+    flushPendingNoteSave();
+    editingSlideIndex = -1;
+    editingPath = '';
+    if (!readEditableText(notesBody).trim()) {
+      notesBody.textContent = PLACEHOLDER;
+      notesBody.classList.add('placeholder');
+    }
+  });
+  notesBody.addEventListener('input', () => {
+    if (editingSlideIndex < 0) editingSlideIndex = currentIndex;
+    if (!editingPath) editingPath = deckPath;
+    notes[editingSlideIndex] = readEditableText(notesBody);
+    scheduleNoteSave();
+  });
+  notesBody.addEventListener('keydown', (e) => {
+    // Don't let presenter shortcuts hijack typing.
+    e.stopPropagation();
+  });
+
+  prevBtn.addEventListener('click', () => gotoIndex(currentIndex - 1));
+  nextBtn.addEventListener('click', () => gotoIndex(currentIndex + 1));
+
+  document.addEventListener('keydown', (e) => {
+    // Skip when typing in the notes panel.
+    if (e.target === notesBody) return;
+    if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {
+      e.preventDefault();
+      gotoIndex(currentIndex + 1);
+    } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+      e.preventDefault();
+      gotoIndex(currentIndex - 1);
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      gotoIndex(0);
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      gotoIndex(slideCount - 1);
+    }
+  });
+
+  channel.addEventListener('message', (e) => {
+    const msg = e.data || {};
+    if (msg.type === 'slides') {
+      loadSlides(msg);
+    } else if (msg.type === 'index') {
+      render(msg.index);
+    } else if (msg.type === 'note-saved') {
+      // Show status as long as the user hasn't switched away from the slide
+      // they edited; presenter may already be looking at a different slide.
+      const targetIdx = editingSlideIndex >= 0 ? editingSlideIndex : currentIndex;
+      if (msg.slideIndex !== targetIdx) return;
+      const text = msg.ok ? '保存済み' : (msg.reason ? '保存失敗: ' + msg.reason : '保存失敗');
+      setSaveStatus(text, msg.ok ? 'ok' : 'err');
+      const dismissDelay = msg.ok ? 1800 : 5000;
+      setTimeout(() => {
+        if (saveStatus.textContent === text) setSaveStatus('');
+      }, dismissDelay);
+    }
+  });
+
+  // Timer
+  let startedAt = Date.now();
+  function tick() {
+    const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+    const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
+    const s = String(elapsed % 60).padStart(2, '0');
+    timerEl.textContent = `${m}:${s}`;
+  }
+  setInterval(tick, 500);
+  tick();
+  resetBtn.addEventListener('click', () => {
+    startedAt = Date.now();
+    tick();
+  });
+
+  // ----- Resizable panels -----
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  function persistLayout() {
+    const data = {
+      colLeft: layout.style.getPropertyValue('--col-left') || '',
+      colRight: layout.style.getPropertyValue('--col-right') || '',
+      rowTop: layout.style.getPropertyValue('--row-top') || '',
+      rowBottom: layout.style.getPropertyValue('--row-bottom') || ''
+    };
+    try { localStorage.setItem(STORAGE_KEY_LAYOUT, JSON.stringify(data)); } catch (e) {}
+  }
+  function restoreLayout() {
+    try {
+      const data = JSON.parse(localStorage.getItem(STORAGE_KEY_LAYOUT) || '{}');
+      if (data.colLeft) layout.style.setProperty('--col-left', data.colLeft);
+      if (data.colRight) layout.style.setProperty('--col-right', data.colRight);
+      if (data.rowTop) layout.style.setProperty('--row-top', data.rowTop);
+      if (data.rowBottom) layout.style.setProperty('--row-bottom', data.rowBottom);
+    } catch (e) {}
+  }
+
+  function setupColumnDrag() {
+    const handle = document.getElementById('gutterCol');
+    let dragging = false;
+    handle.addEventListener('mousedown', (e) => {
+      dragging = true;
+      handle.classList.add('dragging');
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      const rect = layout.getBoundingClientRect();
+      const padding = 12;
+      const totalWidth = rect.width - padding * 2;
+      const gutterWidth = 6;
+      const usable = totalWidth - gutterWidth;
+      const leftPx = clamp(e.clientX - rect.left - padding, 200, usable - 200);
+      const rightPx = usable - leftPx;
+      layout.style.setProperty('--col-left', leftPx + 'px');
+      layout.style.setProperty('--col-right', rightPx + 'px');
+    });
+    document.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove('dragging');
+      document.body.style.userSelect = '';
+      persistLayout();
+    });
+  }
+
+  function setupRowDrag() {
+    const handle = document.getElementById('gutterRow');
+    const rightCol = handle.parentElement;
+    let dragging = false;
+    handle.addEventListener('mousedown', (e) => {
+      dragging = true;
+      handle.classList.add('dragging');
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      const rect = rightCol.getBoundingClientRect();
+      const gutterHeight = 6;
+      const usable = rect.height - gutterHeight;
+      const topPx = clamp(e.clientY - rect.top, 100, usable - 100);
+      const bottomPx = usable - topPx;
+      layout.style.setProperty('--row-top', topPx + 'px');
+      layout.style.setProperty('--row-bottom', bottomPx + 'px');
+    });
+    document.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove('dragging');
+      document.body.style.userSelect = '';
+      persistLayout();
+    });
+  }
+
+  restoreLayout();
+  setupColumnDrag();
+  setupRowDrag();
+
+  window.addEventListener('beforeunload', flushPendingNoteSave);
+
+  // Ask main window for slides
+  channel.postMessage({ type: 'request-slides' });
+})();
+</script>
+</body>
+</html>
