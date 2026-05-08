@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.10] - 2026-05-09
+
+### Fixed (UX revert)
+
+- **Markdown PDF ボタンを OS 印刷ダイアログに戻す** (本来の UX 復元):
+  - 0.5.9 (実体は 2026-01-31 `e5526f9` から) で plain Markdown も server-side
+    md-to-pdf 経由の PDF DL に切り替わっていたが、本来の UX は `Cmd+P` 相当の
+    OS 印刷ダイアログ (`window.print()`) で「PDF として保存」を選ぶフロー
+  - `src/static/app.js`: `print()` の markdown 分岐を削除 (`else` 分岐の
+    `browserPrint()` に落ちる)
+  - Marp / HTML preview の挙動は変更なし (server-side marp-cli を維持)
+
+### Fixed (codex review)
+
+- `/api/pdf/export` の `fs.readFile` を `try/catch` 外で実行していた問題を修正
+  (directory 指定や読み取り不可ファイルで Express デフォルトエラーに落ちて
+  controlled JSON が返らなかった)。stat による file 判定を追加
+
+### Removed
+
+- `PdfStyleManager` UI モジュール (markdown が server PDF を使わなくなったため
+  orphan)、`pdfStyleToggle` / `pdfStylePanel` HTML、関連 CSS、`normalizeUserPath`
+  helper、`pdf-style-preview` クラス
+- `md-to-pdf` runtime dependency。web UI で使わなくなったため削除。
+  `bin/mdv.js convert` は元々 `npx md-to-pdf` 経由で 0.5.9 以前と同じ挙動
+- `/api/pdf/export` の markdown 分岐 (Marp 専用エンドポイントに整理)。
+  非 Marp ファイルは 415 で拒否
+
+### Tests
+
+- 241 → **242 件 (+1)**、全 PASS
+- 追加: directory path → 404 controlled JSON (codex round 3 regression)
+- 変更: plain markdown PDF テスト → 415 テストに置換
+
 ## [0.5.9] - 2026-05-09
 
 ### Fixed
