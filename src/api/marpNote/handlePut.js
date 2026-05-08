@@ -99,6 +99,11 @@ async function performNoteUpdate({ req, res, rootDir, rel, slideIndex, note, ifM
   }
 
   // Defensive realpath re-resolve (TOCTOU best-effort).
+  // Compare against the realpath observed by the IN-LOCK re-read (`deck`),
+  // NOT the pre-lock read (`earlyDeck`). Otherwise a swap that happens
+  // between the pre-lock and in-lock reads, then reverts before this
+  // check, would slip past — and we'd write contents parsed from the
+  // wrong file into the original path.
   let realAtWrite;
   try {
     realAtWrite = await fs.realpath(path.resolve(rootDir(), rel));
@@ -106,7 +111,7 @@ async function performNoteUpdate({ req, res, rootDir, rel, slideIndex, note, ifM
     console.error('marpNote PUT realpath at write:', err);
     return sendError(res, mkError('WRITE_FAILED', 'realpath failed', { cause: err }));
   }
-  if (realAtWrite !== earlyDeck.realPath) {
+  if (realAtWrite !== deck.realPath) {
     return sendError(res, mkError('PATH_INVALID', 'path resolution changed during request'));
   }
 

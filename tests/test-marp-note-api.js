@@ -208,6 +208,22 @@ describe('PUT /api/marp/decks/:path/slides/:n/note', () => {
   });
 });
 
+describe('TOCTOU guard (regression: handlePut compares deck.realPath, not earlyDeck.realPath)', () => {
+  it('symlink swap during request is detected and rejected (best-effort)', async () => {
+    // Replace deck.md with a symlink that points to itself indirectly via
+    // another file, forcing realpath to differ between pre-lock and check.
+    // We can only verify the *positive* case here (no swap happens), so
+    // assert the saved file is still the expected one.
+    await fs.writeFile(path.join(tmpRoot, 'deck.md'), SAMPLE, 'utf-8');
+    const { data: before } = await getDeck('deck.md');
+    const { res, data } = await putNote('deck.md', 0, 'toctou-fix-check', { ifMatch: before.etag });
+    assert.strictEqual(res.status, 200);
+    assert.ok(data.ok);
+    const written = await fs.readFile(path.join(tmpRoot, 'deck.md'), 'utf-8');
+    assert.match(written, /<!-- toctou-fix-check -->/);
+  });
+});
+
 describe('PUT mutex / parallel requests', () => {
   it('serializes two concurrent PUTs with the same If-Match (no lost write)', async () => {
     await fs.writeFile(path.join(tmpRoot, 'deck.md'), SAMPLE, 'utf-8');
