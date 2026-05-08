@@ -48,6 +48,7 @@ describe('PDF Export API', () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-pdf-test-'));
     await fs.writeFile(path.join(tempDir, 'plain.md'), PLAIN_MD);
     await fs.writeFile(path.join(tempDir, 'marp.md'), MARP_MD);
+    await fs.mkdir(path.join(tempDir, 'subdir'));
 
     server = createMdvServer({ rootDir: tempDir, port });
     await server.start();
@@ -83,6 +84,19 @@ describe('PDF Export API', () => {
       body: JSON.stringify({ filePath: 'no-such-file.md' }),
     });
     assert.strictEqual(res.status, 404);
+  });
+
+  // Regression: codex round 3 P2 — fs.readFile が try 外で directory 指定時に
+  // unhandled rejection になり 500 が返らず Express デフォルトエラーに陥っていた
+  it('POST /api/pdf/export returns 404 (controlled JSON) for directory path', async () => {
+    const res = await fetch(`${baseUrl}/api/pdf/export`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath: 'subdir' }),
+    });
+    assert.strictEqual(res.status, 404);
+    const data = await res.json();
+    assert.match(data.error, /not found/i);
   });
 
   it('POST /api/pdf/export returns 415 for non-Marp Markdown', async () => {

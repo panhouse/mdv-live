@@ -75,23 +75,26 @@ export function setupPdfRoutes(app) {
     }
 
     const fullPath = path.join(rootDir, filePath);
-
-    try {
-      await fs.access(fullPath);
-    } catch {
-      return res.status(404).json({ error: 'File not found' });
-    }
-
-    const content = await fs.readFile(fullPath, 'utf-8');
-    if (!isMarp(content)) {
-      return res.status(415).json({ error: 'Server-side PDF export supports Marp files only. Use the browser print dialog for regular Markdown.' });
-    }
-
     const baseName = path.basename(fullPath, '.md');
     const outputPath = path.join(os.tmpdir(), `mdv-${Date.now()}-${baseName}.pdf`);
     const outputFileName = `${baseName}.pdf`;
 
     try {
+      let stat;
+      try {
+        stat = await fs.stat(fullPath);
+      } catch {
+        return res.status(404).json({ error: 'File not found' });
+      }
+      if (!stat.isFile()) {
+        return res.status(404).json({ error: 'File not found' });
+      }
+
+      const content = await fs.readFile(fullPath, 'utf-8');
+      if (!isMarp(content)) {
+        return res.status(415).json({ error: 'Server-side PDF export supports Marp files only. Use the browser print dialog for regular Markdown.' });
+      }
+
       await runMarp([fullPath, '-o', outputPath, '--html', '--allow-local-files', '--no-stdin']);
 
       res.download(outputPath, outputFileName, async (err) => {
