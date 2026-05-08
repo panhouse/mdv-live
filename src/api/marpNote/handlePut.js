@@ -51,19 +51,30 @@ export function makePutHandler({ rootDir, allowedHosts }) {
       return sendError(res, mkError('READ_FAILED', 'read failed', { cause: err }));
     }
 
-    return withLock(earlyDeck.realPath, () =>
-      performNoteUpdate({
-        req, res, rootDir, rel,
-        slideIndex: idx.value,
-        note: noteIn.value,
-        ifMatch,
-        earlyDeck
-      })
-    );
+    // Trampoline: handle the realpath-retarget retry OUTSIDE of any
+    // existing lock. If we re-acquired a new lock while still holding the
+    // old one, two opposite retargets could deadlock. Instead we let the
+    // first attempt return a sentinel, release the old lock by exiting
+    // its withLock callback, then re-acquire on the new realpath.
+    let attemptDeck = earlyDeck;
+    for (let i = 0; i < 2; i++) {
+      const result = await withLock(attemptDeck.realPath, () =>
+        performNoteUpdate({
+          req, res, rootDir, rel,
+          slideIndex: idx.value,
+          note: noteIn.value,
+          ifMatch,
+          earlyDeck: attemptDeck
+        })
+      );
+      if (!result || !result.retargetTo) return result;
+      attemptDeck = result.retargetTo;
+    }
+    return sendError(res, mkError('PATH_INVALID', 'realpath unstable across retries'));
   };
 }
 
-async function performNoteUpdate({ req, res, rootDir, rel, slideIndex, note, ifMatch, earlyDeck, retried = false }) {
+async function performNoteUpdate({ req, res, rootDir, rel, slideIndex, note, ifMatch, earlyDeck }) {
   // Re-read inside the lock so the etag check sees writes by predecessors.
   let deck;
   try {
@@ -78,22 +89,12 @@ async function performNoteUpdate({ req, res, rootDir, rel, slideIndex, note, ifM
     return sendError(res, mkError('NOT_MARP', 'not a Marp file'));
   }
 
-  // The mutex was acquired on earlyDeck.realPath. If the symlink target
-  // changed between pre-lock and in-lock reads, our lock no longer covers
-  // the deck we'd be writing. Drop this lock and re-acquire on the new
-  // realpath, retrying exactly once. (The client only retries STALE; we
-  // can't surface a transient retarget as a terminal failure.)
+  // If the symlink target changed between pre-lock and in-lock reads, the
+  // mutex we hold doesn't cover the deck we'd write. Return a sentinel so
+  // the caller can release THIS lock first and re-acquire on the new
+  // realpath (preventing nested-lock deadlocks under opposite retargets).
   if (deck.realPath !== earlyDeck.realPath) {
-    if (retried) {
-      return sendError(res, mkError('PATH_INVALID', 'realpath unstable across retries'));
-    }
-    return withLock(deck.realPath, () =>
-      performNoteUpdate({
-        req, res, rootDir, rel, slideIndex, note, ifMatch,
-        earlyDeck: deck,
-        retried: true
-      })
-    );
+    return { retargetTo: deck };
   }
 
   const currentEtag = makeEtag(deck.rawSource);
