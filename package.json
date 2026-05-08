@@ -1,6 +1,6 @@
 {
   "name": "mdv-live",
-  "version": "0.5.8",
+  "version": "0.5.9",
   "description": "Markdown Viewer - File tree + Live preview + Marp support + Hot reload",
   "main": "src/server.js",
   "bin": {
@@ -45,16 +45,17 @@
     "LICENSE"
   ],
   "dependencies": {
-    "express": "^4.21.2",
-    "ws": "^8.18.0",
+    "@marp-team/marp-core": "^4.0.0",
     "chokidar": "^4.0.3",
+    "express": "^4.21.2",
+    "highlight.js": "^11.10.0",
     "markdown-it": "^14.1.0",
     "markdown-it-task-lists": "^2.1.1",
-    "@marp-team/marp-core": "^4.0.0",
-    "highlight.js": "^11.10.0",
-    "open": "^10.1.0",
+    "md-to-pdf": "^5.2.5",
     "mime-types": "^2.1.35",
-    "multer": "^1.4.5-lts.1"
+    "multer": "^1.4.5-lts.1",
+    "open": "^10.1.0",
+    "ws": "^8.18.0"
   },
   "optionalDependencies": {
     "@marp-team/marp-cli": "^4.0.3"

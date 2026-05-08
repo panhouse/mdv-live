@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.9] - 2026-05-09
+
+### Fixed
+
+- **PDF export hang for plain Markdown** (regression since 2026-01-31 `e5526f9`):
+  - 原因 1: `md-to-pdf` が `package.json` に未宣言だったため `npx md-to-pdf` 経路に
+    依存。npx キャッシュ / TTY / レジストリ状況により挙動が不安定
+  - 原因 2: `child_process.execFile` は `stdio` オプションを受け付けない (Node 仕様)。
+    `md-to-pdf` 内部の `get-stdin` が EOF を待ち続け 180s SIGTERM していた
+  - 直し方: `md-to-pdf` を `dependencies` に追加 / `npx` 経由をやめて
+    `node_modules/.bin/md-to-pdf` を直接 spawn / `stdio: ['ignore', ...]` で stdin 即 EOF
+  - Marp 経路 (`marp-cli`) も同じ helper (`runPdfTool`) に統一して防御
+
+### Added
+
+- `tests/test-pdf-export.js`: PDF export 経路の自動テスト 5 件 (400 / 403 / 404 / plain
+  PDF / Marp PDF)。リグレッション再発防止
+
+### Tests
+
+- 236 → **241 件 (+5)**、全 PASS
+
 ## [0.5.8] - 2026-05-08
 
 ### Fixed

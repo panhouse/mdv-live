@@ -1,5 +1,4 @@
-import { execFile } from 'child_process';
-import { promisify } from 'util';
+import { spawn } from 'child_process';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -9,18 +8,54 @@ import { isMarp } from '../rendering/markdown.js';
 import { validatePath, validatePathReal } from '../utils/path.js';
 import { resolvePdfOptions } from '../styles/index.js';
 
-const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const highlightStylesheet = path.resolve(path.dirname(require.resolve('highlight.js')), '..', 'styles', 'atom-one-dark.css');
-const marpBin = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '..',
-  '..',
-  'node_modules',
-  '.bin',
-  'marp'
-);
+const binDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'node_modules', '.bin');
+const marpBin = path.join(binDir, 'marp');
+const mdToPdfBin = path.join(binDir, 'md-to-pdf');
 const PDF_EXPORT_TIMEOUT_MS = 180000;
+
+/**
+ * Spawn a PDF tool with stdin closed.
+ *
+ * 注意: execFile は stdio オプションを受け付けない (Node 仕様)。md-to-pdf は
+ * 内部で get-stdin を呼ぶため、stdin が pipe のままだと EOF を永遠に待ち続けて
+ * ハングする。spawn で stdin を 'ignore' (= /dev/null) に明示的に縛る。
+ */
+function runPdfTool(bin, args, { cwd } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(bin, args, {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+    }, PDF_EXPORT_TIMEOUT_MS);
+
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.on('close', (code, signal) => {
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve({ stdout, stderr });
+      } else {
+        const err = new Error(`${path.basename(bin)} exited with code=${code} signal=${signal}`);
+        err.code = code;
+        err.signal = signal;
+        err.stdout = stdout;
+        err.stderr = stderr;
+        reject(err);
+      }
+    });
+  });
+}
 
 /**
  * Resolve an optional user-selected file path under the server root.
@@ -51,7 +86,7 @@ async function resolveOptionalUserFile(relativePath, rootDir) {
  */
 async function exportMarkdownPdf(inputPath, outputPath, stylesheetPath, pdfOptionsPath) {
   const pdfOptions = await resolvePdfOptions(pdfOptionsPath || undefined);
-  const args = ['md-to-pdf', inputPath, '--pdf-options', JSON.stringify(pdfOptions)];
+  const args = [inputPath, '--pdf-options', JSON.stringify(pdfOptions)];
 
   if (stylesheetPath) {
     args.push('--stylesheet', highlightStylesheet);
@@ -59,10 +94,7 @@ async function exportMarkdownPdf(inputPath, outputPath, stylesheetPath, pdfOptio
     args.push('--highlight-style', 'atom-one-dark');
   }
 
-  await execFileAsync('npx', args, {
-    cwd: path.dirname(inputPath),
-    timeout: PDF_EXPORT_TIMEOUT_MS,
-  });
+  await runPdfTool(mdToPdfBin, args, { cwd: path.dirname(inputPath) });
 
   const generatedPdf = inputPath.replace(/\.(md|markdown)$/i, '.pdf');
   await fs.rename(generatedPdf, outputPath);
@@ -102,7 +134,7 @@ export function setupPdfRoutes(app) {
     try {
       const content = await fs.readFile(fullPath, 'utf-8');
       if (isMarp(content)) {
-        await execFileAsync(marpBin, [fullPath, '-o', outputPath, '--html', '--allow-local-files', '--no-stdin'], { timeout: PDF_EXPORT_TIMEOUT_MS });
+        await runPdfTool(marpBin, [fullPath, '-o', outputPath, '--html', '--allow-local-files', '--no-stdin']);
       } else {
         const [stylesheetPath, resolvedPdfOptionsPath] = await Promise.all([
           resolveOptionalUserFile(stylePath, rootDir),
