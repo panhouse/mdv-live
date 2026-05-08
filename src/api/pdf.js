@@ -1,19 +1,25 @@
 import { spawn } from 'child_process';
 import fs from 'fs/promises';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import os from 'os';
+import { createRequire } from 'module';
 import { isMarp } from '../rendering/markdown.js';
 import { validatePath } from '../utils/path.js';
 
-const marpBin = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '..',
-  '..',
-  'node_modules',
-  '.bin',
-  'marp'
-);
+const require = createRequire(import.meta.url);
+// marp-cli は npm hoisting によりインストール先が変わる (top-level / nested)。
+// require.resolve でパッケージの実体を特定し、その bin スクリプトを node で
+// 直接実行する。`node_modules/.bin/marp` 直叩きは fresh install で nested
+// パスが無い時に ENOENT する罠。
+const marpEntry = (() => {
+  const pkgPath = require.resolve('@marp-team/marp-cli/package.json');
+  const pkg = require('@marp-team/marp-cli/package.json');
+  const binRel = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.marp;
+  if (!binRel) {
+    throw new Error('@marp-team/marp-cli does not declare a "marp" bin entry');
+  }
+  return path.join(path.dirname(pkgPath), binRel);
+})();
 const PDF_EXPORT_TIMEOUT_MS = 180000;
 
 /**
@@ -23,7 +29,9 @@ const PDF_EXPORT_TIMEOUT_MS = 180000;
  */
 function runMarp(args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(marpBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [marpEntry, ...args], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     let stderr = '';
     child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
 

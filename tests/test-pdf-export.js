@@ -110,6 +110,22 @@ describe('PDF Export API', () => {
     assert.match(data.error, /Marp/i);
   });
 
+  // Regression: 0.5.10 で marp 実行ファイルを `node_modules/.bin/marp` 直叩きで
+  // 解決していたため fresh install (npm hoisting) で ENOENT。0.5.11 で
+  // require.resolve('@marp-team/marp-cli/package.json') から bin スクリプトを
+  // 解決する方式に変更。ここでは bin entry のファイル実体が存在するかだけ確認
+  it('marp-cli bin entry resolves to an existing file', async () => {
+    const { createRequire } = await import('node:module');
+    const require = createRequire(import.meta.url);
+    const pkgPath = require.resolve('@marp-team/marp-cli/package.json');
+    const pkg = require('@marp-team/marp-cli/package.json');
+    const binRel = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.marp;
+    assert.ok(binRel, 'marp-cli should declare a marp bin entry');
+    const binAbs = path.join(path.dirname(pkgPath), binRel);
+    const stat = await fs.stat(binAbs);
+    assert.ok(stat.isFile(), `bin file should exist: ${binAbs}`);
+  });
+
   it('POST /api/pdf/export returns application/pdf for Marp file', { timeout: PDF_TEST_TIMEOUT_MS }, async () => {
     const res = await fetch(`${baseUrl}/api/pdf/export`, {
       method: 'POST',

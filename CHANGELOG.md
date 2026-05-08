@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.11] - 2026-05-09
+
+### Fixed
+
+- **Marp PDF export ENOENT in fresh install** (実は 0.5.5 から潜在):
+  - `src/api/pdf.js` が marp 実行ファイルを
+    `node_modules/mdv-live/node_modules/.bin/marp` で解決していたが、npm
+    hoisting により実体は top-level の `node_modules/.bin/marp` にある
+  - dev 環境 (mdv-live リポ内) では nested の方が存在するため気づかず、
+    `npm install mdv-live` した fresh install では ENOENT
+  - `require.resolve('@marp-team/marp-cli/package.json')` から bin スクリプト
+    を解決し `node` で実行する方式に変更 (hoist/nest 両対応)
+
+### Tests
+
+- 242 → **243 件 (+1)**: marp-cli bin entry の実在チェック regression test
+
 ## [0.5.10] - 2026-05-09
 
 ### Fixed (UX revert)
