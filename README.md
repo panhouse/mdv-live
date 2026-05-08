@@ -166,6 +166,8 @@ paginate: true
 
 内容...
 
+<!-- スピーカーノート (Presenter View で表示・編集できます) -->
+
 ---
 
 # 次のスライド
@@ -177,9 +179,55 @@ paginate: true
 ### サポートされるMarp機能
 
 - **テーマ**: default, gaia, uncover
-- **ディレクティブ**: paginate, header, footer, backgroundColor, etc.
+- **ディレクティブ**: paginate, header, footer, backgroundColor, lang, headingDivider, etc.
+- **headingDivider**: scalar (`headingDivider: 2`) / inline-array (`[1, 2]`) / block-array 全形式
+- **スライド区切り**: `---` / `***` / `___` (CommonMark thematic break 全形式)
 - **画像構文**: `![bg]`, `![w:100px]`, `![bg left]`
 - **数式**: KaTeX対応（インライン `$...$`、ブロック `$$...$$`）
+- **スピーカーノート**: HTML コメント (`<!-- ... -->`) で記述
+
+## Presenter View
+
+Marp ファイルを開いた状態で **`P` キー** を押すと、別ウィンドウで登壇者ビューが起動します。
+
+### 機能
+
+- **3 ペインレイアウト**: 現在のスライド (大) / 次のスライド (小) / スピーカーノート
+- **経過タイマー**: 上部に MM:SS 表示、Reset ボタンで 0 にリセット
+- **ノート編集 → 自動保存**: ノートパネルをクリックして編集 → 800ms デバウンスで markdown ソースのコメントを書き戻し
+- **キーボードナビ**: ← / → でスライド移動、メイン画面と双方向同期
+- **レイアウト調整**: ペイン境界をドラッグで自由に変更、ダブルクリックでデフォルト復元 (localStorage 永続化)
+- **Multi-note Guard**: 1 スライドに複数のノートコメントがある場合は自動保存を無効化（先頭ノート消失防止）
+- **STALE 検出**: 外部エディタによる変更を ETag 楽観ロックで検出、編集中テキストを localStorage に自動退避
+
+### スピーカーノートの書き方
+
+```markdown
+# スライドタイトル
+
+スライドの本文
+
+<!-- ここがスピーカーノート。Presenter View で編集すると
+     このコメントが書き換わります。 -->
+```
+
+複数行のノートも OK:
+
+```markdown
+<!--
+- ポイント 1: 〜を強調する
+- ポイント 2: ここで質問を投げかける
+- 想定時間: 2 分
+-->
+```
+
+### Presenter View ショートカット
+
+| キー | 動作 |
+|---|---|
+| `← / →` | スライド移動 |
+| `Space / PageDown` | 次のスライド |
+| `Home / End` | 最初 / 最後のスライド |
 
 ## Keyboard Shortcuts
 
@@ -191,6 +239,10 @@ paginate: true
 | Cmd/Ctrl + P | PDF出力 |
 | Cmd/Ctrl + W | タブを閉じる |
 | ← / → | スライド移動（Marp時） |
+| F | フルスクリーン切替（Marp時） |
+| N | ナビバー表示切替（Marp時） |
+| **P** | **Presenter View 起動（Marp時）** |
+| Esc | フルスクリーン解除 |
 | F2 | ファイル名変更 |
 | Delete | ファイル削除 |
 
@@ -198,7 +250,7 @@ paginate: true
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/file` | GET | ファイル内容取得 |
+| `/api/file` | GET | ファイル内容取得 (Marp 時は etag/notes/notesMultiplicity も同梱) |
 | `/api/file` | POST | ファイル保存 |
 | `/api/file` | DELETE | ファイル/ディレクトリ削除 |
 | `/api/tree` | GET | ファイルツリー取得 |
@@ -209,6 +261,10 @@ paginate: true
 | `/api/upload` | POST | ファイルアップロード |
 | `/api/pdf/export` | POST | PDF出力 |
 | `/api/info` | GET | サーバー情報 |
+| `/api/marp/decks/:path` | GET | Marp デッキ情報取得 (etag, notes, notesMultiplicity) |
+| `/api/marp/decks/:path/slides/:N/note` | PUT | スピーカーノート更新 (`If-Match` 必須、ETag 楽観ロック) |
+
+`/api/marp/decks/*` は Origin / Sec-Fetch-Site / Content-Type を厳密に検証し、cross-origin / cross-site / non-JSON リクエストは `403 ORIGIN_REJECTED` または `415 UNSUPPORTED_MEDIA_TYPE` で拒否します（CSRF / DNS rebinding 防御）。
 
 ## Tech Stack
 
@@ -241,33 +297,54 @@ npm test
 
 ```
 mdv/
-├── bin/mdv.js           # CLI entry point
+├── bin/mdv.js                    # CLI entry point
 ├── src/
-│   ├── server.js        # Express server setup
-│   ├── watcher.js       # File watching (chokidar)
+│   ├── server.js                 # Express server setup
+│   ├── watcher.js                # File watching (chokidar)
+│   ├── websocket.js              # WebSocket setup
 │   ├── api/
-│   │   ├── file.js      # File operations API
-│   │   ├── pdf.js       # PDF export API
-│   │   ├── tree.js      # File tree API
-│   │   └── upload.js    # Upload API
+│   │   ├── file.js               # File operations API
+│   │   ├── pdf.js                # PDF export API
+│   │   ├── tree.js               # File tree API
+│   │   ├── upload.js             # Upload API
+│   │   ├── marpNote.js           # Marp note autosave routes (orchestration)
+│   │   └── marpNote/
+│   │       ├── guards.js         # Origin / Host / Content-Type / If-Match guards
+│   │       ├── readDeck.js       # Path-safe deck reader (O_NOFOLLOW + realpath)
+│   │       ├── handleGet.js      # GET /api/marp/decks/:path
+│   │       └── handlePut.js      # PUT /api/marp/decks/:path/slides/:N/note
 │   ├── rendering/
-│   │   ├── index.js     # Rendering entry
-│   │   ├── markdown.js  # Markdown rendering
-│   │   └── marp.js      # Marp rendering
+│   │   ├── index.js              # Rendering entry
+│   │   ├── markdown.js           # Markdown rendering
+│   │   ├── marp.js               # Marp rendering (delegates to adapter)
+│   │   ├── marpitAdapter.js      # Marpit token adapter (SSOT)
+│   │   └── marpNoteWriter.js     # Pure-function note splice
+│   ├── concurrency/
+│   │   └── pathLock.js           # Promise-chain mutex (per-path serialization)
 │   ├── utils/
-│   │   ├── fileTypes.js # File type detection
-│   │   └── path.js      # Path security utilities
-│   ├── static/          # Frontend files
-│       ├── index.html
-│       ├── app.js
-│       └── styles.css
+│   │   ├── errors.js             # Error codes / status mapping (SSOT)
+│   │   ├── etag.js               # sha256 ETag (SSOT)
+│   │   ├── lineMath.js           # BOM / CRLF / line ↔ byte conversion
+│   │   ├── atomicWrite.js        # Atomic file write (O_EXCL + EXDEV fallback)
+│   │   ├── fileTypes.js          # File type detection
+│   │   └── path.js               # Path security (validatePath / validatePathReal)
+│   ├── static/                   # Frontend files
+│   │   ├── index.html
+│   │   ├── app.js
+│   │   ├── presenter.html        # Presenter View (3-pane + autosave)
+│   │   ├── styles.css
+│   │   └── lib/
+│   │       ├── apiClient.js      # HTTP client wrapper
+│   │       ├── presenterChannel.js # BroadcastChannel SSOT
+│   │       ├── saveQueue.js      # Per-deck save queue + per-slide coalesce
+│   │       └── tabRegistry.js    # Tab life-cycle hooks
 │   └── styles/
 │       ├── index.js
 │       ├── report.example.css
 │       └── report.pdf-options.example.json
 ├── scripts/
-│   └── setup-macos-app.sh  # macOS app setup
-└── tests/               # Test files
+│   └── setup-macos-app.sh        # macOS app setup
+└── tests/                        # Test files (236 件、全 PASS)
 ```
 
 ## Requirements
