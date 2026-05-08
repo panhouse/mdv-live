@@ -1,10 +1,14 @@
 /**
  * Tests for PDF export route.
  *
- * Regression target: 0.5.8 で plain Markdown 経路が `npx md-to-pdf` を spawn し
- * stdin pipe のまま EOF を待ってハング → 180s SIGTERM していた。
- * 0.5.9 で (1) md-to-pdf を依存追加 (2) execFile に stdio: ['ignore', ...] を渡す
- * ことで根治。このテストは「タイムアウトせず application/pdf が返る」を担保する。
+ * 仕様: Web UI の "Export to PDF" ボタンは Marp ファイルだけがこの経路を使う。
+ * 通常 Markdown はクライアント側で window.print() を呼び OS 印刷ダイアログを
+ * 出す。サーバーは Marp 以外を 415 で拒否する。
+ *
+ * Regression target:
+ * - 0.5.8 で markdown 経路が `npx md-to-pdf` を spawn し stdin pipe のまま
+ *   EOF を待ってハングしていた → 0.5.10 で markdown は server PDF 経路を
+ *   使わない設計に統一し、サーバー側は Marp 専用に簡素化
  */
 
 import { describe, it, before, after } from 'node:test';
@@ -16,14 +20,11 @@ import { createMdvServer } from '../src/server.js';
 
 const port = 19978;
 const baseUrl = `http://localhost:${port}`;
-const PDF_TEST_TIMEOUT_MS = 60000; // puppeteer 起動を含めて 60s 上限。実測 4-8s
+const PDF_TEST_TIMEOUT_MS = 60000;
 
 const PLAIN_MD = `# Plain Markdown Test
 
 Hello, world.
-
-- item 1
-- item 2
 `;
 
 const MARP_MD = `---
@@ -84,17 +85,15 @@ describe('PDF Export API', () => {
     assert.strictEqual(res.status, 404);
   });
 
-  it('POST /api/pdf/export returns application/pdf for plain markdown', { timeout: PDF_TEST_TIMEOUT_MS }, async () => {
+  it('POST /api/pdf/export returns 415 for non-Marp Markdown', async () => {
     const res = await fetch(`${baseUrl}/api/pdf/export`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ filePath: 'plain.md' }),
     });
-    assert.strictEqual(res.status, 200, `expected 200, got ${res.status}`);
-    assert.match(res.headers.get('content-type') || '', /application\/pdf/);
-    const buf = Buffer.from(await res.arrayBuffer());
-    assert.ok(buf.length > 0, 'PDF body should not be empty');
-    assert.strictEqual(buf.slice(0, 4).toString(), '%PDF', 'body should start with %PDF magic');
+    assert.strictEqual(res.status, 415, `expected 415, got ${res.status}`);
+    const data = await res.json();
+    assert.match(data.error, /Marp/i);
   });
 
   it('POST /api/pdf/export returns application/pdf for Marp file', { timeout: PDF_TEST_TIMEOUT_MS }, async () => {
