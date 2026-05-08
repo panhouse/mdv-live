@@ -63,7 +63,7 @@ export function makePutHandler({ rootDir, allowedHosts }) {
   };
 }
 
-async function performNoteUpdate({ req, res, rootDir, rel, slideIndex, note, ifMatch, earlyDeck }) {
+async function performNoteUpdate({ req, res, rootDir, rel, slideIndex, note, ifMatch, earlyDeck, retried = false }) {
   // Re-read inside the lock so the etag check sees writes by predecessors.
   let deck;
   try {
@@ -80,11 +80,20 @@ async function performNoteUpdate({ req, res, rootDir, rel, slideIndex, note, ifM
 
   // The mutex was acquired on earlyDeck.realPath. If the symlink target
   // changed between pre-lock and in-lock reads, our lock no longer covers
-  // the deck we'd be writing — a concurrent request to the new target
-  // could hold a different lock and race us in atomicWrite. Reject so the
-  // client retries (which will re-resolve and re-acquire the right lock).
+  // the deck we'd be writing. Drop this lock and re-acquire on the new
+  // realpath, retrying exactly once. (The client only retries STALE; we
+  // can't surface a transient retarget as a terminal failure.)
   if (deck.realPath !== earlyDeck.realPath) {
-    return sendError(res, mkError('PATH_INVALID', 'path resolution changed during request'));
+    if (retried) {
+      return sendError(res, mkError('PATH_INVALID', 'realpath unstable across retries'));
+    }
+    return withLock(deck.realPath, () =>
+      performNoteUpdate({
+        req, res, rootDir, rel, slideIndex, note, ifMatch,
+        earlyDeck: deck,
+        retried: true
+      })
+    );
   }
 
   const currentEtag = makeEtag(deck.rawSource);
