@@ -227,6 +227,42 @@ describe('PUT mutex / parallel requests', () => {
   });
 });
 
+describe('Origin handling — Sec-Fetch-Site fallback', () => {
+  it('accepts a request with no Origin header but Sec-Fetch-Site=same-origin', async () => {
+    await fs.writeFile(path.join(tmpRoot, 'deck.md'), SAMPLE, 'utf-8');
+    const { data: before } = await getDeck('deck.md');
+    const url = `${ORIGIN}/api/marp/decks/${encodeURIComponent('deck.md')}/slides/0/note`;
+    const res = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Host: `localhost:${PORT}`,
+        'Sec-Fetch-Site': 'same-origin',
+        'If-Match': before.etag
+      },
+      body: JSON.stringify({ note: 'sfs-allowed' })
+    });
+    assert.strictEqual(res.status, 200);
+  });
+
+  it('rejects a request with no Origin and no Sec-Fetch-Site (or cross-site)', async () => {
+    await fs.writeFile(path.join(tmpRoot, 'deck.md'), SAMPLE, 'utf-8');
+    const { data: before } = await getDeck('deck.md');
+    const url = `${ORIGIN}/api/marp/decks/${encodeURIComponent('deck.md')}/slides/0/note`;
+    const res = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Host: `localhost:${PORT}`,
+        'Sec-Fetch-Site': 'cross-site',
+        'If-Match': before.etag
+      },
+      body: JSON.stringify({ note: 'cross-site-blocked' })
+    });
+    assert.strictEqual(res.status, 403);
+  });
+});
+
 describe('OPTIONS preflight', () => {
   it('responds 204 for same-origin preflight', async () => {
     const res = await fetch(`${ORIGIN}/api/marp/decks/deck.md/slides/0/note`, {

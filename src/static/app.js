@@ -503,7 +503,7 @@
         async load(retries = 5) {
             for (let i = 0; i < retries; i++) {
                 try {
-                    const response = await fetch('/api/tree');
+                    const response = await MDVApi.fetchTree();
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     const tree = await response.json();
                     elements.fileTree.innerHTML = this.renderItems(tree);
@@ -521,7 +521,7 @@
 
         async refresh() {
             try {
-                const response = await fetch('/api/tree');
+                const response = await MDVApi.fetchTree();
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const tree = await response.json();
                 await this.update(tree);
@@ -595,7 +595,7 @@
 
         async expandDirectory(path, childrenContainer) {
             try {
-                const response = await fetch(`/api/tree/expand?path=${encodeURIComponent(path)}`);
+                const response = await MDVApi.expandTree(path);
                 const children = await response.json();
                 childrenContainer.innerHTML = this.renderItems(children);
 
@@ -682,24 +682,28 @@
     const PresenterView = {
         channel: null,
         presenterWindow: null,
-        // Per-deck queue. Each entry holds a Map<slideIndex, payload> of
-        // pending edits for that deck plus a `running` flag. Saves to the
-        // same deck are processed serially. New edits to the same slideIndex
-        // overwrite the pending value (coalesce).
-        //   payload = { note, etag }  ← etag pinned at edit time
-        // Map<path, { pendingBySlide: Map<slideIndex, payload>, running }>
-        saveQueue: new Map(),
-        // Track our last successful save etag per path so drain can safely
-        // rebase queued edits to the post-save etag (own-update only). We
-        // never rebase to watcher-updated tab.etag because that may carry
-        // an external edit which the queued note must not overwrite.
-        lastSavedEtag: new Map(), // Map<path, etag>
+        saveQueue: null,            // MDVSaveQueue instance (created in init)
+        lastSavedEtag: new Map(),   // Map<path, etag> — own-save chain rebase
 
         init() {
             if (typeof BroadcastChannel === 'undefined') return;
-            if (!window.MDVPresenterChannel) return;
-            this.channel = (window.MDVPresenterChannel && window.MDVPresenterChannel.create()) || null;
+            if (!window.MDVPresenterChannel || !window.MDVSaveQueue) return;
+            this.channel = window.MDVPresenterChannel.create();
             if (!this.channel) return;
+
+            // saveQueue rebases queued edits onto the etag of our last own
+            // save when there has been no external watcher update. If an
+            // external edit arrives, fallback to the originally-pinned etag
+            // so optimistic locking can detect the conflict via 412.
+            this.saveQueue = window.MDVSaveQueue.createSaveQueue({
+                saveFn: (path, slideIndex, note, etag) => {
+                    const tab = state.tabs.find((t) => t.path === path);
+                    const own = this.lastSavedEtag.get(path);
+                    const useEtag = (tab && own && tab.etag === own) ? own : etag;
+                    return this.saveNote(path, slideIndex, note, useEtag);
+                }
+            });
+
             this.channel.addEventListener('message', (e) => {
                 const msg = e.data || {};
                 if (msg.type === 'request-slides') {
@@ -708,62 +712,24 @@
                     this.gotoSlide(msg.index);
                 } else if (msg.type === 'edit-note') {
                     if (!msg.path) return;
-                    // Use the etag captured by the presenter at edit start
-                    // so a watcher refresh during the debounce can't bypass
-                    // optimistic locking.
-                    this.enqueueSaveNote(msg.path, msg.slideIndex, msg.note, msg.etag || null);
+                    this.saveQueue.enqueue(msg.path, msg.slideIndex, msg.note, msg.etag || null);
                 }
             });
+
+            // When a tab closes, drop its queued saves and own-etag entry to
+            // prevent a slow leak under long sessions with many decks.
+            if (window.MDVTabRegistry) {
+                window.MDVTabRegistry.onTabClosed((path) => {
+                    if (this.saveQueue) this.saveQueue.dropPath(path);
+                    this.lastSavedEtag.delete(path);
+                });
+            }
+
             window.addEventListener('beforeunload', () => {
                 if (this.presenterWindow && !this.presenterWindow.closed) {
                     this.presenterWindow.close();
                 }
             });
-        },
-
-        enqueueSaveNote(path, slideIndex, note, etag) {
-            let entry = this.saveQueue.get(path);
-            if (!entry) {
-                entry = { pendingBySlide: new Map(), running: false };
-                this.saveQueue.set(path, entry);
-            }
-            // Overwriting the entry for this slide drops any older un-sent
-            // edit for the same slide (coalesce). Other slides' pending
-            // edits keep their place in insertion order.
-            entry.pendingBySlide.set(slideIndex, { note, etag });
-            if (!entry.running) this.drain(path);
-        },
-
-        async drain(path) {
-            const entry = this.saveQueue.get(path);
-            if (!entry || entry.running) return;
-            entry.running = true;
-            try {
-                while (entry.pendingBySlide.size > 0) {
-                    const it = entry.pendingBySlide.entries().next();
-                    if (it.done) break;
-                    const [slideIndex, payload] = it.value;
-                    entry.pendingBySlide.delete(slideIndex);
-                    // Rebase the queued edit to the etag of our LAST OWN save
-                    // for this path, but only when that matches the current
-                    // tab.etag (i.e. no external watcher event has landed).
-                    // Otherwise fall back to the etag pinned at edit time so
-                    // optimistic locking can detect the conflict via 412.
-                    const tab = state.tabs.find((t) => t.path === path);
-                    const own = this.lastSavedEtag.get(path);
-                    const useEtag = (tab && own && tab.etag === own)
-                        ? own
-                        : payload.etag;
-                    try {
-                        await this.saveNote(path, slideIndex, payload.note, useEtag);
-                    } catch (err) {
-                        console.error('saveNote unexpected error', err);
-                    }
-                }
-            } finally {
-                entry.running = false;
-                if (entry.pendingBySlide.size === 0) this.saveQueue.delete(path);
-            }
         },
 
         // Persist a speaker note edit via the Marpit-token-based API. The
@@ -1322,7 +1288,7 @@
                 return;
             }
 
-            const response = await fetch(`/api/file?path=${encodeURIComponent(path)}`);
+            const response = await MDVApi.fetchFile(path);
             const data = await response.json();
 
             if (data.error) {
@@ -1412,7 +1378,11 @@
                 });
                 return;
             }
+            const closingPath = state.tabs[index] && state.tabs[index].path;
             state.tabs.splice(index, 1);
+            if (closingPath && window.MDVTabRegistry) {
+                window.MDVTabRegistry.notifyClosed(closingPath);
+            }
 
             if (state.tabs.length === 0) {
                 state.activeTabIndex = -1;
@@ -1604,7 +1574,7 @@
             elements.editorStatus.style.display = 'none';
 
             try {
-                const response = await fetch(`/api/file?path=${encodeURIComponent(tab.path)}`);
+                const response = await MDVApi.fetchFile(tab.path);
                 const data = await response.json();
                 if (data.content) tab.content = data.content;
                 if (data.raw) tab.raw = data.raw;
@@ -1681,11 +1651,7 @@
                 elements.editorStatus.textContent = 'Saving...';
                 elements.editorStatus.className = 'editor-status';
 
-                const response = await fetch('/api/file', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ path: tab.path, content: newContent })
-                });
+                const response = await MDVApi.saveFile(tab.path, newContent);
 
                 const result = await response.json();
 
@@ -1774,11 +1740,7 @@
                 statusText.textContent = 'Generating PDF...';
                 const exportOptions = PdfStyleManager.getExportOptions();
 
-                const response = await fetch('/api/pdf/export', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ filePath, ...exportOptions })
-                });
+                const response = await MDVApi.exportPdf({ filePath, ...exportOptions });
 
                 if (!response.ok) {
                     const error = await response.json();
@@ -2385,7 +2347,7 @@
         WebSocketManager.watchFile(tab.path);
 
         try {
-            const response = await fetch(`/api/file?path=${encodeURIComponent(tab.path)}`);
+            const response = await MDVApi.fetchFile(tab.path);
             const data = await response.json();
             if (data.content && data.content !== tab.content) {
                 tab.content = data.content;
@@ -2426,7 +2388,7 @@
         TabManager.render();
 
         try {
-            const infoResponse = await fetch('/api/info');
+            const infoResponse = await MDVApi.fetchInfo();
             const info = await infoResponse.json();
             state.rootPath = info.rootPath;
         } catch (e) {

@@ -33,7 +33,41 @@
     return { res, data: await jsonOrEmpty(res) };
   }
 
+  // --- Other MDV endpoints used throughout the app -------------------------
+
+  function fetchTree() { return fetch('/api/tree'); }
+  function expandTree(path) {
+    return fetch('/api/tree/expand?path=' + encodeURIComponent(path));
+  }
+  function fetchFile(path) {
+    return fetch('/api/file?path=' + encodeURIComponent(path));
+  }
+  function saveFile(path, content) {
+    return fetch('/api/file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, content })
+    });
+  }
+  function fetchInfo() { return fetch('/api/info'); }
+  function exportPdf(payload) {
+    return fetch('/api/pdf/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+  }
+
   if (typeof globalThis !== 'undefined') {
-    globalThis.MDVApi = { getDeck, saveMarpNote };
+    globalThis.MDVApi = {
+      getDeck,
+      saveMarpNote,
+      fetchTree,
+      expandTree,
+      fetchFile,
+      saveFile,
+      fetchInfo,
+      exportPdf
+    };
   }
 })();

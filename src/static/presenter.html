@@ -175,9 +175,13 @@
   .notes-body:focus {
     background: rgba(79, 140, 255, 0.04);
   }
-  .notes-body.placeholder {
+  /* CSS pseudo-element placeholder — never enters textContent, so editing
+     can never accidentally save the placeholder string as a real note. */
+  .notes-body[data-placeholder]:empty::before {
+    content: attr(data-placeholder);
     color: var(--muted);
     font-style: italic;
+    pointer-events: none;
   }
 
   .empty-state {
@@ -238,7 +242,7 @@
         <div class="panel-label" id="notesLabel">Speaker Notes <span style="text-transform:none; opacity:0.7;">(クリックで編集)</span></div>
         <div class="panel-body">
           <div class="notes-banner" id="notesBanner" style="display:none; padding:10px 16px; background:rgba(232, 152, 50, 0.12); color:#e89832; font-size:13px; border-bottom:1px solid var(--border);"></div>
-          <div class="notes-body placeholder" id="notesBody" contenteditable="true" spellcheck="false">（ノートなし）</div>
+          <div class="notes-body" id="notesBody" contenteditable="true" spellcheck="false" data-placeholder="（ノートなし）"></div>
         </div>
       </section>
     </div>
@@ -265,8 +269,8 @@
   const saveStatus = document.getElementById('saveStatus');
   const layout = document.getElementById('layout');
 
-  const PLACEHOLDER = '（ノートなし）';
   const STORAGE_KEY_LAYOUT = 'mdv-presenter-layout';
+  const STORAGE_KEY_BACKUP = 'mdv-presenter-stale-backup';
 
   let slidesHtml = '';
   let cssText = '';
@@ -302,13 +306,8 @@
   }
 
   function setNotesText(text) {
-    if (text) {
-      notesBody.textContent = text;
-      notesBody.classList.remove('placeholder');
-    } else {
-      notesBody.textContent = PLACEHOLDER;
-      notesBody.classList.add('placeholder');
-    }
+    // Empty text is fine: the CSS :empty::before placeholder takes over.
+    notesBody.textContent = text || '';
   }
 
   // contenteditable inserts <div>/<br> nodes for line breaks, and
@@ -334,7 +333,6 @@
   }
 
   function getNotesText() {
-    if (notesBody.classList.contains('placeholder')) return '';
     return readEditableText(notesBody);
   }
 
@@ -481,10 +479,6 @@
     editingSlideIndex = currentIndex;
     editingPath = deckPath;
     editingEtag = deckEtag;  // pin the etag at edit start
-    if (notesBody.classList.contains('placeholder')) {
-      notesBody.textContent = '';
-      notesBody.classList.remove('placeholder');
-    }
   });
   notesBody.addEventListener('blur', () => {
     editing = false;
@@ -492,10 +486,8 @@
     editingSlideIndex = -1;
     editingPath = '';
     editingEtag = null;
-    if (!readEditableText(notesBody).trim()) {
-      notesBody.textContent = PLACEHOLDER;
-      notesBody.classList.add('placeholder');
-    }
+    // CSS :empty::before takes over once the user leaves an empty field;
+    // no manual placeholder restore needed.
   });
   notesBody.addEventListener('input', () => {
     if (editingSlideIndex < 0) editingSlideIndex = currentIndex;
@@ -542,22 +534,36 @@
     } else if (msg.type === 'index') {
       render(msg.index);
     } else if (msg.type === 'note-saved') {
-      // Show status as long as the user hasn't switched away from the slide
-      // they edited; presenter may already be looking at a different slide.
       const targetIdx = editingSlideIndex >= 0 ? editingSlideIndex : currentIndex;
       if (msg.slideIndex !== targetIdx) return;
       // On our OWN successful save, advance editingEtag to the post-save
       // etag so the next autosave in this focus session is not stale.
       // External-edit broadcasts deliberately do NOT update editingEtag.
-      if (msg.ok && editing && msg.etag) {
-        editingEtag = msg.etag;
+      if (msg.ok && editing && msg.etag) editingEtag = msg.etag;
+
+      // STALE: back up the in-progress text to localStorage so the user can
+      // recover after reloading the deck.
+      const isStale = !msg.ok && msg.reason && msg.reason.indexOf('STALE') === 0;
+      if (isStale) {
+        try {
+          const draft = readEditableText(notesBody);
+          if (draft) {
+            const key = STORAGE_KEY_BACKUP + ':' + (editingPath || deckPath) + '#' + targetIdx;
+            localStorage.setItem(key, draft);
+          }
+        } catch (e) { /* ignore */ }
       }
+
       const text = msg.ok ? '保存済み' : (msg.reason ? '保存失敗: ' + msg.reason : '保存失敗');
       setSaveStatus(text, msg.ok ? 'ok' : 'err');
-      const dismissDelay = msg.ok ? 1800 : 5000;
-      setTimeout(() => {
-        if (saveStatus.textContent === text) setSaveStatus('');
-      }, dismissDelay);
+      // STALE messages stay until the user dismisses (no auto-clear) so they
+      // notice the conflict; success/other failures auto-dismiss.
+      if (!isStale) {
+        const dismissDelay = msg.ok ? 1800 : 5000;
+        setTimeout(() => {
+          if (saveStatus.textContent === text) setSaveStatus('');
+        }, dismissDelay);
+      }
     }
   });
 
@@ -598,8 +604,17 @@
     } catch (e) {}
   }
 
+  function resetLayout() {
+    layout.style.removeProperty('--col-left');
+    layout.style.removeProperty('--col-right');
+    layout.style.removeProperty('--row-top');
+    layout.style.removeProperty('--row-bottom');
+    try { localStorage.removeItem(STORAGE_KEY_LAYOUT); } catch (e) { /* ignore */ }
+  }
+
   function setupColumnDrag() {
     const handle = document.getElementById('gutterCol');
+    handle.addEventListener('dblclick', resetLayout);
     let dragging = false;
     handle.addEventListener('mousedown', (e) => {
       dragging = true;
@@ -631,6 +646,7 @@
   function setupRowDrag() {
     const handle = document.getElementById('gutterRow');
     const rightCol = handle.parentElement;
+    handle.addEventListener('dblclick', resetLayout);
     let dragging = false;
     handle.addEventListener('mousedown', (e) => {
       dragging = true;
