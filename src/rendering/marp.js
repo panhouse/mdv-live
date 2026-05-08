@@ -25,7 +25,7 @@ marp.markdown.disable('code');
 /**
  * Render Marp presentation to HTML
  * @param {string} content - Markdown content with Marp frontmatter
- * @returns {{ html: string, css: string, slideCount: number, notes: string[] }}
+ * @returns {{ html: string, css: string, slideCount: number, notes: string[], notesMultiplicity: number[] }}
  */
 export function renderMarp(content) {
   const { html, css, comments } = marp.render(content);
@@ -40,12 +40,19 @@ export function renderMarp(content) {
   );
   while (notes.length < slideCount) notes.push('');
 
+  // notesMultiplicity[i] = number of speaker-note comments on slide i.
+  // Used by the Multi-note Guard in the Presenter View to disable auto-save
+  // for slides whose join-of-comments string would not round-trip cleanly.
+  const notesMultiplicity = (comments || []).map((arr) => (arr || []).length);
+  while (notesMultiplicity.length < slideCount) notesMultiplicity.push(0);
+
   // Return Marp's HTML output AS-IS to preserve CSS selector compatibility
   return {
     html,
     css,
     slideCount,
-    notes
+    notes,
+    notesMultiplicity
   };
 }
 

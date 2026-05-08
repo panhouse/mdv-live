@@ -235,8 +235,9 @@
       <div class="gutter row" id="gutterRow" title="上下の比率を調整"></div>
 
       <section class="panel notes">
-        <div class="panel-label">Speaker Notes <span style="text-transform:none; opacity:0.7;">(クリックで編集)</span></div>
+        <div class="panel-label" id="notesLabel">Speaker Notes <span style="text-transform:none; opacity:0.7;">(クリックで編集)</span></div>
         <div class="panel-body">
+          <div class="notes-banner" id="notesBanner" style="display:none; padding:10px 16px; background:rgba(232, 152, 50, 0.12); color:#e89832; font-size:13px; border-bottom:1px solid var(--border);"></div>
           <div class="notes-body placeholder" id="notesBody" contenteditable="true" spellcheck="false">（ノートなし）</div>
         </div>
       </section>
@@ -269,14 +270,19 @@
   let slidesHtml = '';
   let cssText = '';
   let notes = [];
+  let notesMultiplicity = [];
+  let deckEtag = null;
   let slideCount = 0;
   let currentIndex = 0;
   let cssEl = null;
   let editing = false;
   let editingSlideIndex = -1;
   let editingPath = '';
+  let editingEtag = null;
   let deckPath = '';
   let saveTimer = null;
+
+  const notesBanner = document.getElementById('notesBanner');
 
   function applyCss(css) {
     if (cssEl) cssEl.remove();
@@ -331,6 +337,29 @@
     return readEditableText(notesBody);
   }
 
+  function isReadOnlyForCurrent() {
+    if (!deckEtag) return true; // GET degrade or no etag
+    const m = notesMultiplicity[currentIndex];
+    if (typeof m === 'number' && m > 1) return true;
+    return false;
+  }
+
+  function applyReadOnlyState() {
+    const ro = isReadOnlyForCurrent();
+    notesBody.contentEditable = ro ? 'false' : 'true';
+    if (ro) {
+      let msg = '';
+      if (!deckEtag) msg = 'このファイルは現在解析できないため自動保存は無効です。';
+      else if (notesMultiplicity[currentIndex] > 1) {
+        msg = 'このスライドは複数のノートを含むため自動保存を無効化しています（markdown editor で直接編集してください）。';
+      }
+      notesBanner.textContent = msg;
+      notesBanner.style.display = 'block';
+    } else {
+      notesBanner.style.display = 'none';
+    }
+  }
+
   function render(index) {
     if (!slideCount) return;
     currentIndex = Math.max(0, Math.min(slideCount - 1, index));
@@ -348,6 +377,7 @@
       const note = (notes[currentIndex] || '').trim();
       setNotesText(note);
     }
+    applyReadOnlyState();
 
     prevBtn.disabled = currentIndex === 0;
     nextBtn.disabled = currentIndex === slideCount - 1;
@@ -366,6 +396,8 @@
       fillStage(stageNext, html);
     }
     notes = Array.isArray(payload.notes) ? payload.notes : [];
+    notesMultiplicity = Array.isArray(payload.notesMultiplicity) ? payload.notesMultiplicity : [];
+    deckEtag = payload.etag || null;
     deckPath = payload.path || deckPath;
     slideCount = stageCurrent.querySelectorAll('.marpit > svg[data-marpit-svg]').length;
     render(typeof payload.current === 'number' ? payload.current : currentIndex);
@@ -402,17 +434,21 @@
   }
 
   function sendNoteSave() {
-    // Use the slide and deck captured when the user started editing — not
-    // the live currentIndex/deckPath, which can change while the debounce
-    // timer is in flight if the main window navigates or switches tabs.
+    // Use the slide / deck / etag captured when the user started editing —
+    // not the live values, which can change under us if the main window
+    // navigates, switches tabs, or receives a watcher update during the
+    // debounce. Sending the live etag would let a watcher-refreshed etag
+    // pass If-Match against the post-edit deck.
     const idx = editingSlideIndex >= 0 ? editingSlideIndex : currentIndex;
     const path = editingPath || deckPath;
+    const etag = editingEtag || deckEtag;
     const value = getNotesText();
     notes[idx] = value.trim();
     setSaveStatus('保存中…');
     channel.postMessage({
       type: 'edit-note',
       path,
+      etag,
       slideIndex: idx,
       note: value
     });
@@ -420,9 +456,11 @@
 
   // Notes editing
   notesBody.addEventListener('focus', () => {
+    if (isReadOnlyForCurrent()) return;
     editing = true;
     editingSlideIndex = currentIndex;
     editingPath = deckPath;
+    editingEtag = deckEtag;  // pin the etag at edit start
     if (notesBody.classList.contains('placeholder')) {
       notesBody.textContent = '';
       notesBody.classList.remove('placeholder');
@@ -433,6 +471,7 @@
     flushPendingNoteSave();
     editingSlideIndex = -1;
     editingPath = '';
+    editingEtag = null;
     if (!readEditableText(notesBody).trim()) {
       notesBody.textContent = PLACEHOLDER;
       notesBody.classList.add('placeholder');
@@ -441,6 +480,7 @@
   notesBody.addEventListener('input', () => {
     if (editingSlideIndex < 0) editingSlideIndex = currentIndex;
     if (!editingPath) editingPath = deckPath;
+    if (!editingEtag) editingEtag = deckEtag;
     notes[editingSlideIndex] = readEditableText(notesBody);
     scheduleNoteSave();
   });
@@ -474,6 +514,11 @@
     const msg = e.data || {};
     if (msg.type === 'slides') {
       loadSlides(msg);
+      // Do NOT refresh editingEtag here — `slides` can also originate from
+      // a watcher-detected external edit, and adopting that etag would let
+      // our debounced write overwrite the external change. editingEtag is
+      // only refreshed in `note-saved` handler below, where we can prove
+      // the new etag came from our own successful save.
     } else if (msg.type === 'index') {
       render(msg.index);
     } else if (msg.type === 'note-saved') {
@@ -481,6 +526,12 @@
       // they edited; presenter may already be looking at a different slide.
       const targetIdx = editingSlideIndex >= 0 ? editingSlideIndex : currentIndex;
       if (msg.slideIndex !== targetIdx) return;
+      // On our OWN successful save, advance editingEtag to the post-save
+      // etag so the next autosave in this focus session is not stale.
+      // External-edit broadcasts deliberately do NOT update editingEtag.
+      if (msg.ok && editing && msg.etag) {
+        editingEtag = msg.etag;
+      }
       const text = msg.ok ? '保存済み' : (msg.reason ? '保存失敗: ' + msg.reason : '保存失敗');
       setSaveStatus(text, msg.ok ? 'ok' : 'err');
       const dismissDelay = msg.ok ? 1800 : 5000;

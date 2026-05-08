@@ -4,9 +4,15 @@
 
 import fs from 'fs/promises';
 import path from 'path';
+import crypto from 'crypto';
 import { getFileType } from '../utils/fileTypes.js';
 import { renderMarkdown, isMarp } from './markdown.js';
 import { renderMarp } from './marp.js';
+import { analyseSource } from '../utils/lineMath.js';
+
+function makeEtag(rawSource) {
+  return 'sha256:' + crypto.createHash('sha256').update(rawSource).digest('hex');
+}
 
 /**
  * Escape HTML entities
@@ -99,11 +105,16 @@ export async function renderFile(filePath, relativeDir) {
  */
 function renderMarkdownFile(content, relativeDir) {
   if (isMarp(content)) {
-    const { html, css, notes } = renderMarp(content);
+    const { html, css, notes, notesMultiplicity } = renderMarp(content);
+    const lineInfo = analyseSource(content);
     return {
       content: rewriteMediaPaths(html, relativeDir),
       css,
       notes,
+      notesMultiplicity,
+      etag: makeEtag(content),
+      lineEnding: lineInfo.lineEnding,
+      hasBom: lineInfo.hasBom,
       raw: content,
       fileType: 'markdown',
       isMarp: true

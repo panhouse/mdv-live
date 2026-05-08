@@ -481,6 +481,10 @@
             if (tab.isMarp) {
                 if (data.css) tab.css = data.css;
                 if (data.notes) tab.notes = data.notes;
+                if (data.notesMultiplicity) tab.notesMultiplicity = data.notesMultiplicity;
+                if (data.etag) tab.etag = data.etag;
+                if (data.lineEnding) tab.lineEnding = data.lineEnding;
+                if (typeof data.hasBom !== 'undefined') tab.hasBom = !!data.hasBom;
                 ContentRenderer.renderMarp(data.content, tab.css);
                 PresenterView.broadcastSlides();
             } else {
@@ -678,11 +682,18 @@
     const PresenterView = {
         channel: null,
         presenterWindow: null,
-        // Pending edits awaiting persistence. Saves are processed strictly
-        // serially so each rewrite sees the latest tab.raw, and a newer edit
-        // for the same slide replaces an older queued one.
-        saveQueue: [],
-        saveInFlight: false,
+        // Per-deck queue. Each entry holds a Map<slideIndex, payload> of
+        // pending edits for that deck plus a `running` flag. Saves to the
+        // same deck are processed serially. New edits to the same slideIndex
+        // overwrite the pending value (coalesce).
+        //   payload = { note, etag }  ← etag pinned at edit time
+        // Map<path, { pendingBySlide: Map<slideIndex, payload>, running }>
+        saveQueue: new Map(),
+        // Track our last successful save etag per path so drain can safely
+        // rebase queued edits to the post-save etag (own-update only). We
+        // never rebase to watcher-updated tab.etag because that may carry
+        // an external edit which the queued note must not overwrite.
+        lastSavedEtag: new Map(), // Map<path, etag>
 
         init() {
             if (typeof BroadcastChannel === 'undefined') return;
@@ -694,11 +705,11 @@
                 } else if (msg.type === 'goto') {
                     this.gotoSlide(msg.index);
                 } else if (msg.type === 'edit-note') {
-                    // The presenter echoes back the deck path it captured at
-                    // edit time, so a tab switch in the main window cannot
-                    // re-target the save to a different file.
                     if (!msg.path) return;
-                    this.enqueueSaveNote(msg.path, msg.slideIndex, msg.note);
+                    // Use the etag captured by the presenter at edit start
+                    // so a watcher refresh during the debounce can't bypass
+                    // optimistic locking.
+                    this.enqueueSaveNote(msg.path, msg.slideIndex, msg.note, msg.etag || null);
                 }
             });
             window.addEventListener('beforeunload', () => {
@@ -708,77 +719,137 @@
             });
         },
 
-        enqueueSaveNote(path, slideIndex, note) {
-            const existingIdx = this.saveQueue.findIndex(
-                (q) => q.path === path && q.slideIndex === slideIndex
-            );
-            if (existingIdx >= 0) {
-                this.saveQueue[existingIdx] = { path, slideIndex, note };
-            } else {
-                this.saveQueue.push({ path, slideIndex, note });
+        enqueueSaveNote(path, slideIndex, note, etag) {
+            let entry = this.saveQueue.get(path);
+            if (!entry) {
+                entry = { pendingBySlide: new Map(), running: false };
+                this.saveQueue.set(path, entry);
             }
-            this.processSaveQueue();
+            // Overwriting the entry for this slide drops any older un-sent
+            // edit for the same slide (coalesce). Other slides' pending
+            // edits keep their place in insertion order.
+            entry.pendingBySlide.set(slideIndex, { note, etag });
+            if (!entry.running) this.drain(path);
         },
 
-        async processSaveQueue() {
-            if (this.saveInFlight) return;
-            const next = this.saveQueue.shift();
-            if (!next) return;
-            this.saveInFlight = true;
+        async drain(path) {
+            const entry = this.saveQueue.get(path);
+            if (!entry || entry.running) return;
+            entry.running = true;
             try {
-                await this.saveNote(next.path, next.slideIndex, next.note);
+                while (entry.pendingBySlide.size > 0) {
+                    const it = entry.pendingBySlide.entries().next();
+                    if (it.done) break;
+                    const [slideIndex, payload] = it.value;
+                    entry.pendingBySlide.delete(slideIndex);
+                    // Rebase the queued edit to the etag of our LAST OWN save
+                    // for this path, but only when that matches the current
+                    // tab.etag (i.e. no external watcher event has landed).
+                    // Otherwise fall back to the etag pinned at edit time so
+                    // optimistic locking can detect the conflict via 412.
+                    const tab = state.tabs.find((t) => t.path === path);
+                    const own = this.lastSavedEtag.get(path);
+                    const useEtag = (tab && own && tab.etag === own)
+                        ? own
+                        : payload.etag;
+                    try {
+                        await this.saveNote(path, slideIndex, payload.note, useEtag);
+                    } catch (err) {
+                        console.error('saveNote unexpected error', err);
+                    }
+                }
             } finally {
-                this.saveInFlight = false;
-                if (this.saveQueue.length > 0) this.processSaveQueue();
+                entry.running = false;
+                if (entry.pendingBySlide.size === 0) this.saveQueue.delete(path);
             }
         },
 
-        // Persist a speaker note edit back to the source markdown file.
-        // The originating deck is identified by `path` so a tab switch
-        // between debounce and save still writes to the right file.
-        // Tab state is only updated after the server confirms the write so
-        // a failed save can be retried with the same input.
-        async saveNote(path, slideIndex, note) {
+        // Persist a speaker note edit via the Marpit-token-based API. The
+        // server resolves the path, validates ETag, and rewrites surgically.
+        // `editTimeEtag` is the etag captured by the presenter at edit start;
+        // we send that as If-Match (NOT the live tab.etag) so a watcher
+        // refresh during the debounce can't smuggle a write past the lock.
+        async saveNote(path, slideIndex, note, editTimeEtag) {
             const tab = state.tabs.find((t) => t.path === path);
-            if (!tab || !tab.isMarp || !tab.raw) return;
-
-            let updated;
-            try {
-                updated = MarpNoteRewriter.updateMarpNoteInRaw(tab.raw, slideIndex, note);
-            } catch (err) {
+            if (!tab || !tab.isMarp) return;
+            const ifMatch = editTimeEtag || tab.etag;
+            if (!ifMatch) {
+                // GET degrade or no etag yet — refuse without writing.
                 this.channel.postMessage({
                     type: 'note-saved',
                     slideIndex,
                     ok: false,
-                    reason: err && err.code === 'INVALID_NOTE' ? err.message : 'Failed to update note'
+                    reason: 'Deck not parseable (degraded mode)'
                 });
-                return;
-            }
-            if (updated === tab.raw) {
-                this.channel.postMessage({ type: 'note-saved', slideIndex, ok: true });
                 return;
             }
 
+            const url = `/api/marp/decks/${encodeURIComponent(path)}/slides/${slideIndex}/note`;
+            let res, data;
             try {
-                const res = await fetch('/api/file', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ path: tab.path, content: updated })
+                res = await fetch(url, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'If-Match': ifMatch
+                    },
+                    body: JSON.stringify({ note })
                 });
-                if (!res.ok) {
-                    this.channel.postMessage({ type: 'note-saved', slideIndex, ok: false });
-                    return;
-                }
-                tab.raw = updated;
-                if (Array.isArray(tab.notes)) {
-                    tab.notes = tab.notes.slice();
-                    tab.notes[slideIndex] = (note || '').trim();
-                }
-                this.channel.postMessage({ type: 'note-saved', slideIndex, ok: true });
+                data = await res.json().catch(() => ({}));
             } catch (err) {
-                console.error('Failed to save Marp note:', err);
-                this.channel.postMessage({ type: 'note-saved', slideIndex, ok: false });
+                console.error('saveNote network error', err);
+                this.channel.postMessage({
+                    type: 'note-saved', slideIndex, ok: false, reason: 'Network error'
+                });
+                return;
             }
+
+            if (res.status === 412 && data.code === 'STALE') {
+                // The file changed under us. Do NOT update tab.etag here —
+                // tab.content/notes/slideRanges are still the pre-conflict
+                // version, so adopting the new etag would let the next edit
+                // pass If-Match while the deck index is wrong. The watcher's
+                // file_update event will refresh tab.{content,notes,etag}
+                // together once chokidar sees the change. Until then, all
+                // PUTs from this tab keep returning 412.
+                this.channel.postMessage({
+                    type: 'note-saved',
+                    slideIndex,
+                    ok: false,
+                    reason: 'STALE — file changed externally; please reload'
+                });
+                return;
+            }
+
+            if (res.ok && data.ok) {
+                // Update local tab state from the server's authoritative
+                // post-rewrite payload so re-broadcasts and the editor
+                // immediately see the saved content. Otherwise raw/notes
+                // would lag until the watcher's file_update event arrives.
+                tab.etag = data.etag;
+                this.lastSavedEtag.set(path, data.etag);
+                if (typeof data.source === 'string') tab.raw = data.source;
+                if (Array.isArray(data.notes)) tab.notes = data.notes;
+                if (Array.isArray(data.notesMultiplicity)) {
+                    tab.notesMultiplicity = data.notesMultiplicity;
+                }
+                this.channel.postMessage({
+                    type: 'note-saved',
+                    slideIndex,
+                    ok: true,
+                    etag: data.etag,
+                    normalizedNote: data.normalizedNote
+                });
+                // Re-broadcast so the presenter window picks up the new
+                // notes/etag without waiting for the watcher event.
+                this.broadcastSlides();
+                return;
+            }
+
+            const reason = data && (data.error || data.code) || 'Save failed';
+            this.channel.postMessage({
+                type: 'note-saved', slideIndex, ok: false, reason
+            });
         },
 
         open() {
@@ -811,6 +882,8 @@
                 html: tab.content,
                 css: tab.css,
                 notes: tab.notes || [],
+                notesMultiplicity: tab.notesMultiplicity || [],
+                etag: tab.etag || null,
                 current: marpCurrentSlide
             });
         },
@@ -1263,6 +1336,10 @@
                 isMarp: data.isMarp || false,
                 css: data.css || null,  // Marp CSS from marp-core
                 notes: data.notes || [],  // Marp speaker notes per slide
+                notesMultiplicity: data.notesMultiplicity || [],
+                etag: data.etag || null,
+                lineEnding: data.lineEnding || '\n',
+                hasBom: !!data.hasBom,
                 imageUrl: data.imageUrl,
                 pdfUrl: data.pdfUrl,
                 htmlUrl: data.htmlUrl,
@@ -1530,6 +1607,10 @@
                 if (data.raw) tab.raw = data.raw;
                 if (data.css) tab.css = data.css;
                 if (data.notes) tab.notes = data.notes;
+                if (data.notesMultiplicity) tab.notesMultiplicity = data.notesMultiplicity;
+                if (data.etag) tab.etag = data.etag;
+                if (data.lineEnding) tab.lineEnding = data.lineEnding;
+                if (typeof data.hasBom !== 'undefined') tab.hasBom = !!data.hasBom;
                 if (typeof data.isMarp !== 'undefined') tab.isMarp = data.isMarp;
             } catch (e) {
                 console.error('Failed to fetch updated content:', e);
