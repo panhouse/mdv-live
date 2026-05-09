@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.14] - 2026-05-09
+
+### Changed — Style PDF dispatch をリファイン
+
+`PdfStyleManager` の dispatch 判定を **「PDF options JSON の有無」** に変更
+(これまでは「CSS or JSON のいずれか」で server PDF 経路に切り替わっていた)。
+
+| CSS | PDF options | PDF ボタン押下で |
+|---|---|---|
+| 空 | 空 | 印刷ダイアログ |
+| 入れる | 空 | **印刷ダイアログ** (preview CSS が styled DOM で print engine に渡る) |
+| 入れる/空 | 入れる | サーバー md-to-pdf で styled PDF 自動 DL |
+
+JSON は margin/format/printBackground 等の細かい制御用。CSS だけ当てて
+PDF にしたい普通のケースは印刷ダイアログで十分なので、md-to-pdf 経路に
+無闇に流さない。`shouldUseServerPdf()` メソッドに rename。
+
+### UX improvements
+
+- **Style パネルの placeholder/tooltip** を rootDir 相対パス前提のヒント
+  に変更 (`report.css (rootDir からの相対パス)` 等)。Claude Code 等で
+  ファイル生成して入力する人が迷わないように
+- **失敗時のステータスメッセージ詳細化**: 旧「Style failed」→ 新
+  「Style failed: CSS not found: <path>」のように原因を出す。表示時間
+  も 2.5s → 4.5s に延長 (読み切る時間)
+- **PDF export 失敗時** もサーバーから返されたエラーメッセージを
+  ステータスバーに表示
+
+### Docs
+
+- README の `Web UI` 節を全面改訂: dispatch テーブル + Claude Code 連携手順
+
 ## [0.5.13] - 2026-05-09
 
 ### Restored

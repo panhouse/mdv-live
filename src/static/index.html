@@ -120,11 +120,11 @@
             <div class="pdf-style-panel hidden" id="pdfStylePanel">
                 <label>
                     <span>CSS</span>
-                    <input type="text" id="pdfStylePath" placeholder="src/styles/report.example.css">
+                    <input type="text" id="pdfStylePath" placeholder="report.css (rootDir からの相対パス)" title="rootDir 配下の .css ファイルパス。例: report.css または subdir/style.css">
                 </label>
                 <label>
                     <span>PDF options</span>
-                    <input type="text" id="pdfOptionsPath" placeholder="src/styles/report.pdf-options.example.json">
+                    <input type="text" id="pdfOptionsPath" placeholder="pdf-options.json (省略可。空なら印刷ダイアログ)" title="rootDir 配下の .json ファイルパス。指定すると md-to-pdf が margin/format を適用してサーバー PDF 自動 DL。空なら印刷ダイアログ経路。">
                 </label>
                 <button class="toolbar-btn" id="pdfStyleApply">Apply</button>
                 <button class="toolbar-btn" id="pdfStyleClear">Clear</button>

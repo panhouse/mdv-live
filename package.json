@@ -1,6 +1,6 @@
 {
   "name": "mdv-live",
-  "version": "0.5.13",
+  "version": "0.5.14",
   "description": "Markdown Viewer - File tree + Live preview + Marp support + Hot reload",
   "main": "src/server.js",
   "bin": {

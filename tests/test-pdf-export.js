@@ -3,14 +3,19 @@
  *
  * Web UI dispatch (in app.js print()):
  * - Marp file → server-side `marp-cli`
- * - Markdown with Style applied → server-side `md-to-pdf` (this test path)
- * - Markdown without Style → browser print dialog (window.print, no API call)
+ * - Markdown with PDF options JSON applied → server-side `md-to-pdf` (this test path)
+ * - Markdown with CSS-only or no Style → browser print dialog (window.print, no API call)
+ * - サーバー endpoint 自体は 「JSON 有無に関わらず markdown を渡せば PDF を返す」
+ *   実装 (CLI mdv convert / 直接 API call 経路で意味あり)
  *
  * Regression target:
  * - 0.5.8 で markdown 経路が `npx md-to-pdf` で stdin pipe ハングしていた
  *   → 0.5.9 で spawn + stdio:'ignore' に修正、現在は lazy resolution
  * - 0.5.10 marp の hoist 罠 → require.resolve('@marp-team/marp-cli/package.json')
  * - 0.5.11 marp top-level resolve がサーバー起動を壊す → lazy 化 + 503 fallback
+ * - 0.5.13 codex round 1 [P1] md-to-pdf workspace 汚染 → temp copy 化
+ * - 0.5.13 codex round 1 [P2] symlink で root 外読み取り → realpath 検証
+ * - 0.5.13 codex round 2 [P2] response body drain 不足で test runner cancel
  */
 
 import { describe, it, before, after } from 'node:test';

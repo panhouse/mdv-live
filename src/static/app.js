@@ -273,9 +273,12 @@
             this.loadPreviewCss();
         },
 
-        // Style 設定があるか (PDF dispatch を server vs print dialog で切り替えるため)
-        hasStyle() {
-            return !!(normalizeUserPath(state.pdfStylePath) || normalizeUserPath(state.pdfOptionsPath));
+        // PDF dispatch 切替: PDF options JSON が指定されている時だけサーバー
+        // md-to-pdf を使う。CSS のみ (or 何もなし) の場合は印刷ダイアログ経由
+        // で OS のページ設定を活かしつつ、preview に当たっている CSS が
+        // そのまま print engine に渡って styled PDF が出る。
+        shouldUseServerPdf() {
+            return !!normalizeUserPath(state.pdfOptionsPath);
         },
 
         getExportOptions() {
@@ -317,7 +320,12 @@
 
             try {
                 const response = await fetch(`/raw/${state.pdfStylePath}`);
-                if (!response.ok) throw new Error('CSS file not found');
+                if (!response.ok) {
+                    if (response.status === 404) {
+                        throw new Error(`CSS not found: ${state.pdfStylePath}`);
+                    }
+                    throw new Error(`CSS load error (HTTP ${response.status}): ${state.pdfStylePath}`);
+                }
                 const cssText = await response.text();
                 const style = document.createElement('style');
                 style.id = this.scopedCssId;
@@ -327,8 +335,10 @@
                 setTimeout(() => { elements.statusText.textContent = 'Connected'; }, 1600);
             } catch (error) {
                 console.error('PDF style preview error:', error);
-                elements.statusText.textContent = 'PDF style failed';
-                setTimeout(() => { elements.statusText.textContent = 'Connected'; }, 2500);
+                // エラー詳細を status に出す (Claude Code 連携時の自己解決を助ける)
+                const detail = (error.message || 'unknown error').slice(0, 100);
+                elements.statusText.textContent = `Style failed: ${detail}`;
+                setTimeout(() => { elements.statusText.textContent = 'Connected'; }, 4500);
             }
         },
 
@@ -1714,10 +1724,10 @@
                 await this.exportPdf(tab.path);
             } else if (this.isHtmlPreview()) {
                 this.printHtmlPreview(tab.name);
-            } else if (tab.fileType === 'markdown' && PdfStyleManager.hasStyle()) {
-                // Style パネルで CSS / PDF options が設定されている場合のみ
-                // サーバー側 md-to-pdf で styled PDF を生成 (Watanabe 設計)。
-                // 設定がなければデフォルトの印刷ダイアログ経路に落とす。
+            } else if (tab.fileType === 'markdown' && PdfStyleManager.shouldUseServerPdf()) {
+                // PDF options JSON が指定されている時のみサーバー md-to-pdf。
+                // CSS だけ / 何もなしの場合は printDialog で OS にページ制御
+                // を委ね、preview の CSS injection が styled PDF を作る。
                 await this.exportPdf(tab.path);
             } else {
                 this.browserPrint(tab.name);
@@ -1772,10 +1782,13 @@
                 }, 2000);
             } catch (error) {
                 console.error('PDF export error:', error);
-                statusText.textContent = 'PDF export failed';
+                // サーバーが返したエラーメッセージを status に表示
+                // (Claude Code 連携などで「何が悪いか分からない」を防ぐ)
+                const detail = (error.message || 'unknown error').slice(0, 100);
+                statusText.textContent = `PDF export failed: ${detail}`;
                 setTimeout(() => {
                     statusText.textContent = originalStatus;
-                }, 3000);
+                }, 4500);
             }
         },
 

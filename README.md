@@ -107,12 +107,34 @@ mdv convert \
 
 ### Web UI
 
-ビューア上部の `Style` から以下を指定できます。
+ビューア上部の `Style` ボタンを押すとパネルが開き、以下を指定できます。
 
-- CSS ファイルパス
-- PDF options JSON ファイルパス
+- **CSS** — サーバー起動時の `rootDir` からの相対パス (例: `report.css`、`subdir/style.css`)
+- **PDF options** — `rootDir` からの相対パス (例: `pdf-options.json`)。省略可
 
-CSS は Markdown プレビューにも反映されます。指定を解除する場合は `Clear` を押してください。
+`Apply` を押すと CSS は Markdown プレビューにも反映されます。`Clear` で解除。
+
+#### PDF ボタン押下時の挙動 (Markdown ファイル)
+
+| CSS | PDF options | PDF ボタン押下で |
+|---|---|---|
+| 空 | 空 | OS の **印刷ダイアログ** (`window.print()`) |
+| 入れる | 空 | OS の印刷ダイアログ。preview の CSS が styled DOM として print engine に渡る |
+| 入れる/空 | **入れる** | サーバー側 `md-to-pdf` で **styled PDF を自動 DL** (`@page` で margin/format を JSON 制御したいときの本格モード) |
+
+`PDF options` を入れない限り印刷ダイアログ経由になるので、ふだんは CSS だけ指定すれば OK。
+
+#### Claude Code との連携
+
+CSS を Claude Code に生成させるとき、**サーバーの `rootDir` 配下** に保存して相対パスを Style パネルに入力してください。例:
+
+```
+$ mdv ~/notes        # rootDir = ~/notes
+# Claude Code で ~/notes/report.css を生成
+# Style パネル CSS 欄に "report.css" を入力 → Apply
+```
+
+ファイルが見つからない場合 `Style failed: CSS not found: <path>` がステータスバーに出ます。
 
 ### ポート自動増分
 
