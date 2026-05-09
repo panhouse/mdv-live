@@ -23,7 +23,10 @@ import assert from 'node:assert';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createMdvServer } from '../src/server.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const port = 19978;
 const baseUrl = `http://localhost:${port}`;
@@ -130,6 +133,24 @@ describe('PDF Export API', () => {
   it('importing src/api/pdf.js does not throw even when marp resolution would fail at call time', async () => {
     const mod = await import('../src/api/pdf.js');
     assert.strictEqual(typeof mod.setupPdfRoutes, 'function');
+  });
+
+  // Regression: 0.5.14 codex round 1 [P2] — Style パネルを開いたまま CSS-only
+  // で印刷ダイアログを使うと、パネルの input/button が PDF に混入する。
+  // @media print で .pdf-style-panel も非表示になっていることを担保
+  it('@media print hides .pdf-style-panel to keep it out of browser-printed PDFs', async () => {
+    const cssText = await fs.readFile(
+      path.join(__dirname, '..', 'src/static/styles.css'),
+      'utf-8',
+    );
+    // 簡易チェック: print block 内のどこかで .pdf-style-panel が hidden にされてる
+    const printBlock = cssText.match(/@media print\s*\{[\s\S]*?\n\}/g) || [];
+    const hidesStylePanel = printBlock.some((block) =>
+      /\.pdf-style-panel[^{}]*\{[^}]*display\s*:\s*none/.test(block) ||
+      /\.pdf-style-panel(?=[\s,])[^{}]*?display\s*:\s*none/.test(block) ||
+      /\.pdf-style-panel\s*[,{]/.test(block) && /display\s*:\s*none\s*!important/.test(block),
+    );
+    assert.ok(hidesStylePanel, '@media print should hide .pdf-style-panel');
   });
 
   // Regression: 0.5.13 codex round 1 [P1] — md-to-pdf CLI はソース隣に

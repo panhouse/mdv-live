@@ -808,7 +808,7 @@ body {
         padding: 0 !important;
     }
 
-    .sidebar, .resize-handle, .toolbar, .tab-bar { display: none !important; }
+    .sidebar, .resize-handle, .toolbar, .tab-bar, .pdf-style-panel { display: none !important; }
 
     body {
         height: auto !important;
