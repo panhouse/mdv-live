@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.12] - 2026-05-09
+
+### Fixed
+
+- **Server fails to boot when `@marp-team/marp-cli` is missing** (codex P1):
+  - 0.5.11 で `require.resolve('@marp-team/marp-cli/package.json')` を
+    `src/api/pdf.js` の **module top-level** で実行していたため、optionalDependency
+    が欠ける環境 (`npm install --omit=optional`、platform 起因の install 失敗等)
+    で `import` 時に throw → サーバー全体が起動不能
+  - 解決を `runMarp()` 呼出時の lazy 実行に変更 (`resolveMarpEntry()`)
+  - 解決失敗時は `code: 'MARP_CLI_UNAVAILABLE'` を投げ、route handler 側で
+    503 (+ 案内メッセージ) に変換。markdown / 415 経路は marp 不在でも動く
+
+### Tests
+
+- 243 → **244 件 (+1)**: `src/api/pdf.js` の import が throw しない regression test
+
 ## [0.5.11] - 2026-05-09
 
 ### Fixed
