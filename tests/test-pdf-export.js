@@ -23,10 +23,38 @@ import assert from 'node:assert';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { createMdvServer } from '../src/server.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/** 有効な RGB PNG (赤一色) を生成 — asset 解決テスト用. */
+function makeRedPng(w, h) {
+  const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length, 0);
+    const t = Buffer.from(type, 'ascii');
+    const body = Buffer.concat([t, data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(zlib.crc32(body) >>> 0, 0);
+    return Buffer.concat([len, t, data, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+  const raw = Buffer.alloc(h * (1 + w * 3));
+  for (let y = 0; y < h; y++) {
+    const off = y * (1 + w * 3);
+    raw[off] = 0;
+    for (let x = 0; x < w; x++) {
+      raw[off + 1 + x * 3] = 0xff;
+      raw[off + 2 + x * 3] = 0x00;
+      raw[off + 3 + x * 3] = 0x00;
+    }
+  }
+  return Buffer.concat([sig, chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
 
 const port = 19978;
 const baseUrl = `http://localhost:${port}`;
@@ -227,38 +255,46 @@ describe('PDF Export API', () => {
     }
   });
 
-  // Regression: 0.5.15 codex round 1 [P2] — temp dir copy で相対 asset 参照が
-  // 壊れる事故 (CLI で `mdv convert` した時 ![logo](images/logo.png) が PDF に
-  // 含まれない)。--basedir で source dir を asset 解決 base に指定すれば
-  // temp で実行しつつ relative path も解決される。
-  it('exportMarkdownPdf preserves source-relative assets (--basedir hint)', { timeout: PDF_TEST_TIMEOUT_MS }, async () => {
+  // Regression: 0.5.15 codex round 1 + round 2 [P2] —
+  //   round 1: temp dir copy で相対 asset 参照が壊れる
+  //   round 2: --basedir だけでは md-to-pdf が input path から URL を逆算する
+  //            ため input が basedir 外 (temp) なら asset ロード失敗
+  // 解決: source dir 内に隠し一意名 (`.mdv-pdf-tmp.<stamp>.md`) で copy し、
+  //       md-to-pdf を source dir で実行 → asset 相対参照が解決される。
+  //       完了時に隠し md / 隠し pdf を unlink で削除し source dir 汚染なし
+  it('exportMarkdownPdf preserves source-relative assets', { timeout: PDF_TEST_TIMEOUT_MS }, async () => {
     const { exportMarkdownPdf } = await import('../src/services/pdf.js');
     const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-asset-test-'));
     try {
-      // 1x1 transparent PNG (binary) を asset として置く
-      const pngBytes = Buffer.from(
-        '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63000100000005000170d3e8a40000000049454e44ae426082',
-        'hex',
-      );
+      // 既存ファイル列挙 (cleanup 確認用)
+      const before = (await fs.readdir(sourceDir)).sort();
+
+      // 有効な 100x100 RGB PNG を生成 (Chrome が embed 拒否しないサイズ)
+      const pngBytes = makeRedPng(100, 100);
       const imgRel = 'images/logo.png';
       await fs.mkdir(path.join(sourceDir, 'images'));
       await fs.writeFile(path.join(sourceDir, imgRel), pngBytes);
       const mdPath = path.join(sourceDir, 'doc.md');
       await fs.writeFile(mdPath, `# Hi\n\n![logo](${imgRel})\n`);
-      const outPath = path.join(sourceDir, 'out.pdf');
+      const outPath = path.join(os.tmpdir(), `mdv-out-${process.pid}-${Date.now()}.pdf`);
 
       await exportMarkdownPdf(mdPath, outPath);
 
       const buf = await fs.readFile(outPath);
       assert.strictEqual(buf.slice(0, 4).toString(), '%PDF');
-      // 軽い間接チェック: PDF 内に画像オブジェクトが含まれるか
-      // (本格 OCR/画像抽出は重いので、PDF stream に "/Image" object と "PNG"
-      // marker が現れるか raw 検査)
-      const text = buf.toString('binary');
-      assert.ok(
-        text.includes('/Subtype /Image') || text.includes('/Image'),
-        'PDF should contain an embedded image object (relative asset preserved)',
-      );
+
+      // PDF 内の image XObject 数で asset embed を確認
+      // (Chrome が PNG を再エンコードするので生 PNG bytes は残らない。
+      //  asset が解決失敗していれば /Subtype /Image マーカーが 0 になる)
+      assert.ok(buf.includes(Buffer.from('/Subtype /Image')),
+        'PDF should embed the relative PNG asset (/Subtype /Image marker)');
+
+      // cleanup 確認: 隠し md / 隠し pdf が source dir に残っていないこと
+      const after = (await fs.readdir(sourceDir)).sort();
+      const newFiles = after.filter((f) => !before.includes(f) && f !== 'images' && f !== 'doc.md');
+      assert.deepStrictEqual(newFiles, [], `temp files leaked into source dir: ${newFiles.join(', ')}`);
+
+      await fs.unlink(outPath).catch(() => {});
     } finally {
       await fs.rm(sourceDir, { recursive: true, force: true });
     }

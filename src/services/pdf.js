@@ -108,14 +108,24 @@ function runPdfTool(bin, args, { cwd } = {}) {
 /**
  * Export a regular markdown document with md-to-pdf.
  *
- * 注意 1: md-to-pdf CLI は出力ファイルを **ソース隣に同名 .pdf で書く** 仕様
- * (例: foo.md → foo.pdf next to source)。既存の foo.pdf があると上書きして
- * しまう。これを避けるためソースを **temp dir にコピー** してそこで実行し、
- * 生成 PDF だけを最終 outputPath に rename する。
+ * 課題:
+ *  - md-to-pdf CLI は出力ファイルを **ソース隣に同名 .pdf で書く** 仕様
+ *    (例: foo.md → foo.pdf next to source)。既存の foo.pdf を上書きしないこと
+ *  - 同時に、`![logo](images/logo.png)` のような **相対 asset 参照** を解決
+ *    するためには md-to-pdf を **source dir で実行** する必要がある
+ *    (`--basedir` を別dir にすると md-to-pdf が input path から URL を逆算
+ *    して basedir 外と判定し asset がロードされない、codex round 2 P2)
  *
- * 注意 2: source dir に asset (`images/logo.png` 等の相対参照) がある場合に
- * temp copy だと参照が壊れるので、`--basedir` で source dir を渡して
- * relative asset 解決を維持する (codex round 1 P2 対策)。
+ * 解決:
+ *  - source dir 内に **隠し一意名 (`.mdv-pdf-tmp.<stamp>.md`)** で copy 配置
+ *  - md-to-pdf を source dir で実行 → 隠しPDFが source dir に生まれる
+ *  - その隠し PDF を outputPath に rename
+ *  - finally で隠し md / 隠し pdf を確実に削除 (source dir 残留物ゼロ)
+ *
+ * 副作用 / 制約:
+ *  - source dir に書き込み権が必要 (read-only dir では fs.copyFile が
+ *    EACCES/EROFS で throw → caller 側で 503/exit 1 を返す扱いに任せる)
+ *  - 一意名 + mdv prefix なので既存ファイル衝突なし
  *
  * @param {string} inputPath - Source markdown file (absolute).
  * @param {string} outputPath - Destination PDF file (absolute).
@@ -134,18 +144,15 @@ export async function exportMarkdownPdf(inputPath, outputPath, options = {}) {
     ?? await resolvePdfOptions(pdfOptionsPath || undefined);
 
   const sourceDir = path.dirname(inputPath);
-  const tempSourceDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-md-'));
+  const ext = path.extname(inputPath); // .md / .markdown
+  const stamp = `${process.pid}-${Date.now()}`;
+  const tempSourcePath = path.join(sourceDir, `.mdv-pdf-tmp.${stamp}${ext}`);
+  const tempPdfPath = tempSourcePath.replace(/\.(md|markdown)$/i, '.pdf');
+
   try {
-    const tempSourcePath = path.join(tempSourceDir, path.basename(inputPath));
     await fs.copyFile(inputPath, tempSourcePath);
 
-    // --basedir で source dir を asset 解決の base に指定。これで
-    // ![logo](images/logo.png) のような相対参照が source dir から解決される
-    const args = [
-      tempSourcePath,
-      '--basedir', sourceDir,
-      '--pdf-options', JSON.stringify(pdfOptions),
-    ];
+    const args = [tempSourcePath, '--pdf-options', JSON.stringify(pdfOptions)];
 
     // CLI 経路: styleConfig (resolveStyle 済み) を優先
     if (styleConfig) {
@@ -167,12 +174,12 @@ export async function exportMarkdownPdf(inputPath, outputPath, options = {}) {
       args.push('--highlight-style', 'atom-one-dark');
     }
 
-    await runPdfTool(mdToPdfBin, args, { cwd: tempSourceDir });
-
-    const generatedPdf = tempSourcePath.replace(/\.(md|markdown)$/i, '.pdf');
-    await fs.rename(generatedPdf, outputPath);
+    await runPdfTool(mdToPdfBin, args, { cwd: sourceDir });
+    await fs.rename(tempPdfPath, outputPath);
   } finally {
-    await fs.rm(tempSourceDir, { recursive: true, force: true });
+    // 隠し md / 隠し pdf を確実に削除 (例外発生時も cleanup)
+    await fs.unlink(tempSourcePath).catch(() => {});
+    await fs.unlink(tempPdfPath).catch(() => {});
   }
 }
 
