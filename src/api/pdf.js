@@ -7,20 +7,42 @@ import { isMarp } from '../rendering/markdown.js';
 import { validatePath } from '../utils/path.js';
 
 const require = createRequire(import.meta.url);
-// marp-cli は npm hoisting によりインストール先が変わる (top-level / nested)。
-// require.resolve でパッケージの実体を特定し、その bin スクリプトを node で
-// 直接実行する。`node_modules/.bin/marp` 直叩きは fresh install で nested
-// パスが無い時に ENOENT する罠。
-const marpEntry = (() => {
-  const pkgPath = require.resolve('@marp-team/marp-cli/package.json');
+const PDF_EXPORT_TIMEOUT_MS = 180000;
+
+/**
+ * Lazily resolve the marp-cli bin script.
+ *
+ * `@marp-team/marp-cli` は optionalDependencies。`npm install --omit=optional` や
+ * platform 起因の install 失敗で欠けることがあるため、サーバー起動時に解決
+ * すると import 段階で throw → サーバー全体が起動できなくなる。PDF export
+ * 経路でだけ解決し、欠けていれば export だけ 503 を返す設計に倒す。
+ *
+ * npm hoisting により実体パスは top-level / nested で変わる。`node_modules/
+ * .bin/marp` 直叩きは fresh install で ENOENT に落ちる罠なので、package.json
+ * の bin エントリ経由で解決する。
+ *
+ * @returns {string} Absolute path to the marp-cli bin script.
+ * @throws {Error} `code === 'MARP_CLI_UNAVAILABLE'` if the package is missing.
+ */
+function resolveMarpEntry() {
+  let pkgPath;
+  try {
+    pkgPath = require.resolve('@marp-team/marp-cli/package.json');
+  } catch (err) {
+    const e = new Error('@marp-team/marp-cli is not installed (optionalDependency missing).');
+    e.code = 'MARP_CLI_UNAVAILABLE';
+    e.cause = err;
+    throw e;
+  }
   const pkg = require('@marp-team/marp-cli/package.json');
   const binRel = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.marp;
   if (!binRel) {
-    throw new Error('@marp-team/marp-cli does not declare a "marp" bin entry');
+    const e = new Error('@marp-team/marp-cli does not declare a "marp" bin entry.');
+    e.code = 'MARP_CLI_UNAVAILABLE';
+    throw e;
   }
   return path.join(path.dirname(pkgPath), binRel);
-})();
-const PDF_EXPORT_TIMEOUT_MS = 180000;
+}
 
 /**
  * Spawn marp-cli with stdin closed.
@@ -28,6 +50,7 @@ const PDF_EXPORT_TIMEOUT_MS = 180000;
  * 注意: execFile は stdio オプションを受け付けない (Node 仕様) ため spawn を使う。
  */
 function runMarp(args) {
+  const marpEntry = resolveMarpEntry();
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [marpEntry, ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -114,6 +137,11 @@ export function setupPdfRoutes(app) {
     } catch (err) {
       console.error('PDF export error:', err);
       try { await fs.unlink(outputPath); } catch { /* ignore */ }
+      if (err.code === 'MARP_CLI_UNAVAILABLE') {
+        return res.status(503).json({
+          error: 'Marp PDF export is unavailable: install @marp-team/marp-cli or run `npm install` without --omit=optional.',
+        });
+      }
       res.status(500).json({ error: 'PDF export failed' });
     }
   });

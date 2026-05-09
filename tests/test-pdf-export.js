@@ -126,6 +126,15 @@ describe('PDF Export API', () => {
     assert.ok(stat.isFile(), `bin file should exist: ${binAbs}`);
   });
 
+  // Regression: codex round (0.5.12) — marp resolution は import 時ではなく
+  // request 処理時に行うこと (optionalDependency 欠如でサーバー全体が起動
+  // 不能になる事故を防ぐ)。`src/api/pdf.js` を import するだけで throw しない
+  // ことを確認
+  it('importing src/api/pdf.js does not throw even when marp resolution would fail at call time', async () => {
+    const mod = await import('../src/api/pdf.js');
+    assert.strictEqual(typeof mod.setupPdfRoutes, 'function');
+  });
+
   it('POST /api/pdf/export returns application/pdf for Marp file', { timeout: PDF_TEST_TIMEOUT_MS }, async () => {
     const res = await fetch(`${baseUrl}/api/pdf/export`, {
       method: 'POST',
