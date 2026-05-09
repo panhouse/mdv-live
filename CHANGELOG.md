@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.15] - 2026-05-09
+
+### Refactored
+
+- **PDF 生成ロジックを `src/services/pdf.js` に集約**:
+  - サーバー HTTP route (`src/api/pdf.js`) と CLI (`bin/mdv.js convert`) の
+    両方が **同じ実装** を共有
+  - bug fix・security check (realpath/symlink)・hoist 対応・stdin pipe ハング
+    対応・workspace 汚染回避 (temp copy) が 1 箇所に集約。今後どちらの経路
+    でも同じ品質を保つ
+- **CLI から `npx` を完全排除**:
+  - 旧: `execFileSync('npx', ['md-to-pdf', ...])` / `npx @marp-team/marp-cli`
+  - 新: `services/pdf.js` の `exportMarpPdf` / `exportMarkdownPdf` を直接呼ぶ
+  - 効果: registry 不通でも動く、バージョン揺れ防止、サーバー側と整合
+
+### Changed (breaking-ish)
+
+- **`md-to-pdf` を `optionalDependencies` に降格** (旧 `dependencies`):
+  - デフォルト `npm install mdv-live` で puppeteer/chromium DL がほぼ消滅
+    し、install 大幅軽量化 (Marp 使わない人は完全 skip)
+  - `@marp-team/marp-cli` も同じく optional (従来通り)
+  - PDF 機能 (Plain Markdown / Marp 両方) を使う場合は `--include=optional`
+    か通常 `npm install` (default で optional も入る)。CI で `--omit=optional`
+    してると `PDF_TOOL_UNAVAILABLE` になり 503 / exit 1 + 案内
+  - **既存ユーザー影響**: `npm install --omit=optional` していた人は要再 install
+
+### Tests
+
+- 247 → **249 件 (+2)**:
+  - `src/services/pdf.js` の import が throw しない
+  - `bin/mdv.js` が `npx` を呼んでいない (regression guard)
+
+### Chore
+
+- `tests/fixtures/html-preview/` `tests/fixtures/marp-notes/` を `.gitignore`
+  に追加 (test-html-preview.js が runtime に書き出す artifact)
+- `CODEX.md` を git 管理に追加 (codex review の Project ルール)
+
+### Docs
+
+- README に **依存パッケージは optional 扱い** であることと install 方法を明記
+
 ## [0.5.14] - 2026-05-09
 
 ### Changed — Style PDF dispatch をリファイン

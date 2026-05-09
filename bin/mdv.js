@@ -5,7 +5,7 @@
  * Compatible with the original Python mdv-live CLI
  */
 
-import { execFileSync, execSync } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { createServer as createNetServer } from 'node:net';
@@ -17,6 +17,7 @@ import open from 'open';
 
 import { createMdvServer } from '../src/server.js';
 import { resolvePdfOptions, resolveStyle } from '../src/styles/index.js';
+import { exportMarpPdf, exportMarkdownPdf } from '../src/services/pdf.js';
 
 const DEFAULT_PORT = 8642;
 const MARP_FRONTMATTER_PATTERN = /^---\s*\n[\s\S]*?marp:\s*true[\s\S]*?\n---/;
@@ -287,27 +288,41 @@ async function convertToPdf(inputPath, outputPath, styleArg, pdfOptionsPath) {
 }
 
 /**
- * Convert Marp presentation to PDF using marp-cli
+ * Format a PDF tool error for CLI output.
+ * @param {Error} err
+ * @returns {string} Error message including install hint when applicable.
+ */
+function formatPdfToolError(err) {
+  if (err.code === 'PDF_TOOL_UNAVAILABLE') {
+    return `Error: ${err.message}\n  Run: npm install --include=optional`;
+  }
+  if (err.stderr) {
+    return `Error: PDF conversion failed\n${err.stderr}`;
+  }
+  return `Error: PDF conversion failed\n${err.message || err}`;
+}
+
+/**
+ * Convert Marp presentation to PDF using the shared service.
+ *
  * @param {string} inputPath - Resolved input file path
  * @param {string} outputPath - Resolved output file path
  * @returns {Promise<number>} Exit code
  */
 async function convertMarpToPdf(inputPath, outputPath) {
   try {
-    execFileSync('npx', ['@marp-team/marp-cli', '--no-stdin', inputPath, '--pdf', '--html', '--allow-local-files', '-o', outputPath], {
-      encoding: 'utf-8',
-      stdio: 'inherit'
-    });
+    await exportMarpPdf(inputPath, outputPath);
     console.log(`PDF saved: ${outputPath}`);
     return 0;
-  } catch {
-    console.error('Error: PDF conversion failed');
+  } catch (err) {
+    console.error(formatPdfToolError(err));
     return 1;
   }
 }
 
 /**
- * Convert regular markdown to PDF using md-to-pdf
+ * Convert regular markdown to PDF using the shared service.
+ *
  * @param {string} inputPath - Resolved input file path
  * @param {string} outputPath - Resolved output file path
  * @param {import('../src/styles/index.js').StyleConfig} styleConfig - Style preset
@@ -315,40 +330,12 @@ async function convertMarpToPdf(inputPath, outputPath) {
  */
 async function convertMarkdownToPdf(inputPath, outputPath, styleConfig) {
   console.log('Converting as document (A4 portrait)...');
-
   try {
-    const args = ['md-to-pdf', inputPath, '--pdf-options', JSON.stringify(styleConfig.pdfOptions)];
-    const stylesheetPaths = styleConfig.stylesheets ?? (styleConfig.stylesheet ? [styleConfig.stylesheet] : []);
-
-    for (const stylesheetPath of stylesheetPaths) {
-      args.push('--stylesheet', stylesheetPath);
-    }
-
-    if (styleConfig.highlightStyle) {
-      args.push('--highlight-style', styleConfig.highlightStyle);
-    }
-
-    if (styleConfig.css) {
-      args.push('--css', styleConfig.css);
-    }
-
-    execFileSync('npx', args, {
-      encoding: 'utf-8',
-      stdio: 'inherit',
-      cwd: path.dirname(inputPath),
-    });
-
-    // md-to-pdf outputs to same directory with .pdf extension
-    const generatedPdf = inputPath.replace(/\.(md|markdown)$/i, '.pdf');
-    if (generatedPdf !== outputPath) {
-      await fs.rename(generatedPdf, outputPath);
-    }
-
+    await exportMarkdownPdf(inputPath, outputPath, { styleConfig });
     console.log(`PDF saved: ${outputPath}`);
     return 0;
-  } catch {
-    console.error('Error: PDF conversion failed');
-    console.error('Make sure md-to-pdf is available (npx md-to-pdf)');
+  } catch (err) {
+    console.error(formatPdfToolError(err));
     return 1;
   }
 }

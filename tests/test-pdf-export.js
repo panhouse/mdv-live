@@ -135,6 +135,26 @@ describe('PDF Export API', () => {
     assert.strictEqual(typeof mod.setupPdfRoutes, 'function');
   });
 
+  // Regression: 0.5.15 — services 経由でも import-time に resolve されない
+  // (optional dep が欠ける環境でも import が成功すること)
+  it('importing src/services/pdf.js does not throw and exports the helpers', async () => {
+    const mod = await import('../src/services/pdf.js');
+    assert.strictEqual(typeof mod.exportMarpPdf, 'function');
+    assert.strictEqual(typeof mod.exportMarkdownPdf, 'function');
+    assert.strictEqual(typeof mod.resolvePkgBin, 'function');
+  });
+
+  // Regression: 0.5.15 — bin/mdv.js が npx を経由していないこと
+  // (registry 依存・遅延・バージョン揺れを排除)
+  it('bin/mdv.js does not invoke npx for PDF tooling', async () => {
+    const cliText = await fs.readFile(
+      path.join(__dirname, '..', 'bin/mdv.js'),
+      'utf-8',
+    );
+    // execFileSync('npx', ...) や spawnSync('npx', ...) が残っていないこと
+    assert.doesNotMatch(cliText, /\b(execFileSync|spawnSync|exec)\s*\(\s*['"]npx['"]/);
+  });
+
   // Regression: 0.5.14 codex round 1 [P2] — Style パネルを開いたまま CSS-only
   // で印刷ダイアログを使うと、パネルの input/button が PDF に混入する。
   // @media print で .pdf-style-panel も非表示になっていることを担保

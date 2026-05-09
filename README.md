@@ -78,6 +78,14 @@ mdv -v
 
 Markdown ファイルは CLI または Web UI から PDF に変換できます。
 
+> **依存パッケージは optional 扱い** — `@marp-team/marp-cli` (Marp 用) と `md-to-pdf` (Plain Markdown 用) は `optionalDependencies`。デフォルト `npm install` でも入りますが、CI 等で `--omit=optional` 指定すると入りません。**PDF 機能を使うなら**:
+> ```bash
+> npm install -g mdv-live  # 通常はこれで OK (optional も入る)
+> # CI などで --omit=optional する場合:
+> npm install --include=optional
+> ```
+> 不在のまま PDF 生成すると、サーバーは 503 + 案内、CLI は exit 1 + `npm install --include=optional` 提案を返します。
+
 ### CLI
 
 ```bash

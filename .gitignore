@@ -55,3 +55,7 @@ test*.md
 test-marp*.md
 test.md
 *.pdf
+
+# Test runtime artifacts (test-html-preview.js etc. write fixtures during runs)
+tests/fixtures/html-preview/
+tests/fixtures/marp-notes/
