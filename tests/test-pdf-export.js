@@ -127,6 +127,56 @@ describe('PDF Export API', () => {
     assert.strictEqual(typeof mod.setupPdfRoutes, 'function');
   });
 
+  // Regression: 0.5.13 codex round 1 [P1] — md-to-pdf CLI はソース隣に
+  // foo.pdf を書く挙動。既存 foo.pdf があると上書きされ、その後 temp に
+  // rename されるとワークスペースから消える事故。JS API 利用 + writeFile
+  // 直書きでワークスペースに一切触れないことを担保
+  it('POST /api/pdf/export does not touch the source directory (no foo.pdf created)', { timeout: PDF_TEST_TIMEOUT_MS }, async () => {
+    const sentinel = path.join(tempDir, 'plain.pdf');
+    const sentinelBefore = await fs.readFile(sentinel).catch(() => null);
+    assert.strictEqual(sentinelBefore, null, 'fixture should not pre-exist plain.pdf');
+
+    const res = await fetch(`${baseUrl}/api/pdf/export`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath: 'plain.md' }),
+    });
+    assert.strictEqual(res.status, 200);
+
+    // ソース dir に plain.pdf が生成されていないこと
+    const after = await fs.readFile(sentinel).catch(() => null);
+    assert.strictEqual(after, null, 'workspace must not have plain.pdf after export');
+  });
+
+  // Regression: 0.5.13 codex round 1 [P2] — markdown 経路は realpath 検証なし
+  // で symlink target が root 外を指していても読み取り PDF 化していた
+  it('POST /api/pdf/export rejects symlink that points outside rootDir', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-outside-'));
+    try {
+      const secret = path.join(outside, 'secret.md');
+      await fs.writeFile(secret, '# Secret outside root\n');
+      const linkPath = path.join(tempDir, 'leak.md');
+      try {
+        await fs.symlink(secret, linkPath);
+      } catch (err) {
+        if (err.code === 'EPERM') return; // skip on platforms without symlink perms
+        throw err;
+      }
+      try {
+        const res = await fetch(`${baseUrl}/api/pdf/export`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filePath: 'leak.md' }),
+        });
+        assert.strictEqual(res.status, 403, `symlink to outside should be denied; got ${res.status}`);
+      } finally {
+        await fs.unlink(linkPath).catch(() => {});
+      }
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
   it('POST /api/pdf/export returns application/pdf for plain markdown (md-to-pdf path)', { timeout: PDF_TEST_TIMEOUT_MS }, async () => {
     const res = await fetch(`${baseUrl}/api/pdf/export`, {
       method: 'POST',

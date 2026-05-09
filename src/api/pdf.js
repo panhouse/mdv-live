@@ -109,24 +109,43 @@ async function resolveOptionalUserFile(relativePath, rootDir) {
 /**
  * Export a regular markdown document with md-to-pdf.
  *
- * `md-to-pdf` is in regular `dependencies`. With user-supplied stylesheet
- * and PDF options JSON (via Web UI Style panel or CLI), apply them.
+ * 注意 1: md-to-pdf CLI は出力ファイルを **ソース隣に同名 .pdf で書く** 仕様
+ * (例: foo.md → foo.pdf next to source)。既存の foo.pdf があると上書き
+ * してから temp に rename = ユーザーのワークスペース汚染 + 読み取り専用
+ * dir で失敗。これを避けるためソースを **temp dir にコピー** してそこで
+ * md-to-pdf を実行し、生成 PDF だけを最終 outputPath に rename する。
+ *
+ * 注意 2: JS API (mdToPdf()) を使う方法もあるが、puppeteer プロセスが
+ * 残って Node test runner が event loop drain 待ちで cancel される。
+ * spawn 経由なら子プロセスが exit するので確実に cleanup される。
+ *
+ * 注意 3: temp copy なので markdown 内の **相対パス画像/CSS** は壊れる。
+ * Style 機能は CSS で見た目を整える用途を想定しており、相対パス画像を
+ * 多用する markdown は対象外として割り切る。
  */
 async function exportMarkdownPdf(inputPath, outputPath, stylesheetPath, pdfOptionsPath) {
   const mdToPdfBin = resolvePkgBin('md-to-pdf', 'md-to-pdf');
   const pdfOptions = await resolvePdfOptions(pdfOptionsPath || undefined);
-  const args = [inputPath, '--pdf-options', JSON.stringify(pdfOptions)];
 
-  if (stylesheetPath) {
-    args.push('--stylesheet', highlightStylesheet);
-    args.push('--stylesheet', stylesheetPath);
-    args.push('--highlight-style', 'atom-one-dark');
+  const tempSourceDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-md-'));
+  try {
+    const tempSourcePath = path.join(tempSourceDir, path.basename(inputPath));
+    await fs.copyFile(inputPath, tempSourcePath);
+
+    const args = [tempSourcePath, '--pdf-options', JSON.stringify(pdfOptions)];
+    if (stylesheetPath) {
+      args.push('--stylesheet', highlightStylesheet);
+      args.push('--stylesheet', stylesheetPath);
+      args.push('--highlight-style', 'atom-one-dark');
+    }
+
+    await runPdfTool(mdToPdfBin, args, { cwd: tempSourceDir });
+
+    const generatedPdf = tempSourcePath.replace(/\.(md|markdown)$/i, '.pdf');
+    await fs.rename(generatedPdf, outputPath);
+  } finally {
+    await fs.rm(tempSourceDir, { recursive: true, force: true });
   }
-
-  await runPdfTool(mdToPdfBin, args, { cwd: path.dirname(inputPath) });
-
-  const generatedPdf = inputPath.replace(/\.(md|markdown)$/i, '.pdf');
-  await fs.rename(generatedPdf, outputPath);
 }
 
 /**
@@ -160,6 +179,10 @@ export function setupPdfRoutes(app) {
     }
 
     if (!validatePath(filePath, rootDir)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    // realpath check: symlink で root 外を指す source を拒否
+    if (!await validatePathReal(filePath, rootDir)) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
