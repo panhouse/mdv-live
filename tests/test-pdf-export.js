@@ -142,6 +142,10 @@ describe('PDF Export API', () => {
       body: JSON.stringify({ filePath: 'plain.md' }),
     });
     assert.strictEqual(res.status, 200);
+    // 200 binary response の body を drain しないと undici socket が開いたまま
+    // server の download callback が完了せず Node test runner がハングする
+    // (codex round 2 P2 の指摘)
+    await res.arrayBuffer();
 
     // ソース dir に plain.pdf が生成されていないこと
     const after = await fs.readFile(sentinel).catch(() => null);
