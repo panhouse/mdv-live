@@ -24,10 +24,24 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createMdvServer } from '../src/server.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// CRC32 pure JS (Node 18 互換: zlib.crc32 は Node 22+ なので使えない)
+function crc32(buf) {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) {
+    c = (c ^ buf[i]) >>> 0;
+    for (let j = 0; j < 8; j++) {
+      c = (c & 1) ? ((c >>> 1) ^ 0xedb88320) : (c >>> 1);
+      c = c >>> 0;
+    }
+  }
+  return (c ^ 0xffffffff) >>> 0;
+}
 
 /** 有効な RGB PNG (赤一色) を生成 — asset 解決テスト用. */
 function makeRedPng(w, h) {
@@ -37,7 +51,7 @@ function makeRedPng(w, h) {
     const t = Buffer.from(type, 'ascii');
     const body = Buffer.concat([t, data]);
     const crc = Buffer.alloc(4);
-    crc.writeUInt32BE(zlib.crc32(body) >>> 0, 0);
+    crc.writeUInt32BE(crc32(body), 0);
     return Buffer.concat([len, t, data, crc]);
   };
   const ihdr = Buffer.alloc(13);
@@ -295,6 +309,38 @@ describe('PDF Export API', () => {
       assert.deepStrictEqual(newFiles, [], `temp files leaked into source dir: ${newFiles.join(', ')}`);
 
       await fs.unlink(outPath).catch(() => {});
+    } finally {
+      await fs.rm(sourceDir, { recursive: true, force: true });
+    }
+  });
+
+  // Regression: 0.5.15 codex round 3 [P2] — pid+Date.now() の temp 名が
+  // 同一 ms 内 concurrent 呼出で衝突 → 別リクエストの input/output を上書き
+  // する race。randomUUID 化されてればそれぞれ独立して動く
+  it('exportMarkdownPdf handles concurrent calls without collision', { timeout: PDF_TEST_TIMEOUT_MS }, async () => {
+    const { exportMarkdownPdf } = await import('../src/services/pdf.js');
+    const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-concurrent-'));
+    try {
+      const md1 = path.join(sourceDir, 'one.md');
+      const md2 = path.join(sourceDir, 'two.md');
+      await fs.writeFile(md1, '# One\n');
+      await fs.writeFile(md2, '# Two\n');
+      const out1 = path.join(os.tmpdir(), `mdv-c1-${randomUUID()}.pdf`);
+      const out2 = path.join(os.tmpdir(), `mdv-c2-${randomUUID()}.pdf`);
+      // 同一 sourceDir で 2 並行起動 → 衝突なく両方完走できること
+      await Promise.all([
+        exportMarkdownPdf(md1, out1),
+        exportMarkdownPdf(md2, out2),
+      ]);
+      const [b1, b2] = await Promise.all([fs.readFile(out1), fs.readFile(out2)]);
+      assert.strictEqual(b1.slice(0, 4).toString(), '%PDF');
+      assert.strictEqual(b2.slice(0, 4).toString(), '%PDF');
+      // source dir に残留物が無いこと
+      const remaining = (await fs.readdir(sourceDir)).filter(
+        (f) => f.startsWith('.mdv-pdf-tmp.'),
+      );
+      assert.deepStrictEqual(remaining, [], 'no temp files should remain');
+      await Promise.all([fs.unlink(out1), fs.unlink(out2)]);
     } finally {
       await fs.rm(sourceDir, { recursive: true, force: true });
     }

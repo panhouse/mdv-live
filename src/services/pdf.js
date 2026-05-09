@@ -12,6 +12,7 @@
  */
 
 import { spawn } from 'child_process';
+import { randomUUID } from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
@@ -145,7 +146,10 @@ export async function exportMarkdownPdf(inputPath, outputPath, options = {}) {
 
   const sourceDir = path.dirname(inputPath);
   const ext = path.extname(inputPath); // .md / .markdown
-  const stamp = `${process.pid}-${Date.now()}`;
+  // randomUUID で temp 名を一意に。process.pid + Date.now() だと同一 ms の
+  // concurrent 呼出 (例: 並行 /api/pdf/export) で衝突して別リクエストの
+  // 入力/出力を上書きする race があった (codex round 3 P2)
+  const stamp = `${process.pid}-${randomUUID()}`;
   const tempSourcePath = path.join(sourceDir, `.mdv-pdf-tmp.${stamp}${ext}`);
   const tempPdfPath = tempSourcePath.replace(/\.(md|markdown)$/i, '.pdf');
 
