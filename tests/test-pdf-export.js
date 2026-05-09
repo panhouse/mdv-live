@@ -1,14 +1,16 @@
 /**
  * Tests for PDF export route.
  *
- * 仕様: Web UI の "Export to PDF" ボタンは Marp ファイルだけがこの経路を使う。
- * 通常 Markdown はクライアント側で window.print() を呼び OS 印刷ダイアログを
- * 出す。サーバーは Marp 以外を 415 で拒否する。
+ * Web UI dispatch (in app.js print()):
+ * - Marp file → server-side `marp-cli`
+ * - Markdown with Style applied → server-side `md-to-pdf` (this test path)
+ * - Markdown without Style → browser print dialog (window.print, no API call)
  *
  * Regression target:
- * - 0.5.8 で markdown 経路が `npx md-to-pdf` を spawn し stdin pipe のまま
- *   EOF を待ってハングしていた → 0.5.10 で markdown は server PDF 経路を
- *   使わない設計に統一し、サーバー側は Marp 専用に簡素化
+ * - 0.5.8 で markdown 経路が `npx md-to-pdf` で stdin pipe ハングしていた
+ *   → 0.5.9 で spawn + stdio:'ignore' に修正、現在は lazy resolution
+ * - 0.5.10 marp の hoist 罠 → require.resolve('@marp-team/marp-cli/package.json')
+ * - 0.5.11 marp top-level resolve がサーバー起動を壊す → lazy 化 + 503 fallback
  */
 
 import { describe, it, before, after } from 'node:test';
@@ -25,6 +27,9 @@ const PDF_TEST_TIMEOUT_MS = 60000;
 const PLAIN_MD = `# Plain Markdown Test
 
 Hello, world.
+
+- item 1
+- item 2
 `;
 
 const MARP_MD = `---
@@ -99,21 +104,10 @@ describe('PDF Export API', () => {
     assert.match(data.error, /not found/i);
   });
 
-  it('POST /api/pdf/export returns 415 for non-Marp Markdown', async () => {
-    const res = await fetch(`${baseUrl}/api/pdf/export`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filePath: 'plain.md' }),
-    });
-    assert.strictEqual(res.status, 415, `expected 415, got ${res.status}`);
-    const data = await res.json();
-    assert.match(data.error, /Marp/i);
-  });
-
-  // Regression: 0.5.10 で marp 実行ファイルを `node_modules/.bin/marp` 直叩きで
-  // 解決していたため fresh install (npm hoisting) で ENOENT。0.5.11 で
+  // Regression: 0.5.11 で marp 実行ファイルを `node_modules/.bin/marp` 直叩きで
+  // 解決していたため fresh install (npm hoisting) で ENOENT。0.5.12 で
   // require.resolve('@marp-team/marp-cli/package.json') から bin スクリプトを
-  // 解決する方式に変更。ここでは bin entry のファイル実体が存在するかだけ確認
+  // 解決する方式に変更
   it('marp-cli bin entry resolves to an existing file', async () => {
     const { createRequire } = await import('node:module');
     const require = createRequire(import.meta.url);
@@ -126,13 +120,24 @@ describe('PDF Export API', () => {
     assert.ok(stat.isFile(), `bin file should exist: ${binAbs}`);
   });
 
-  // Regression: codex round (0.5.12) — marp resolution は import 時ではなく
-  // request 処理時に行うこと (optionalDependency 欠如でサーバー全体が起動
-  // 不能になる事故を防ぐ)。`src/api/pdf.js` を import するだけで throw しない
-  // ことを確認
+  // Regression: 0.5.12 P1 — marp resolution は import 時ではなく request 処理時に
+  // 行うこと (optionalDependency 欠如でサーバー全体が起動不能になる事故を防ぐ)
   it('importing src/api/pdf.js does not throw even when marp resolution would fail at call time', async () => {
     const mod = await import('../src/api/pdf.js');
     assert.strictEqual(typeof mod.setupPdfRoutes, 'function');
+  });
+
+  it('POST /api/pdf/export returns application/pdf for plain markdown (md-to-pdf path)', { timeout: PDF_TEST_TIMEOUT_MS }, async () => {
+    const res = await fetch(`${baseUrl}/api/pdf/export`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath: 'plain.md' }),
+    });
+    assert.strictEqual(res.status, 200, `expected 200, got ${res.status}`);
+    assert.match(res.headers.get('content-type') || '', /application\/pdf/);
+    const buf = Buffer.from(await res.arrayBuffer());
+    assert.ok(buf.length > 0, 'PDF body should not be empty');
+    assert.strictEqual(buf.slice(0, 4).toString(), '%PDF', 'body should start with %PDF magic');
   });
 
   it('POST /api/pdf/export returns application/pdf for Marp file', { timeout: PDF_TEST_TIMEOUT_MS }, async () => {

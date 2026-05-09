@@ -4,58 +4,63 @@ import path from 'path';
 import os from 'os';
 import { createRequire } from 'module';
 import { isMarp } from '../rendering/markdown.js';
-import { validatePath } from '../utils/path.js';
+import { validatePath, validatePathReal } from '../utils/path.js';
+import { resolvePdfOptions } from '../styles/index.js';
 
 const require = createRequire(import.meta.url);
+const highlightStylesheet = path.resolve(path.dirname(require.resolve('highlight.js')), '..', 'styles', 'atom-one-dark.css');
 const PDF_EXPORT_TIMEOUT_MS = 180000;
 
 /**
- * Lazily resolve the marp-cli bin script.
+ * Lazily resolve a package's bin script via require.resolve.
  *
- * `@marp-team/marp-cli` は optionalDependencies。`npm install --omit=optional` や
- * platform 起因の install 失敗で欠けることがあるため、サーバー起動時に解決
- * すると import 段階で throw → サーバー全体が起動できなくなる。PDF export
- * 経路でだけ解決し、欠けていれば export だけ 503 を返す設計に倒す。
+ * 0.5.10〜0.5.12 の hoist 罠 + optionalDependencies 欠如対応:
+ * - npm hoisting で実体パスが top-level / nested いずれにもなる
+ * - optionalDep が欠ける環境 (--omit=optional) では import 時に throw すると
+ *   サーバー起動が壊れる → request 時に lazy で解決し、欠ければ 503
  *
- * npm hoisting により実体パスは top-level / nested で変わる。`node_modules/
- * .bin/marp` 直叩きは fresh install で ENOENT に落ちる罠なので、package.json
- * の bin エントリ経由で解決する。
- *
- * @returns {string} Absolute path to the marp-cli bin script.
- * @throws {Error} `code === 'MARP_CLI_UNAVAILABLE'` if the package is missing.
+ * @param {string} pkgName - npm package name (e.g. '@marp-team/marp-cli')
+ * @param {string} binName - bin entry key (matches package.json bin)
+ * @returns {string} Absolute path to the bin script
+ * @throws {Error} `code === 'PDF_TOOL_UNAVAILABLE'` if package missing
  */
-function resolveMarpEntry() {
+function resolvePkgBin(pkgName, binName) {
   let pkgPath;
   try {
-    pkgPath = require.resolve('@marp-team/marp-cli/package.json');
+    pkgPath = require.resolve(`${pkgName}/package.json`);
   } catch (err) {
-    const e = new Error('@marp-team/marp-cli is not installed (optionalDependency missing).');
-    e.code = 'MARP_CLI_UNAVAILABLE';
+    const e = new Error(`${pkgName} is not installed.`);
+    e.code = 'PDF_TOOL_UNAVAILABLE';
     e.cause = err;
     throw e;
   }
-  const pkg = require('@marp-team/marp-cli/package.json');
-  const binRel = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.marp;
+  const pkg = require(`${pkgName}/package.json`);
+  const bin = pkg.bin;
+  const binRel = typeof bin === 'string' ? bin : bin?.[binName];
   if (!binRel) {
-    const e = new Error('@marp-team/marp-cli does not declare a "marp" bin entry.');
-    e.code = 'MARP_CLI_UNAVAILABLE';
+    const e = new Error(`${pkgName} does not declare a "${binName}" bin entry.`);
+    e.code = 'PDF_TOOL_UNAVAILABLE';
     throw e;
   }
   return path.join(path.dirname(pkgPath), binRel);
 }
 
 /**
- * Spawn marp-cli with stdin closed.
+ * Spawn a PDF tool with stdin closed.
  *
- * 注意: execFile は stdio オプションを受け付けない (Node 仕様) ため spawn を使う。
+ * 注意: execFile は stdio オプションを受け付けない (Node 仕様)。md-to-pdf は
+ * 内部で get-stdin を呼ぶため、stdin が pipe のままだと EOF を永遠に待ち続けて
+ * ハングする。spawn で stdin を 'ignore' (= /dev/null) に明示的に縛る。
  */
-function runMarp(args) {
-  const marpEntry = resolveMarpEntry();
+function runPdfTool(bin, args, { cwd } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [marpEntry, ...args], {
+    const child = spawn(process.execPath, [bin, ...args], {
+      cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    let stdout = '';
     let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
     child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
 
     const timer = setTimeout(() => {
@@ -69,11 +74,12 @@ function runMarp(args) {
     child.on('close', (code, signal) => {
       clearTimeout(timer);
       if (code === 0) {
-        resolve();
+        resolve({ stdout, stderr });
       } else {
-        const err = new Error(`marp exited with code=${code} signal=${signal}`);
+        const err = new Error(`${path.basename(bin)} exited with code=${code} signal=${signal}`);
         err.code = code;
         err.signal = signal;
+        err.stdout = stdout;
         err.stderr = stderr;
         reject(err);
       }
@@ -82,11 +88,63 @@ function runMarp(args) {
 }
 
 /**
+ * Resolve an optional user-selected file path under the server root.
+ * @param {string | undefined} relativePath - Path supplied by the web UI.
+ * @param {string} rootDir - Server root directory.
+ * @returns {Promise<string | null>} Absolute path or null.
+ */
+async function resolveOptionalUserFile(relativePath, rootDir) {
+  if (!relativePath) return null;
+  if (!await validatePathReal(relativePath, rootDir)) {
+    throw new Error(`Access denied: ${relativePath}`);
+  }
+  const fullPath = path.join(rootDir, relativePath);
+  const stat = await fs.stat(fullPath);
+  if (!stat.isFile()) {
+    throw new Error(`Not a file: ${relativePath}`);
+  }
+  return fullPath;
+}
+
+/**
+ * Export a regular markdown document with md-to-pdf.
+ *
+ * `md-to-pdf` is in regular `dependencies`. With user-supplied stylesheet
+ * and PDF options JSON (via Web UI Style panel or CLI), apply them.
+ */
+async function exportMarkdownPdf(inputPath, outputPath, stylesheetPath, pdfOptionsPath) {
+  const mdToPdfBin = resolvePkgBin('md-to-pdf', 'md-to-pdf');
+  const pdfOptions = await resolvePdfOptions(pdfOptionsPath || undefined);
+  const args = [inputPath, '--pdf-options', JSON.stringify(pdfOptions)];
+
+  if (stylesheetPath) {
+    args.push('--stylesheet', highlightStylesheet);
+    args.push('--stylesheet', stylesheetPath);
+    args.push('--highlight-style', 'atom-one-dark');
+  }
+
+  await runPdfTool(mdToPdfBin, args, { cwd: path.dirname(inputPath) });
+
+  const generatedPdf = inputPath.replace(/\.(md|markdown)$/i, '.pdf');
+  await fs.rename(generatedPdf, outputPath);
+}
+
+/**
+ * Export a Marp slide deck with marp-cli.
+ *
+ * `@marp-team/marp-cli` is an optionalDependency. When missing the route
+ * returns a 503; that is surfaced by the caller.
+ */
+async function exportMarpPdf(inputPath, outputPath) {
+  const marpBin = resolvePkgBin('@marp-team/marp-cli', 'marp');
+  await runPdfTool(marpBin, [inputPath, '-o', outputPath, '--html', '--allow-local-files', '--no-stdin']);
+}
+
+/**
  * Setup PDF export routes.
  *
- * Web UI からは Marp ファイルのみがこの経路を使う。通常 Markdown は
- * クライアント側で window.print() (OS 印刷ダイアログ) に流す設計のため、
- * このエンドポイントは Marp 以外を 415 で拒否する。
+ * - Marp files → `marp-cli` (slide PDF, landscape, themed)
+ * - Plain Markdown → `md-to-pdf` (document PDF, optional CSS / PDF options)
  *
  * @param {Express} app - Express application
  * @returns {void}
@@ -95,7 +153,7 @@ export function setupPdfRoutes(app) {
   const { rootDir } = app.locals;
 
   app.post('/api/pdf/export', async (req, res) => {
-    const { filePath } = req.body;
+    const { filePath, stylePath, pdfOptionsPath } = req.body;
 
     if (!filePath) {
       return res.status(400).json({ error: 'filePath is required' });
@@ -122,11 +180,15 @@ export function setupPdfRoutes(app) {
       }
 
       const content = await fs.readFile(fullPath, 'utf-8');
-      if (!isMarp(content)) {
-        return res.status(415).json({ error: 'Server-side PDF export supports Marp files only. Use the browser print dialog for regular Markdown.' });
+      if (isMarp(content)) {
+        await exportMarpPdf(fullPath, outputPath);
+      } else {
+        const [stylesheetPath, resolvedPdfOptionsPath] = await Promise.all([
+          resolveOptionalUserFile(stylePath, rootDir),
+          resolveOptionalUserFile(pdfOptionsPath, rootDir),
+        ]);
+        await exportMarkdownPdf(fullPath, outputPath, stylesheetPath, resolvedPdfOptionsPath);
       }
-
-      await runMarp([fullPath, '-o', outputPath, '--html', '--allow-local-files', '--no-stdin']);
 
       res.download(outputPath, outputFileName, async (err) => {
         if (err) {
@@ -137,9 +199,9 @@ export function setupPdfRoutes(app) {
     } catch (err) {
       console.error('PDF export error:', err);
       try { await fs.unlink(outputPath); } catch { /* ignore */ }
-      if (err.code === 'MARP_CLI_UNAVAILABLE') {
+      if (err.code === 'PDF_TOOL_UNAVAILABLE') {
         return res.status(503).json({
-          error: 'Marp PDF export is unavailable: install @marp-team/marp-cli or run `npm install` without --omit=optional.',
+          error: `PDF tool unavailable: ${err.message} Run \`npm install\` (without --omit=optional) and retry.`,
         });
       }
       res.status(500).json({ error: 'PDF export failed' });

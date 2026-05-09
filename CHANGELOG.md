@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.13] - 2026-05-09
+
+### Restored
+
+- **PDF Style customization (Watanabe @watanko `933147f` の機能)**:
+  0.5.10 で僕が誤って "orphan" と判断し削除してしまった機能を復元。
+  README にも記載されている公開機能を黙って消したのは判断ミス。
+
+  - Web UI: `Style` ボタン + パネル (CSS path / PDF options JSON 入力)
+  - サーバー: `/api/pdf/export` の Markdown 経路 (md-to-pdf 経由) を復活
+  - `md-to-pdf` を `dependencies` に再追加
+
+### Added — A2 dispatch
+
+  Markdown PDF ボタンの動きを **Style 設定の有無** で切り替える:
+  - **Style 未設定** (デフォルト) → 印刷ダイアログ (`window.print()`) ← 0.5.10 の岡本意図
+  - **Style 設定済** (CSS or PDF options 入力 + Apply) → サーバー md-to-pdf
+    で styled PDF DL ← 渡邉さん設計
+
+  実装: `PdfStyleManager.hasStyle()` を新設し、`PrintManager.print()` の
+  Markdown 分岐で分岐。Marp は引き続きサーバー一択。
+
+### Fixed
+
+- `src/api/pdf.js` の md-to-pdf bin 解決を hoist 安全 + lazy 化:
+  `node_modules/.bin/md-to-pdf` 直叩きをやめ、`require.resolve('md-to-pdf/package.json')`
+  で解決。Marp 側と同じ `resolvePkgBin()` ヘルパに統一。
+  欠如時は `code: 'PDF_TOOL_UNAVAILABLE'` で 503 (Marp と同じパス)
+
+### Tests
+
+- 244 件全 PASS (plain markdown PDF テスト復活、415 テスト削除)
+
 ## [0.5.12] - 2026-05-09
 
 ### Fixed
