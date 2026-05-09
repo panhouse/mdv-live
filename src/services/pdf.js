@@ -113,8 +113,9 @@ function runPdfTool(bin, args, { cwd } = {}) {
  * しまう。これを避けるためソースを **temp dir にコピー** してそこで実行し、
  * 生成 PDF だけを最終 outputPath に rename する。
  *
- * 注意 2: temp copy なので markdown 内の **相対パス画像/CSS** は壊れる。
- * Style 機能は見た目調整用途であり、相対パス画像多用は対象外として割り切る。
+ * 注意 2: source dir に asset (`images/logo.png` 等の相対参照) がある場合に
+ * temp copy だと参照が壊れるので、`--basedir` で source dir を渡して
+ * relative asset 解決を維持する (codex round 1 P2 対策)。
  *
  * @param {string} inputPath - Source markdown file (absolute).
  * @param {string} outputPath - Destination PDF file (absolute).
@@ -132,12 +133,19 @@ export async function exportMarkdownPdf(inputPath, outputPath, options = {}) {
   const pdfOptions = styleConfig?.pdfOptions
     ?? await resolvePdfOptions(pdfOptionsPath || undefined);
 
+  const sourceDir = path.dirname(inputPath);
   const tempSourceDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-md-'));
   try {
     const tempSourcePath = path.join(tempSourceDir, path.basename(inputPath));
     await fs.copyFile(inputPath, tempSourcePath);
 
-    const args = [tempSourcePath, '--pdf-options', JSON.stringify(pdfOptions)];
+    // --basedir で source dir を asset 解決の base に指定。これで
+    // ![logo](images/logo.png) のような相対参照が source dir から解決される
+    const args = [
+      tempSourcePath,
+      '--basedir', sourceDir,
+      '--pdf-options', JSON.stringify(pdfOptions),
+    ];
 
     // CLI 経路: styleConfig (resolveStyle 済み) を優先
     if (styleConfig) {

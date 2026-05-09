@@ -227,6 +227,43 @@ describe('PDF Export API', () => {
     }
   });
 
+  // Regression: 0.5.15 codex round 1 [P2] — temp dir copy で相対 asset 参照が
+  // 壊れる事故 (CLI で `mdv convert` した時 ![logo](images/logo.png) が PDF に
+  // 含まれない)。--basedir で source dir を asset 解決 base に指定すれば
+  // temp で実行しつつ relative path も解決される。
+  it('exportMarkdownPdf preserves source-relative assets (--basedir hint)', { timeout: PDF_TEST_TIMEOUT_MS }, async () => {
+    const { exportMarkdownPdf } = await import('../src/services/pdf.js');
+    const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-asset-test-'));
+    try {
+      // 1x1 transparent PNG (binary) を asset として置く
+      const pngBytes = Buffer.from(
+        '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63000100000005000170d3e8a40000000049454e44ae426082',
+        'hex',
+      );
+      const imgRel = 'images/logo.png';
+      await fs.mkdir(path.join(sourceDir, 'images'));
+      await fs.writeFile(path.join(sourceDir, imgRel), pngBytes);
+      const mdPath = path.join(sourceDir, 'doc.md');
+      await fs.writeFile(mdPath, `# Hi\n\n![logo](${imgRel})\n`);
+      const outPath = path.join(sourceDir, 'out.pdf');
+
+      await exportMarkdownPdf(mdPath, outPath);
+
+      const buf = await fs.readFile(outPath);
+      assert.strictEqual(buf.slice(0, 4).toString(), '%PDF');
+      // 軽い間接チェック: PDF 内に画像オブジェクトが含まれるか
+      // (本格 OCR/画像抽出は重いので、PDF stream に "/Image" object と "PNG"
+      // marker が現れるか raw 検査)
+      const text = buf.toString('binary');
+      assert.ok(
+        text.includes('/Subtype /Image') || text.includes('/Image'),
+        'PDF should contain an embedded image object (relative asset preserved)',
+      );
+    } finally {
+      await fs.rm(sourceDir, { recursive: true, force: true });
+    }
+  });
+
   it('POST /api/pdf/export returns application/pdf for plain markdown (md-to-pdf path)', { timeout: PDF_TEST_TIMEOUT_MS }, async () => {
     const res = await fetch(`${baseUrl}/api/pdf/export`, {
       method: 'POST',
