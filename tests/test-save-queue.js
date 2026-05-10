@@ -212,4 +212,42 @@ describe('SaveQueue — Promise-returning enqueue', () => {
     await q.enqueue('a.md', 2, 'z', null);  // origin omitted
     assert.deepStrictEqual(calls, ['presenter', 'inline', undefined]);
   });
+
+  it('does NOT coalesce same-slide saves from different origins', async () => {
+    // Cross-origin coalescing would silently drop one editor's draft —
+    // an inline edit must not overwrite a pending presenter edit for
+    // the same slide and vice versa.
+    const calls = [];
+    const { createSaveQueue } = loadQueue();
+    const q = createSaveQueue({
+      saveFn: async (_p, idx, note, _etag, origin) => {
+        await new Promise((r) => setTimeout(r, 30));
+        calls.push({ idx, note, origin });
+        return { ok: true };
+      }
+    });
+    const p1 = q.enqueue('a.md', 0, 'pres-1', null, 'presenter'); // starts
+    await new Promise((r) => setImmediate(r));
+    const p2 = q.enqueue('a.md', 0, 'inline-1', null, 'inline');  // pending, separate key
+    const p3 = q.enqueue('a.md', 0, 'pres-2', null, 'presenter'); // coalesces p1's pending? — no, p1 is in-flight; this overwrites nothing yet, but if a NEW presenter pending existed, it would coalesce. Add a 4th to force coalesce within presenter origin only.
+    const p4 = q.enqueue('a.md', 0, 'pres-3', null, 'presenter'); // overwrites p3 (same key)
+    const r1 = await p1;
+    const r2 = await p2;
+    const r3 = await p3;
+    const r4 = await p4;
+    assert.strictEqual(r1.ok, true);
+    assert.strictEqual(r2.ok, true);
+    assert.strictEqual(r3.ok, false);
+    assert.strictEqual(r3.reason, 'COALESCED');
+    assert.strictEqual(r4.ok, true);
+    // Inline payload was NOT swallowed by the presenter saves.
+    const inlineCalls = calls.filter((c) => c.origin === 'inline');
+    assert.strictEqual(inlineCalls.length, 1);
+    assert.strictEqual(inlineCalls[0].note, 'inline-1');
+    // Presenter origin saw both pres-1 (in-flight) and pres-3 (coalesced
+    // winner).
+    const presenterCalls = calls.filter((c) => c.origin === 'presenter');
+    const presenterNotes = presenterCalls.map((c) => c.note).sort();
+    assert.deepStrictEqual(presenterNotes, ['pres-1', 'pres-3']);
+  });
 });
