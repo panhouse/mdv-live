@@ -2052,6 +2052,19 @@
                 });
                 return;
             }
+            // The clean-close path skips the confirm dialog entirely (no
+            // unsaved changes thanks to autosave). It still has to exit
+            // edit mode if we're closing the ACTIVE tab — otherwise
+            // state.isEditMode stays true, the next tab renders in edit
+            // mode (HTML files show source instead of preview, the
+            // toolbar / shortcuts misbehave), and a fresh edit session
+            // is needed to recover.
+            if (state.isEditMode && index === state.activeTabIndex) {
+                state.isEditMode = false;
+                EditorManager.updateButton();
+                EditorManager.cancelPendingAutosave();
+            }
+
             const closingPath = state.tabs[index] && state.tabs[index].path;
             state.tabs.splice(index, 1);
             if (closingPath && window.MDVTabRegistry) {
