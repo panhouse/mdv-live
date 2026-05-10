@@ -2171,15 +2171,23 @@
         // post-success "clear dirty / show Saved!" branch after the user
         // has already moved on to a different tab (the global
         // hasUnsavedChanges flag would clobber the new editor's state).
+        //
+        // The loop keeps draining until both the debounce queue and the
+        // in-flight chain are empty: while we await an in-flight POST
+        // the textarea is still editable, so a new keystroke can arm a
+        // fresh saveTimer. We have to re-check after each await or the
+        // tail of typing escapes the flush and the eventual save() call
+        // returns no-op because the textarea has been removed by the
+        // navigation that triggered us.
         async flushAutosave() {
-            if (this.saveTimer) {
-                clearTimeout(this.saveTimer);
-                this.saveTimer = null;
-                await this.save();
-            } else if (this.inFlight) {
-                // Debounce already fired; the POST is still pending.
-                // Wait for it to finish before we let navigation proceed.
-                try { await this.inFlight; } catch (_e) { /* ignore */ }
+            while (this.saveTimer || this.inFlight) {
+                if (this.saveTimer) {
+                    clearTimeout(this.saveTimer);
+                    this.saveTimer = null;
+                    await this.save();
+                } else {
+                    try { await this.inFlight; } catch (_e) { /* ignore */ }
+                }
             }
         },
 
