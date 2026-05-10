@@ -2214,15 +2214,35 @@
         // returns no-op because the textarea has been removed by the
         // navigation that triggered us.
         async flushAutosave() {
+            let lastError = null;
             while (this.saveTimer || this.inFlight) {
                 if (this.saveTimer) {
                     clearTimeout(this.saveTimer);
                     this.saveTimer = null;
-                    await this.save();
+                    try {
+                        await this.save();
+                    } catch (e) {
+                        // First failure aborts the drain. Re-trying
+                        // the same chain would just replay the failure
+                        // and risk an infinite loop if the user keeps
+                        // typing. The next input will arm a fresh
+                        // saveTimer and we can flush again on the next
+                        // navigation attempt.
+                        lastError = e;
+                        break;
+                    }
                 } else {
-                    try { await this.inFlight; } catch (_e) { /* ignore */ }
+                    try {
+                        await this.inFlight;
+                    } catch (e) {
+                        lastError = e;
+                        break;
+                    }
                 }
             }
+            // Propagate so navigation callers (hide / switch / open) can
+            // bail out instead of silently dropping the user's buffer.
+            if (lastError) throw lastError;
         },
 
         updateButton() {
