@@ -2021,6 +2021,10 @@
                         state.hasUnsavedChanges = false;
                         state.isEditMode = false;
                         EditorManager.updateButton();
+                        // Drop the pending debounce so a queued autosave
+                        // can't fire after the tab is gone and persist
+                        // text the user explicitly chose to discard.
+                        EditorManager.cancelPendingAutosave();
                         TabManager.close(index);
                     }
                 });
@@ -2146,6 +2150,18 @@
                 this.saveTimer = null;
                 this.save();
             }, EDITOR_AUTOSAVE_DEBOUNCE_MS);
+        },
+
+        // Cancel a pending debounce so a discard-on-close (or any other
+        // explicit discard) is honored. Cannot abort a save that has
+        // already left for the network — that would require AbortController
+        // plumbing in MDVApi.saveFile — but stops the more common
+        // "still in the debounce window" leak.
+        cancelPendingAutosave() {
+            if (this.saveTimer) {
+                clearTimeout(this.saveTimer);
+                this.saveTimer = null;
+            }
         },
 
         // Flush a pending autosave NOW (instead of waiting for the
