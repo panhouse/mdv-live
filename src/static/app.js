@@ -861,7 +861,11 @@
                 this.setStatus(editor, '保存失敗: queue 未初期化', 'err');
                 return;
             }
-            const result = await saveQueue.enqueue(path, idx, value, etag);
+            // Tag the request as 'inline' so the Presenter window's
+            // note-saved handler ignores it (otherwise an inline save
+            // would overwrite the Presenter's pinned editingEtag and
+            // skip the STALE conflict its next autosave should hit).
+            const result = await saveQueue.enqueue(path, idx, value, etag, 'inline');
 
             // The user may have switched tabs while the save was in flight.
             // Only touch DOM/UI for the deck we actually saved against —
@@ -1203,12 +1207,18 @@
             // save when there has been no external watcher update. If an
             // external edit arrives, fallback to the originally-pinned etag
             // so optimistic locking can detect the conflict via 412.
+            //
+            // The 5th arg (`origin`) tags whether the request came from
+            // the Presenter window or from the inline notes panel in this
+            // window — saveNote forwards it through note-saved so the
+            // Presenter can ignore broadcasts that aren't its own and
+            // refuse to rebase its editingEtag onto an inline save.
             this.saveQueue = window.MDVSaveQueue.createSaveQueue({
-                saveFn: (path, slideIndex, note, etag) => {
+                saveFn: (path, slideIndex, note, etag, origin) => {
                     const tab = state.tabs.find((t) => t.path === path);
                     const own = this.lastSavedEtag.get(path);
                     const useEtag = (tab && own && tab.etag === own) ? own : etag;
-                    return this.saveNote(path, slideIndex, note, useEtag);
+                    return this.saveNote(path, slideIndex, note, useEtag, origin);
                 }
             });
 
@@ -1220,7 +1230,9 @@
                     this.gotoSlide(msg.index);
                 } else if (msg.type === 'edit-note') {
                     if (!msg.path) return;
-                    this.saveQueue.enqueue(msg.path, msg.slideIndex, msg.note, msg.etag || null);
+                    this.saveQueue.enqueue(
+                        msg.path, msg.slideIndex, msg.note, msg.etag || null, 'presenter'
+                    );
                 }
             });
 
@@ -1246,11 +1258,26 @@
         // If-Match (NOT the live tab.etag) so a watcher refresh during the
         // debounce can't smuggle a write past the lock.
         //
+        // `origin` is forwarded into the note-saved broadcast so the
+        // Presenter window can refuse to advance its editingEtag onto a
+        // save that came from the inline panel (otherwise the Presenter's
+        // next autosave would skip the STALE conflict it should otherwise
+        // hit and silently overwrite the inline edit).
+        //
         // Returns { ok, etag?, normalizedNote?, reason?, code? } so saveQueue
         // can forward the result to enqueue() awaiters (the main-window inline
         // notes panel reads this). The presenter window still gets results via
         // the existing channel.postMessage('note-saved') broadcast.
-        async saveNote(path, slideIndex, note, editTimeEtag) {
+        async saveNote(path, slideIndex, note, editTimeEtag, origin) {
+            const broadcast = (payload) => {
+                this.channel.postMessage({
+                    type: 'note-saved',
+                    slideIndex,
+                    origin: origin || 'unknown',
+                    ...payload
+                });
+            };
+
             const tab = state.tabs.find((t) => t.path === path);
             if (!tab || !tab.isMarp) {
                 return { ok: false, reason: 'No active Marp tab' };
@@ -1262,9 +1289,7 @@
                     ok: false,
                     reason: 'Deck not parseable (degraded mode)'
                 };
-                this.channel.postMessage({
-                    type: 'note-saved', slideIndex, ...result
-                });
+                broadcast(result);
                 return result;
             }
 
@@ -1274,9 +1299,7 @@
             } catch (err) {
                 console.error('saveNote network error', err);
                 const result = { ok: false, reason: 'Network error' };
-                this.channel.postMessage({
-                    type: 'note-saved', slideIndex, ...result
-                });
+                broadcast(result);
                 return result;
             }
 
@@ -1293,9 +1316,7 @@
                     code: 'STALE',
                     reason: 'STALE — file changed externally; please reload'
                 };
-                this.channel.postMessage({
-                    type: 'note-saved', slideIndex, ...result
-                });
+                broadcast(result);
                 return result;
             }
 
@@ -1316,9 +1337,7 @@
                     etag: data.etag,
                     normalizedNote: data.normalizedNote
                 };
-                this.channel.postMessage({
-                    type: 'note-saved', slideIndex, ...result
-                });
+                broadcast(result);
                 // Re-broadcast so the presenter window picks up the new
                 // notes/etag without waiting for the watcher event.
                 this.broadcastSlides();
@@ -1327,9 +1346,7 @@
 
             const reason = data && (data.error || data.code) || 'Save failed';
             const result = { ok: false, reason };
-            this.channel.postMessage({
-                type: 'note-saved', slideIndex, ...result
-            });
+            broadcast(result);
             return result;
         },
 

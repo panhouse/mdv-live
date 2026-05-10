@@ -9,11 +9,13 @@
  *   { ok: false, reason: 'COALESCED' } so callers awaiting the older write
  *   can drop their stale UI state instead of hanging forever.
  * - Other slides' pending edits keep their place in insertion order.
- * - `saveFn(path, slideIndex, note, etag)` is supplied by the caller. Its
- *   resolved value (whatever shape) is forwarded to the enqueue() Promise.
+ * - `saveFn(path, slideIndex, note, etag, origin)` is supplied by the
+ *   caller; `origin` is an optional tag (e.g. 'presenter' / 'inline') that
+ *   the queue forwards verbatim so saveFn can route notifications back to
+ *   the right editor. Its resolved value is forwarded to enqueue().
  * - enqueue() returns a Promise that resolves with the saveFn's result (or a
- *   COALESCED sentinel). Existing callers that ignore the return value keep
- *   working unchanged.
+ *   COALESCED sentinel). Existing callers that ignore the return value or
+ *   skip the origin argument keep working unchanged.
  *
  * Loaded as a classic <script>; exposes window.MDVSaveQueue.
  */
@@ -21,10 +23,10 @@
   'use strict';
 
   function createSaveQueue({ saveFn }) {
-    /** @type {Map<string, { pendingBySlide: Map<number, {note:string, etag:string|null, resolve:Function}>, isDraining: boolean }>} */
+    /** @type {Map<string, { pendingBySlide: Map<number, {note:string, etag:string|null, origin:string|undefined, resolve:Function}>, isDraining: boolean }>} */
     const queue = new Map();
 
-    function enqueue(path, slideIndex, note, etag) {
+    function enqueue(path, slideIndex, note, etag, origin) {
       return new Promise((resolve) => {
         let entry = queue.get(path);
         if (!entry) {
@@ -35,7 +37,7 @@
         if (existing) {
           existing.resolve({ ok: false, reason: 'COALESCED' });
         }
-        entry.pendingBySlide.set(slideIndex, { note, etag, resolve });
+        entry.pendingBySlide.set(slideIndex, { note, etag, origin, resolve });
         if (!entry.isDraining) drain(path);
       });
     }
@@ -52,7 +54,9 @@
           entry.pendingBySlide.delete(slideIndex);
           let result;
           try {
-            result = await saveFn(path, slideIndex, payload.note, payload.etag);
+            result = await saveFn(
+              path, slideIndex, payload.note, payload.etag, payload.origin
+            );
           } catch (err) {
             console.error('saveQueue saveFn error', err);
             result = { ok: false, reason: String(err && err.message || err) };

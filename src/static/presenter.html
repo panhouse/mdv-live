@@ -536,10 +536,18 @@
     } else if (msg.type === 'note-saved') {
       const targetIdx = editingSlideIndex >= 0 ? editingSlideIndex : currentIndex;
       if (msg.slideIndex !== targetIdx) return;
-      // On our OWN successful save, advance editingEtag to the post-save
-      // etag so the next autosave in this focus session is not stale.
-      // External-edit broadcasts deliberately do NOT update editingEtag.
-      if (msg.ok && editing && msg.etag) editingEtag = msg.etag;
+      // Only OUR own successful saves should advance editingEtag. The
+      // inline notes panel in the main window goes through the same
+      // saveNote path and broadcasts the same shape; without this guard
+      // we'd rebase the presenter's pinned etag onto an inline save and
+      // the presenter's next autosave would silently overwrite the
+      // inline edit instead of returning a STALE conflict. Treat
+      // legacy/missing origin tags as our own to stay backwards-
+      // compatible with broadcasts from older builds.
+      const isOwnSave = !msg.origin
+        || msg.origin === 'presenter'
+        || msg.origin === 'unknown';
+      if (msg.ok && editing && isOwnSave && msg.etag) editingEtag = msg.etag;
 
       // STALE: back up the in-progress text to localStorage so the user can
       // recover after reloading the deck.

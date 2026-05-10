@@ -197,4 +197,19 @@ describe('SaveQueue — Promise-returning enqueue', () => {
     assert.strictEqual(result.ok, false);
     assert.match(String(result.reason), /network down/);
   });
+
+  it('forwards the origin tag from enqueue() to saveFn', async () => {
+    const calls = [];
+    const { createSaveQueue } = loadQueue();
+    const q = createSaveQueue({
+      saveFn: async (_p, _idx, _note, _etag, origin) => {
+        calls.push(origin);
+        return { ok: true };
+      }
+    });
+    await q.enqueue('a.md', 0, 'x', null, 'presenter');
+    await q.enqueue('a.md', 1, 'y', null, 'inline');
+    await q.enqueue('a.md', 2, 'z', null);  // origin omitted
+    assert.deepStrictEqual(calls, ['presenter', 'inline', undefined]);
+  });
 });
