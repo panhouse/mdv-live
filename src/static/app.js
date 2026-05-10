@@ -1208,16 +1208,25 @@
             // external edit arrives, fallback to the originally-pinned etag
             // so optimistic locking can detect the conflict via 412.
             //
-            // The 5th arg (`origin`) tags whether the request came from
-            // the Presenter window or from the inline notes panel in this
-            // window — saveNote forwards it through note-saved so the
-            // Presenter can ignore broadcasts that aren't its own and
-            // refuse to rebase its editingEtag onto an inline save.
+            // IMPORTANT: the rebase only applies to Presenter-originated
+            // saves. Inline-panel saves (origin === 'inline') always use
+            // the etag pinned at edit start so a concurrent presenter edit
+            // gets the STALE conflict it deserves. Without this guard a
+            // successful inline save would mark its post-save etag as
+            // "own" for the shared queue, and the presenter's next save
+            // would silently overwrite the inline edit.
+            //
+            // The 5th arg (`origin`) is forwarded to saveNote so the
+            // note-saved broadcast can be filtered correctly on the
+            // presenter side.
             this.saveQueue = window.MDVSaveQueue.createSaveQueue({
                 saveFn: (path, slideIndex, note, etag, origin) => {
-                    const tab = state.tabs.find((t) => t.path === path);
-                    const own = this.lastSavedEtag.get(path);
-                    const useEtag = (tab && own && tab.etag === own) ? own : etag;
+                    let useEtag = etag;
+                    if (origin !== 'inline') {
+                        const tab = state.tabs.find((t) => t.path === path);
+                        const own = this.lastSavedEtag.get(path);
+                        if (tab && own && tab.etag === own) useEtag = own;
+                    }
                     return this.saveNote(path, slideIndex, note, useEtag, origin);
                 }
             });
@@ -1326,7 +1335,14 @@
                 // immediately see the saved content. Otherwise raw/notes
                 // would lag until the watcher's file_update event arrives.
                 tab.etag = data.etag;
-                this.lastSavedEtag.set(path, data.etag);
+                // Only record the post-save etag as "ours" for presenter-
+                // originated saves. The saveQueue's rebase logic uses this
+                // map to chain consecutive presenter autosaves; recording
+                // an inline save here would let the presenter's NEXT save
+                // skip the STALE conflict and overwrite the inline edit.
+                if (origin !== 'inline') {
+                    this.lastSavedEtag.set(path, data.etag);
+                }
                 if (typeof data.source === 'string') tab.raw = data.source;
                 if (Array.isArray(data.notes)) tab.notes = data.notes;
                 if (Array.isArray(data.notesMultiplicity)) {
