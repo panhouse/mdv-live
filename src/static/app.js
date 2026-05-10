@@ -1195,7 +1195,12 @@
         channel: null,
         presenterWindow: null,
         saveQueue: null,            // MDVSaveQueue instance (created in init)
-        lastSavedEtag: new Map(),   // Map<path, etag> — own-save chain rebase
+        // Map<path, etag> — own-save chain rebase. We track presenter and
+        // inline saves separately so that a successful save from one editor
+        // doesn't let the other editor rebase past a stale pinned etag and
+        // silently overwrite the other editor's in-flight changes.
+        lastSavedEtag: new Map(),
+        lastSavedInlineEtag: new Map(),
 
         init() {
             if (typeof BroadcastChannel === 'undefined') return;
@@ -1222,11 +1227,17 @@
             this.saveQueue = window.MDVSaveQueue.createSaveQueue({
                 saveFn: (path, slideIndex, note, etag, origin) => {
                     let useEtag = etag;
-                    if (origin !== 'inline') {
-                        const tab = state.tabs.find((t) => t.path === path);
-                        const own = this.lastSavedEtag.get(path);
-                        if (tab && own && tab.etag === own) useEtag = own;
-                    }
+                    const tab = state.tabs.find((t) => t.path === path);
+                    // Pick the "own etag" map that matches this save's
+                    // origin, so a presenter save can't rebase past an
+                    // inline edit (and vice versa). The same-origin check
+                    // — `tab.etag === own` — is what tells us no other
+                    // editor wrote in between, making the rebase safe.
+                    const ownMap = origin === 'inline'
+                        ? this.lastSavedInlineEtag
+                        : this.lastSavedEtag;
+                    const own = ownMap.get(path);
+                    if (tab && own && tab.etag === own) useEtag = own;
                     return this.saveNote(path, slideIndex, note, useEtag, origin);
                 }
             });
@@ -1251,6 +1262,7 @@
                 window.MDVTabRegistry.onTabClosed((path) => {
                     if (this.saveQueue) this.saveQueue.dropPath(path);
                     this.lastSavedEtag.delete(path);
+                    this.lastSavedInlineEtag.delete(path);
                 });
             }
 
@@ -1335,12 +1347,15 @@
                 // immediately see the saved content. Otherwise raw/notes
                 // would lag until the watcher's file_update event arrives.
                 tab.etag = data.etag;
-                // Only record the post-save etag as "ours" for presenter-
-                // originated saves. The saveQueue's rebase logic uses this
-                // map to chain consecutive presenter autosaves; recording
-                // an inline save here would let the presenter's NEXT save
-                // skip the STALE conflict and overwrite the inline edit.
-                if (origin !== 'inline') {
+                // Track post-save etag separately per origin. The shared
+                // queue uses this map to rebase queued same-origin
+                // autosaves onto our own post-save etag (so a user typing
+                // continuously gets through), but recording into the OTHER
+                // origin's map would let it skip STALE and overwrite an
+                // in-flight edit from the concurrent editor.
+                if (origin === 'inline') {
+                    this.lastSavedInlineEtag.set(path, data.etag);
+                } else {
                     this.lastSavedEtag.set(path, data.etag);
                 }
                 if (typeof data.source === 'string') tab.raw = data.source;
