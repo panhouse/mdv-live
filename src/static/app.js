@@ -516,12 +516,21 @@
                 // blur will show fresh data; the presenter window still gets
                 // the broadcast and updates immediately because that path
                 // has its own `if (!editing)` guard.
+                //
+                // We mark a deferred render on the tab so that when the user
+                // blurs the editor (handleFocusOut → render hook), the slide
+                // SVGs catch up to whatever external edit landed during the
+                // edit session. Without this, an external write to the same
+                // file leaves the slide pane stale until the next full
+                // navigation.
                 if (InlineNotesPanel.editing
                     && InlineNotesPanel.editingPath === tab.path) {
+                    tab.pendingRender = true;
                     PresenterView.broadcastSlides();
                     return;
                 }
 
+                tab.pendingRender = false;
                 ContentRenderer.renderMarp(data.content, tab.css);
                 PresenterView.broadcastSlides();
             } else {
@@ -751,17 +760,16 @@
 
         // Build a panel for one slide. Caller appends it to the notes area.
         // The editor's text is set via textContent (NOT innerHTML) so a note
-        // containing HTML-like characters can never inject markup.
+        // containing HTML-like characters can never inject markup. Status
+        // (保存中… / 保存済み / 失敗) floats in the panel's top-right via CSS
+        // — no header chrome eats vertical space.
         buildPanel(slideIndex, noteText, multiplicity, hasEtag) {
             const canEdit = hasEtag && multiplicity <= 1;
             const panel = document.createElement('aside');
             panel.className = 'speaker-notes-panel';
             panel.dataset.slideIndex = String(slideIndex);
             panel.innerHTML = `
-                <header class="speaker-notes-header">
-                    <span>Slide ${slideIndex + 1}</span>
-                    <span class="speaker-notes-status" data-role="status"></span>
-                </header>
+                <span class="speaker-notes-status" data-role="status" aria-live="polite"></span>
                 <div class="speaker-notes-banner" data-role="banner" hidden></div>
                 <div class="speaker-notes-editor"
                      data-role="editor"
@@ -855,17 +863,26 @@
             }
             const result = await saveQueue.enqueue(path, idx, value, etag);
 
-            // While the save was in flight the user may have switched slides
-            // or tabs, removing this editor from the DOM. Re-resolve the
-            // editor each time we touch UI to avoid touching detached nodes.
-            const liveEditor = this.findEditor(idx);
+            // The user may have switched tabs while the save was in flight.
+            // Only touch DOM/UI for the deck we actually saved against —
+            // findEditor() runs against elements.content which always shows
+            // the active tab, so we must verify the active tab still matches
+            // `path` before treating the editor as ours. Otherwise a status
+            // string for deck A would land on deck B's panel and a STALE
+            // backup could be filled with text from the wrong deck.
+            const activeTab = state.tabs[state.activeTabIndex];
+            const activeTabMatches = !!(activeTab && activeTab.path === path);
+            const liveEditor = activeTabMatches ? this.findEditor(idx) : null;
             if (!result || result.reason === 'COALESCED') {
                 // A newer enqueue superseded us. The newer one will update
                 // status when it resolves; don't overwrite "保存中…" here.
                 return;
             }
             if (result.ok) {
-                if (this.editing && this.editingSlideIndex === idx && result.etag) {
+                if (this.editing
+                    && this.editingPath === path
+                    && this.editingSlideIndex === idx
+                    && result.etag) {
                     this.editingEtag = result.etag;
                 }
                 if (liveEditor) this.setStatus(liveEditor, '保存済み', 'ok', 1800);
@@ -874,12 +891,15 @@
                     || (typeof result.reason === 'string' && result.reason.indexOf('STALE') === 0);
                 if (isStale) {
                     // Back up the in-progress text so the user can recover
-                    // after reloading. Mirrors presenter.html behavior.
+                    // after reloading. Mirror presenter.html behavior. Use
+                    // the captured `value` (text we tried to save) — never
+                    // read from the live DOM here, because by the time we
+                    // resolve the user may have switched tabs and the
+                    // editor in the DOM belongs to a different deck.
                     try {
-                        const draft = liveEditor ? readEditableText(liveEditor) : value;
-                        if (draft) {
+                        if (value) {
                             const key = STORAGE_KEYS.NOTES_STALE_BACKUP + ':' + path + '#' + idx;
-                            localStorage.setItem(key, draft);
+                            localStorage.setItem(key, value);
                         }
                     } catch (e) { /* ignore */ }
                 }
@@ -945,11 +965,34 @@
         handleFocusOut: (event) => {
             const editor = event.target.closest('[data-role="editor"]');
             if (!editor) return;
+            const justEditedPath = InlineNotesPanel.editingPath;
             InlineNotesPanel.editing = false;
             InlineNotesPanel.flush();
             InlineNotesPanel.editingSlideIndex = -1;
             InlineNotesPanel.editingPath = '';
             InlineNotesPanel.editingEtag = null;
+
+            // If a watcher update arrived for this deck while the user was
+            // editing, we suppressed the re-render to avoid yanking their
+            // cursor. Now that focus is gone, catch the slide pane up.
+            // Defer to a microtask so the active blur completes first
+            // (re-rendering inside focusout can re-target focus weirdly in
+            // some browsers).
+            const tab = state.tabs[state.activeTabIndex];
+            if (tab && tab.isMarp
+                && tab.path === justEditedPath
+                && tab.pendingRender) {
+                tab.pendingRender = false;
+                queueMicrotask(() => {
+                    // Re-check before firing: the user could have switched
+                    // tabs in the same tick.
+                    const t = state.tabs[state.activeTabIndex];
+                    if (t && t.path === justEditedPath && t.isMarp) {
+                        ContentRenderer.renderMarp(t.content, t.css);
+                        PresenterView.broadcastSlides();
+                    }
+                });
+            }
         },
 
         handleInput: (event) => {
