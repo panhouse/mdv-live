@@ -1915,6 +1915,21 @@
                 return;
             }
 
+            // The not-yet-open path used to skip the outgoing-tab flush
+            // that switch() does. If the user types and then clicks a
+            // brand-new file within the 1.5s debounce, the textarea is
+            // ripped out before the timer fires and the last edits are
+            // lost. Mirror switch()'s outgoing flush + raw capture here.
+            if (state.activeTabIndex >= 0
+                && state.activeTabIndex < state.tabs.length
+                && state.isEditMode) {
+                await EditorManager.flushAutosave();
+                const outgoingTextarea = document.getElementById('editorTextarea');
+                if (outgoingTextarea) {
+                    state.tabs[state.activeTabIndex].raw = outgoingTextarea.value;
+                }
+            }
+
             const response = await MDVApi.fetchFile(path);
             const data = await response.json();
 
@@ -2103,9 +2118,13 @@
     const EditorManager = {
         // Debounced-autosave state. saveTimer is the pending input→save
         // schedule; savedStatusTimer auto-clears the "Saved!" toast so the
-        // toolbar doesn't pin a stale success message.
+        // toolbar doesn't pin a stale success message. inFlight serializes
+        // overlapping save() calls so a slow earlier POST can't reach the
+        // last-write-wins server endpoint after a faster newer POST and
+        // overwrite the user's newer text.
         saveTimer: null,
         savedStatusTimer: null,
+        inFlight: null,
 
         async toggle() {
             if (state.activeTabIndex < 0) return;
@@ -2317,6 +2336,14 @@
                 this.saveTimer = null;
             }
 
+            // Serialize against any in-flight save so overlapping POSTs
+            // can't reach the last-write-wins endpoint out of order.
+            // We swallow the prior save's rejection here — its own
+            // caller is the one responsible for surfacing it.
+            if (this.inFlight) {
+                try { await this.inFlight; } catch (_e) { /* ignore */ }
+            }
+
             const tab = state.tabs[state.activeTabIndex];
             // Use DOM presence (textarea exists), NOT state.isEditMode, as
             // the gate. toggle() flips isEditMode to false BEFORE awaiting
@@ -2329,6 +2356,7 @@
 
             const newContent = textarea.value;
 
+            this.inFlight = (async () => {
             try {
                 elements.editorStatus.textContent = 'Saving...';
                 elements.editorStatus.className = 'editor-status';
@@ -2374,6 +2402,12 @@
             } catch (e) {
                 elements.editorStatus.textContent = 'Error: ' + e.message;
                 elements.editorStatus.className = 'editor-status modified';
+            }
+            })();
+            try {
+                await this.inFlight;
+            } finally {
+                this.inFlight = null;
             }
         },
 
