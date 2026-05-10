@@ -1062,24 +1062,101 @@ body.marp-fullscreen .marpit > svg[data-marpit-svg] {
     display: none !important;
 }
 
-/* Inline speaker notes panel (under each Marp slide in the main view).
-   Visibility follows the .active SVG: only the panel that immediately
-   follows the active slide is shown. Other panels are kept in the DOM
-   but hidden so the contentEditable state and per-slide debounce timers
-   survive slide navigation. */
+/* PowerPoint-style split layout: slide on top, speaker notes on bottom,
+   draggable horizontal handle in between. The notes row's height is a
+   CSS variable (--marp-notes-row, default 240px) that JS updates while
+   dragging and persists in localStorage. Setting it to 0 effectively
+   "closes" the notes pane; dragging the handle to the very top maxes it
+   out. The slide row uses 1fr so it absorbs the remaining height — making
+   notes bigger automatically shrinks the slide. */
+.marp-split {
+    display: grid;
+    grid-template-rows: 1fr 8px var(--marp-notes-row, 240px);
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+}
+
+.marp-slide-area {
+    overflow: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    min-height: 0;
+}
+
+.marp-slide-area .marpit {
+    width: 100%;
+    max-height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.marp-slide-area .marpit > svg[data-marpit-svg] {
+    display: none;
+    max-width: 100%;
+    max-height: 100%;
+    height: auto;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+    border-radius: 4px;
+}
+
+.marp-slide-area .marpit > svg[data-marpit-svg].active {
+    display: block;
+}
+
+.marp-split-handle {
+    cursor: row-resize;
+    background: var(--border);
+    position: relative;
+    user-select: none;
+    transition: background 0.15s ease;
+}
+
+.marp-split-handle::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 60px;
+    height: 3px;
+    background: var(--text-muted);
+    border-radius: 2px;
+    opacity: 0.45;
+}
+
+.marp-split-handle:hover {
+    background: var(--accent);
+}
+
+.marp-split-handle:hover::before {
+    background: white;
+    opacity: 1;
+}
+
+.marp-split-handle.dragging {
+    background: var(--accent);
+}
+
+.marp-notes-area {
+    overflow: auto;
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border);
+    min-height: 0;
+}
+
 .speaker-notes-panel {
     display: none;
-    width: 100%;
-    margin: 16px 0 0;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    margin: 0;
+    padding: 12px 20px 20px;
     font-size: 14px;
     color: var(--text-primary);
 }
 
-.marpit > svg[data-marpit-svg].active + .speaker-notes-panel {
+.speaker-notes-panel.active {
     display: block;
 }
 
@@ -1087,43 +1164,11 @@ body.marp-fullscreen .marpit > svg[data-marpit-svg] {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 8px 14px;
-    border-bottom: 1px solid var(--border);
+    padding: 4px 0 8px;
     user-select: none;
-}
-
-.speaker-notes-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    background: transparent;
-    border: 0;
-    padding: 4px 6px;
-    margin: -4px -6px;
-    border-radius: 4px;
     color: var(--text-secondary);
-    cursor: pointer;
-    font: inherit;
     font-weight: 500;
-}
-
-.speaker-notes-toggle:hover {
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-}
-
-.speaker-notes-toggle svg {
-    width: 14px;
-    height: 14px;
-    transition: transform 0.15s ease;
-}
-
-.speaker-notes-panel.collapsed .speaker-notes-toggle svg {
-    transform: rotate(-90deg);
-}
-
-.speaker-notes-panel.collapsed .speaker-notes-body {
-    display: none;
+    font-size: 13px;
 }
 
 .speaker-notes-status {
@@ -1131,13 +1176,14 @@ body.marp-fullscreen .marpit > svg[data-marpit-svg] {
     font-size: 12px;
     color: var(--text-muted);
     min-height: 16px;
+    font-weight: 400;
 }
 
 .speaker-notes-status.ok { color: var(--success, #2da44e); }
 .speaker-notes-status.err { color: var(--danger, #c93636); }
 
 .speaker-notes-banner {
-    margin: 8px 14px 0;
+    margin: 0 0 8px;
     padding: 8px 12px;
     background: rgba(232, 152, 50, 0.12);
     color: #c8851e;
@@ -1149,14 +1195,11 @@ body.marp-fullscreen .marpit > svg[data-marpit-svg] {
 
 .speaker-notes-banner[hidden] { display: none; }
 
-.speaker-notes-body {
-    padding: 12px 16px 14px;
-}
-
 .speaker-notes-editor {
     min-height: 60px;
-    padding: 8px 10px;
-    border: 1px solid transparent;
+    padding: 10px 12px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
     border-radius: 4px;
     line-height: 1.7;
     white-space: pre-wrap;
@@ -1169,12 +1212,13 @@ body.marp-fullscreen .marpit > svg[data-marpit-svg] {
 
 .speaker-notes-editor:focus {
     border-color: var(--accent);
-    background: var(--bg-primary);
+    box-shadow: 0 0 0 2px rgba(79, 140, 255, 0.15);
 }
 
 .speaker-notes-editor[contenteditable="false"] {
     cursor: default;
     color: var(--text-muted);
+    background: var(--bg-tertiary);
 }
 
 /* CSS pseudo-element placeholder — never enters textContent so editing
@@ -1186,31 +1230,53 @@ body.marp-fullscreen .marpit > svg[data-marpit-svg] {
     pointer-events: none;
 }
 
-body.marp-fullscreen .speaker-notes-panel {
+body.marp-fullscreen .marp-split {
+    grid-template-rows: 1fr 0 0;
+}
+
+body.marp-fullscreen .marp-split-handle,
+body.marp-fullscreen .marp-notes-area {
     display: none !important;
 }
 
 /* Print styles for Marp */
 @media print {
-    .marp-nav { display: none !important; }
+    .marp-nav,
+    .marp-split-handle,
+    .marp-notes-area,
     .speaker-notes-panel { display: none !important; }
+
+    .marp-split {
+        display: block !important;
+        height: auto !important;
+        overflow: visible !important;
+    }
+
+    .marp-slide-area {
+        display: block !important;
+        overflow: visible !important;
+        padding: 0 !important;
+    }
 
     .marpit {
         padding: 0 !important;
         background: transparent !important;
     }
 
+    .marp-slide-area .marpit > svg[data-marpit-svg],
     .marpit > svg[data-marpit-svg] {
         display: block !important;
         width: 100% !important;
         height: auto !important;
         max-width: none !important;
+        max-height: none !important;
         box-shadow: none !important;
         border-radius: 0 !important;
         page-break-after: always;
         page-break-inside: avoid;
     }
 
+    .marp-slide-area .marpit > svg[data-marpit-svg]:last-child,
     .marpit > svg[data-marpit-svg]:last-child { page-break-after: avoid; }
 
     .marp-presentation { height: auto !important; }

@@ -14,11 +14,15 @@
         SIDEBAR_WIDTH: 'mdv-sidebar-width',
         PDF_STYLE_PATH: 'mdv-pdf-style-path',
         PDF_OPTIONS_PATH: 'mdv-pdf-options-path',
-        NOTES_PANEL_COLLAPSED: 'mdv-notes-panel-collapsed',
+        NOTES_ROW_PX: 'mdv-notes-row-px',
         NOTES_STALE_BACKUP: 'mdv-notes-stale-backup'
     };
 
     const NOTES_AUTOSAVE_DEBOUNCE_MS = 800;
+    const NOTES_ROW_DEFAULT_PX = 240;
+    const NOTES_ROW_MIN_PX = 0;
+    const SPLIT_HANDLE_PX = 8;
+    const SLIDE_ROW_MIN_PX = 80;
 
     const HLJS_THEMES = {
         light: 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css',
@@ -735,8 +739,6 @@
         return out.replace(/\n+$/, '');
     }
 
-    const TOGGLE_CHEVRON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>';
-
     const InlineNotesPanel = {
         attached: false,
         editing: false,
@@ -747,40 +749,26 @@
         // Auto-clear save status text after a delay (one timer per slide).
         statusClearTimers: new Map(),
 
-        getCollapsedDefault() {
-            return localStorage.getItem(STORAGE_KEYS.NOTES_PANEL_COLLAPSED) === '1';
-        },
-
-        setCollapsed(collapsed) {
-            localStorage.setItem(STORAGE_KEYS.NOTES_PANEL_COLLAPSED, collapsed ? '1' : '0');
-        },
-
-        // Build a panel for one slide. Caller appends it as a sibling of the
-        // SVG. The editor's text is set via textContent (NOT innerHTML) so a
-        // note containing HTML-like characters can never inject markup.
-        buildPanel(slideIndex, noteText, multiplicity, hasEtag, collapsedDefault) {
+        // Build a panel for one slide. Caller appends it to the notes area.
+        // The editor's text is set via textContent (NOT innerHTML) so a note
+        // containing HTML-like characters can never inject markup.
+        buildPanel(slideIndex, noteText, multiplicity, hasEtag) {
             const canEdit = hasEtag && multiplicity <= 1;
             const panel = document.createElement('aside');
             panel.className = 'speaker-notes-panel';
-            if (collapsedDefault) panel.classList.add('collapsed');
             panel.dataset.slideIndex = String(slideIndex);
             panel.innerHTML = `
                 <header class="speaker-notes-header">
-                    <button class="speaker-notes-toggle" type="button" aria-expanded="${collapsedDefault ? 'false' : 'true'}">
-                        ${TOGGLE_CHEVRON_SVG}
-                        <span>Speaker notes</span>
-                    </button>
+                    <span>Slide ${slideIndex + 1}</span>
                     <span class="speaker-notes-status" data-role="status"></span>
                 </header>
                 <div class="speaker-notes-banner" data-role="banner" hidden></div>
-                <div class="speaker-notes-body">
-                    <div class="speaker-notes-editor"
-                         data-role="editor"
-                         data-placeholder="（ノートなし）"
-                         spellcheck="false"
-                         role="textbox"
-                         aria-label="Speaker notes for slide ${slideIndex + 1}"></div>
-                </div>
+                <div class="speaker-notes-editor"
+                     data-role="editor"
+                     data-placeholder="（ノートなし）"
+                     spellcheck="false"
+                     role="textbox"
+                     aria-label="Speaker notes for slide ${slideIndex + 1}"></div>
             `;
             const editor = panel.querySelector('[data-role="editor"]');
             editor.textContent = noteText || '';
@@ -807,7 +795,6 @@
             elements.content.addEventListener('focusin', this.handleFocusIn);
             elements.content.addEventListener('focusout', this.handleFocusOut);
             elements.content.addEventListener('input', this.handleInput);
-            elements.content.addEventListener('click', this.handleClick);
             elements.content.addEventListener('keydown', this.handleKeydown);
             this.attached = true;
         },
@@ -821,7 +808,6 @@
             elements.content.removeEventListener('focusin', this.handleFocusIn);
             elements.content.removeEventListener('focusout', this.handleFocusOut);
             elements.content.removeEventListener('input', this.handleInput);
-            elements.content.removeEventListener('click', this.handleClick);
             elements.content.removeEventListener('keydown', this.handleKeydown);
             this.attached = false;
             this.statusClearTimers.forEach((t) => clearTimeout(t));
@@ -939,23 +925,6 @@
 
         // ----- Event handlers (arrow funcs to keep `this` bound) -----------
 
-        handleClick: (event) => {
-            const toggle = event.target.closest('.speaker-notes-toggle');
-            if (!toggle) return;
-            const panel = toggle.closest('.speaker-notes-panel');
-            if (!panel) return;
-            const collapsed = !panel.classList.contains('collapsed');
-            // Apply to ALL panels at once: the user expects the per-slide
-            // panels to share a single open/closed state, not flip-flop as
-            // they navigate. localStorage persists the choice across reloads.
-            elements.content.querySelectorAll('.speaker-notes-panel').forEach((p) => {
-                p.classList.toggle('collapsed', collapsed);
-                const btn = p.querySelector('.speaker-notes-toggle');
-                if (btn) btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-            });
-            InlineNotesPanel.setCollapsed(collapsed);
-        },
-
         handleFocusIn: (event) => {
             const editor = event.target.closest('[data-role="editor"]');
             if (!editor) return;
@@ -1013,6 +982,118 @@
             const editor = event.target.closest('[data-role="editor"]');
             if (!editor) return;
             event.stopPropagation();
+        }
+    };
+
+    // ============================================================
+    // Marp Split-Pane Drag Handle (PowerPoint-style)
+    // ============================================================
+
+    // Drives the horizontal divider between the slide pane and the speaker
+    // notes pane. The notes-row height is a CSS custom property so that
+    // CSS Grid (.marp-split) automatically reflows the slide row to occupy
+    // the remaining space. Persisted in localStorage so the chosen ratio
+    // survives reloads / tab switches.
+    const MarpSplitHandle = {
+        dragging: false,
+        startY: 0,
+        startNotesPx: 0,
+        splitEl: null,
+        handleEl: null,
+        // Bound listener references — module-level so we can detach the
+        // exact same function instance even if attach() is called twice.
+        onMouseMove: null,
+        onMouseUp: null,
+
+        getSavedNotesPx() {
+            const raw = localStorage.getItem(STORAGE_KEYS.NOTES_ROW_PX);
+            if (raw === null) return NOTES_ROW_DEFAULT_PX;
+            const n = parseFloat(raw);
+            if (!Number.isFinite(n) || n < 0) return NOTES_ROW_DEFAULT_PX;
+            return n;
+        },
+
+        setNotesPx(px) {
+            if (!this.splitEl) return;
+            this.splitEl.style.setProperty('--marp-notes-row', `${px}px`);
+        },
+
+        clampNotesPx(notesPx, totalHeight) {
+            const max = Math.max(0, totalHeight - SPLIT_HANDLE_PX - SLIDE_ROW_MIN_PX);
+            if (notesPx < NOTES_ROW_MIN_PX) return NOTES_ROW_MIN_PX;
+            if (notesPx > max) return max;
+            return notesPx;
+        },
+
+        attach(splitEl, handleEl) {
+            this.detach();
+            this.splitEl = splitEl;
+            this.handleEl = handleEl;
+            this.setNotesPx(this.getSavedNotesPx());
+
+            this.onMouseMove = (e) => {
+                if (!this.dragging) return;
+                const dy = e.clientY - this.startY;
+                const totalHeight = this.splitEl.getBoundingClientRect().height;
+                const next = this.clampNotesPx(this.startNotesPx - dy, totalHeight);
+                this.setNotesPx(next);
+            };
+            this.onMouseUp = () => {
+                if (!this.dragging) return;
+                this.dragging = false;
+                this.handleEl.classList.remove('dragging');
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+                // Persist the resolved px (read from CSS var, not the drag
+                // delta) so a clamp at the edge is what we save, not the
+                // unbounded value.
+                const computed = getComputedStyle(this.splitEl)
+                    .getPropertyValue('--marp-notes-row');
+                const px = parseFloat(computed) || NOTES_ROW_DEFAULT_PX;
+                localStorage.setItem(STORAGE_KEYS.NOTES_ROW_PX, String(px));
+            };
+
+            handleEl.addEventListener('mousedown', this.onMouseDown);
+            handleEl.addEventListener('dblclick', this.onDoubleClick);
+            document.addEventListener('mousemove', this.onMouseMove);
+            document.addEventListener('mouseup', this.onMouseUp);
+        },
+
+        detach() {
+            if (this.handleEl) {
+                this.handleEl.removeEventListener('mousedown', this.onMouseDown);
+                this.handleEl.removeEventListener('dblclick', this.onDoubleClick);
+            }
+            if (this.onMouseMove) document.removeEventListener('mousemove', this.onMouseMove);
+            if (this.onMouseUp) document.removeEventListener('mouseup', this.onMouseUp);
+            this.dragging = false;
+            this.splitEl = null;
+            this.handleEl = null;
+            this.onMouseMove = null;
+            this.onMouseUp = null;
+        },
+
+        onMouseDown: (e) => {
+            const self = MarpSplitHandle;
+            if (!self.splitEl || !self.handleEl) return;
+            self.dragging = true;
+            self.startY = e.clientY;
+            const computed = getComputedStyle(self.splitEl)
+                .getPropertyValue('--marp-notes-row');
+            self.startNotesPx = parseFloat(computed) || NOTES_ROW_DEFAULT_PX;
+            self.handleEl.classList.add('dragging');
+            document.body.style.cursor = 'row-resize';
+            document.body.style.userSelect = 'none';
+            e.preventDefault();
+        },
+
+        onDoubleClick: () => {
+            const self = MarpSplitHandle;
+            self.setNotesPx(NOTES_ROW_DEFAULT_PX);
+            localStorage.setItem(
+                STORAGE_KEYS.NOTES_ROW_PX,
+                String(NOTES_ROW_DEFAULT_PX)
+            );
         }
     };
 
@@ -1221,6 +1302,10 @@
             const slides = elements.content.querySelectorAll('.marpit > svg[data-marpit-svg]');
             if (!slides.length || index < 0 || index >= slides.length) return;
             slides.forEach((s, i) => s.classList.toggle('active', i === index));
+            const panels = elements.content.querySelectorAll(
+                '#marpNotesArea > .speaker-notes-panel'
+            );
+            panels.forEach((p, i) => p.classList.toggle('active', i === index));
             marpCurrentSlide = index;
             const counter = elements.content.querySelector('.slide-counter');
             if (counter) counter.textContent = `${index + 1} / ${slides.length}`;
@@ -1264,89 +1349,57 @@
                 // Add new Marp style with navigation overrides
                 const style = document.createElement('style');
                 style.id = 'marp-style';
-                // Add slide navigation CSS.
-                // Slide + notes panel use the full content width; the bottom
-                // nav is `position: fixed` and given a translucent background
-                // so it floats above the slide / notes without forcing a
-                // narrow column. padding-bottom: 110px reserves a strip at
-                // the bottom so the nav doesn't sit on top of the last line
-                // of speaker notes when the user has scrolled to the end.
-                const navOverrides = `
-                    /* Marp slide navigation */
-                    .marpit {
-                        position: relative;
-                        display: flex;
-                        flex-direction: column;
-                        align-items: stretch;
-                        padding: 20px;
-                        padding-bottom: 110px;
-                    }
-                    .marpit > svg[data-marpit-svg] {
-                        display: none;
-                        max-width: 100%;
-                        height: auto;
-                        box-shadow: 0 4px 20px rgba(0,0,0,0.15);
-                        border-radius: 4px;
-                    }
-                    .marpit > svg[data-marpit-svg].active {
-                        display: block;
-                    }
-                    @media print {
-                        .marpit {
-                            padding: 0 !important;
-                            background: transparent !important;
-                        }
-                        .marpit > svg[data-marpit-svg] {
-                            display: block !important;
-                            width: 100% !important;
-                            height: auto !important;
-                            max-width: none !important;
-                            box-shadow: none !important;
-                            border-radius: 0 !important;
-                            page-break-after: always;
-                            page-break-inside: avoid;
-                        }
-                        .marpit > svg[data-marpit-svg]:last-child {
-                            page-break-after: avoid;
-                        }
-                        .marp-nav { display: none !important; }
-                    }
-                `;
-                style.textContent = css + navOverrides;
+                // marp-core's per-deck CSS is injected unmodified; the split
+                // layout / responsive sizing rules live in styles.css so they
+                // load once and don't need to be repeated per render.
+                style.textContent = css;
                 document.head.appendChild(style);
             }
 
-            elements.content.innerHTML = htmlContent;
+            // PowerPoint-style split: top = slide stage, bottom = notes
+            // editor, with a draggable horizontal handle between them. The
+            // marp-core HTML (`<div class="marpit">…</div>`) lives inside
+            // .marp-slide-area; speaker-notes panels stack inside
+            // .marp-notes-area and the active one is shown via JS.
+            elements.content.innerHTML = `
+                <div class="marp-split" id="marpSplit">
+                    <div class="marp-slide-area" id="marpSlideArea">${htmlContent}</div>
+                    <div class="marp-split-handle" id="marpSplitHandle" title="ドラッグでスライド/ノートの比率を変更（ダブルクリックでリセット）"></div>
+                    <div class="marp-notes-area" id="marpNotesArea"></div>
+                </div>
+            `;
 
-            // Insert speaker-notes panels under each slide (main view).
-            // Panel visibility is driven by the .active SVG sibling rule in
-            // styles.css, so we don't need extra JS to keep them in sync
-            // when slide navigation flips .active classes around.
             const marpit = elements.content.querySelector('.marpit');
-            if (marpit) {
+            const notesArea = document.getElementById('marpNotesArea');
+            if (marpit && notesArea) {
                 const tab = state.tabs[state.activeTabIndex];
                 const notes = (tab && Array.isArray(tab.notes)) ? tab.notes : [];
                 const multiplicity = (tab && Array.isArray(tab.notesMultiplicity))
                     ? tab.notesMultiplicity : [];
                 const hasEtag = !!(tab && tab.etag);
-                const collapsedDefault = InlineNotesPanel.getCollapsedDefault();
                 const svgs = marpit.querySelectorAll('svg[data-marpit-svg]');
-                svgs.forEach((svg, i) => {
+                svgs.forEach((_svg, i) => {
                     const panel = InlineNotesPanel.buildPanel(
                         i,
                         notes[i] || '',
                         multiplicity[i] || 0,
-                        hasEtag,
-                        collapsedDefault
+                        hasEtag
                     );
-                    // svg.nextSibling is null for the last slide → equivalent
-                    // to appendChild, which is the layout we want.
-                    marpit.insertBefore(panel, svg.nextSibling);
+                    notesArea.appendChild(panel);
                 });
                 InlineNotesPanel.attach();
             }
 
-            // Add navigation controls to marpit container
+            // Wire up the split-pane drag handle.
+            const splitEl = document.getElementById('marpSplit');
+            const handleEl = document.getElementById('marpSplitHandle');
+            if (splitEl && handleEl) {
+                MarpSplitHandle.attach(splitEl, handleEl);
+            }
+
+            // Add navigation controls. The nav is appended to .content (NOT
+            // marpit) so its `position: fixed` doesn't get clipped by the
+            // grid container's overflow:hidden rule.
             if (marpit) {
                 const nav = document.createElement('div');
                 nav.className = 'marp-nav';
@@ -1378,7 +1431,10 @@
                         </svg>
                     </button>
                 `;
-                marpit.appendChild(nav);
+                // Append to .content directly (NOT marpit) so it sits
+                // outside .marp-split — fixed positioning + overflow:hidden
+                // on the grid container would otherwise interact poorly.
+                elements.content.appendChild(nav);
             }
 
             // Initialize slide navigation
@@ -1407,9 +1463,18 @@
                 marpCurrentSlide = 0;
             }
 
+            // Cache the panels alongside the slides so flipping the active
+            // class is one DOM read instead of a fresh query per click.
+            const panels = elements.content.querySelectorAll(
+                '#marpNotesArea > .speaker-notes-panel'
+            );
+
             const showSlide = (index) => {
                 slides.forEach((slide, i) => {
                     slide.classList.toggle('active', i === index);
+                });
+                panels.forEach((panel, i) => {
+                    panel.classList.toggle('active', i === index);
                 });
                 marpCurrentSlide = index;
                 if (counter) {
@@ -1555,6 +1620,7 @@
             // Flush + detach BEFORE the DOM is wiped so a pending
             // 800ms save timer doesn't fire after the editor element is gone.
             InlineNotesPanel.detach();
+            MarpSplitHandle.detach();
             elements.content.classList.remove('marp-viewer');
             document.body.classList.remove('marp-fullscreen');
             if (marpKeyHandler) {
