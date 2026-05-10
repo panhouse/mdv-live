@@ -1923,6 +1923,7 @@
             // including the abort-on-flush-failure behavior so a failed
             // save doesn't quietly kick the user off the tab they were
             // editing.
+            let outgoingTextarea = null;
             if (state.activeTabIndex >= 0
                 && state.activeTabIndex < state.tabs.length
                 && state.isEditMode) {
@@ -1931,7 +1932,7 @@
                 } catch (_e) {
                     return;
                 }
-                const outgoingTextarea = document.getElementById('editorTextarea');
+                outgoingTextarea = document.getElementById('editorTextarea');
                 if (outgoingTextarea) {
                     state.tabs[state.activeTabIndex].raw = outgoingTextarea.value;
                     // Lock the editor while the new file loads. Without
@@ -1943,10 +1944,24 @@
                 }
             }
 
-            const response = await MDVApi.fetchFile(path);
-            const data = await response.json();
+            // Always restore the outgoing textarea's editability if we
+            // bail out below. On the success path the textarea will be
+            // wiped by render() anyway, so the unlock is harmless then.
+            const unlockOnFailure = () => {
+                if (outgoingTextarea) outgoingTextarea.readOnly = false;
+            };
+
+            let response, data;
+            try {
+                response = await MDVApi.fetchFile(path);
+                data = await response.json();
+            } catch (e) {
+                unlockOnFailure();
+                throw e;
+            }
 
             if (data.error) {
+                unlockOnFailure();
                 alert('Error: ' + data.error);
                 return;
             }
@@ -2181,11 +2196,16 @@
         // overwrite the user's newer text. saveAbortController abort()s
         // every save sharing the chain, so an explicit discard (close-
         // without-saving) can cancel an in-flight POST instead of letting
-        // it persist text the user just discarded.
+        // it persist text the user just discarded. lastAutosaveError
+        // remembers a failure that was thrown from a debounce-fired save
+        // (whose own caller silently caught it because the toolbar
+        // status had already been updated) so a later flushAutosave for
+        // navigation can refuse to drop the user's buffer.
         saveTimer: null,
         savedStatusTimer: null,
         inFlight: null,
         saveAbortController: null,
+        lastAutosaveError: null,
 
         async toggle() {
             if (state.activeTabIndex < 0) return;
@@ -2245,6 +2265,14 @@
         // returns no-op because the textarea has been removed by the
         // navigation that triggered us.
         async flushAutosave() {
+            // Surface a previously-silenced autosave failure first.
+            // If the last debounce-fired save threw and nobody else
+            // has seen it (its caller .catch'd silently), we MUST
+            // throw before letting navigation continue — otherwise
+            // hide() would refetch over the unsaved buffer.
+            if (this.lastAutosaveError) {
+                throw this.lastAutosaveError;
+            }
             let lastError = null;
             while (this.saveTimer || this.inFlight) {
                 if (this.saveTimer) {
@@ -2578,6 +2606,9 @@
                             }, 2000);
                         }
                     }
+                    // Whatever earlier failure we may have remembered is
+                    // moot now — the chain went through.
+                    self.lastAutosaveError = null;
                 } catch (e) {
                     // Abort is intentional (discard-on-close cancelled
                     // us). Don't treat that as a failure.
@@ -2587,6 +2618,15 @@
                         elements.editorStatus.textContent = 'Error: ' + e.message;
                         elements.editorStatus.className = 'editor-status modified';
                     }
+                    // Remember the failure so a later flushAutosave —
+                    // even one fired AFTER saveTimer/inFlight have both
+                    // settled — can surface it. Without this a debounced
+                    // save that fails silently (its caller's `.catch(()
+                    // => {})`) would leave hasUnsavedChanges=true with
+                    // no observable error, and hide()'s subsequent flush
+                    // would return success and refetch the on-disk file
+                    // over the user's unsaved buffer.
+                    self.lastAutosaveError = e;
                     // Re-throw so a flushAutosave caller (hide / switch /
                     // open / Cmd+S) can react and refuse to discard the
                     // unsaved buffer.
