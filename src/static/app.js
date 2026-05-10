@@ -2149,13 +2149,21 @@
         },
 
         // Flush a pending autosave NOW (instead of waiting for the
-        // debounce timer). Used by Cmd+S and by hide() so leaving edit
-        // mode never silently drops the last unsaved keystrokes.
+        // debounce timer). Used by Cmd+S, hide(), and tab switching so
+        // leaving edit mode never silently drops the last unsaved
+        // keystrokes — and so a slow in-flight save can't run its
+        // post-success "clear dirty / show Saved!" branch after the user
+        // has already moved on to a different tab (the global
+        // hasUnsavedChanges flag would clobber the new editor's state).
         async flushAutosave() {
             if (this.saveTimer) {
                 clearTimeout(this.saveTimer);
                 this.saveTimer = null;
                 await this.save();
+            } else if (this.inFlight) {
+                // Debounce already fired; the POST is still pending.
+                // Wait for it to finish before we let navigation proceed.
+                try { await this.inFlight; } catch (_e) { /* ignore */ }
             }
         },
 
