@@ -123,3 +123,78 @@ describe('SaveQueue — coalesce + serialization', () => {
     assert.deepStrictEqual(calls, [1]);
   });
 });
+
+describe('SaveQueue — Promise-returning enqueue', () => {
+  // Note: createSaveQueue runs inside a vm sandbox, so objects it returns
+  // (saveFn results, COALESCED/DROPPED sentinels) have a different
+  // Object.prototype than the test's main realm. assert.deepStrictEqual
+  // therefore rejects structurally-equal values as "not reference-equal".
+  // We compare fields individually with strictEqual instead.
+
+  it('resolves enqueue() with the saveFn return value', async () => {
+    const { createSaveQueue } = loadQueue();
+    const q = createSaveQueue({
+      saveFn: async () => ({ ok: true, etag: '"abc"' })
+    });
+    const result = await q.enqueue('a.md', 0, 'hello', null);
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.etag, '"abc"');
+  });
+
+  it('resolves the superseded enqueue() with COALESCED when overwritten', async () => {
+    const { createSaveQueue } = loadQueue();
+    const q = createSaveQueue({
+      saveFn: async (_p, _idx, note) => {
+        // Slow enough that a 2nd enqueue arrives while 1st is in-flight.
+        await new Promise((r) => setTimeout(r, 30));
+        return { ok: true, savedNote: note };
+      }
+    });
+    const p1 = q.enqueue('a.md', 0, 'first', null); // starts immediately
+    await new Promise((r) => setImmediate(r));
+    const p2 = q.enqueue('a.md', 0, 'second', null); // sits pending
+    const p3 = q.enqueue('a.md', 0, 'third', null);  // supersedes p2
+    const r1 = await p1;
+    const r2 = await p2;
+    const r3 = await p3;
+    // p1 actually ran. p2 was overwritten by p3 → COALESCED.
+    assert.strictEqual(r1.ok, true);
+    assert.strictEqual(r1.savedNote, 'first');
+    assert.strictEqual(r2.ok, false);
+    assert.strictEqual(r2.reason, 'COALESCED');
+    assert.strictEqual(r3.ok, true);
+    assert.strictEqual(r3.savedNote, 'third');
+  });
+
+  it('dropPath rejects pending enqueues with DROPPED', async () => {
+    const { createSaveQueue } = loadQueue();
+    const q = createSaveQueue({
+      saveFn: async () => {
+        await new Promise((r) => setTimeout(r, 30));
+        return { ok: true };
+      }
+    });
+    // Slide 0 starts immediately and runs to completion.
+    const p0 = q.enqueue('a.md', 0, 'running', null);
+    await new Promise((r) => setImmediate(r));
+    // Slide 1 sits pending behind slide 0.
+    const p1 = q.enqueue('a.md', 1, 'pending', null);
+    q.dropPath('a.md');
+    const r1 = await p1;
+    assert.strictEqual(r1.ok, false);
+    assert.strictEqual(r1.reason, 'DROPPED');
+    // The in-flight save for slide 0 still completes normally.
+    const r0 = await p0;
+    assert.strictEqual(r0.ok, true);
+  });
+
+  it('resolves enqueue() with an error result when saveFn throws', async () => {
+    const { createSaveQueue } = loadQueue();
+    const q = createSaveQueue({
+      saveFn: async () => { throw new Error('network down'); }
+    });
+    const result = await q.enqueue('a.md', 0, 'x', null);
+    assert.strictEqual(result.ok, false);
+    assert.match(String(result.reason), /network down/);
+  });
+});

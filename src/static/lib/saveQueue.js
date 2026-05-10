@@ -5,8 +5,15 @@
  *   a per-path mutex, but client-side serialization keeps user-visible
  *   ordering intuitive).
  * - New edits for the same slideIndex overwrite any pending value (coalesce).
+ *   When coalesced, the superseded enqueue() Promise resolves with
+ *   { ok: false, reason: 'COALESCED' } so callers awaiting the older write
+ *   can drop their stale UI state instead of hanging forever.
  * - Other slides' pending edits keep their place in insertion order.
- * - `saveFn(path, slideIndex, note, etag)` is supplied by the caller.
+ * - `saveFn(path, slideIndex, note, etag)` is supplied by the caller. Its
+ *   resolved value (whatever shape) is forwarded to the enqueue() Promise.
+ * - enqueue() returns a Promise that resolves with the saveFn's result (or a
+ *   COALESCED sentinel). Existing callers that ignore the return value keep
+ *   working unchanged.
  *
  * Loaded as a classic <script>; exposes window.MDVSaveQueue.
  */
@@ -14,17 +21,23 @@
   'use strict';
 
   function createSaveQueue({ saveFn }) {
-    /** @type {Map<string, { pendingBySlide: Map<number, {note:string, etag:string|null}>, isDraining: boolean }>} */
+    /** @type {Map<string, { pendingBySlide: Map<number, {note:string, etag:string|null, resolve:Function}>, isDraining: boolean }>} */
     const queue = new Map();
 
     function enqueue(path, slideIndex, note, etag) {
-      let entry = queue.get(path);
-      if (!entry) {
-        entry = { pendingBySlide: new Map(), isDraining: false };
-        queue.set(path, entry);
-      }
-      entry.pendingBySlide.set(slideIndex, { note, etag });
-      if (!entry.isDraining) drain(path);
+      return new Promise((resolve) => {
+        let entry = queue.get(path);
+        if (!entry) {
+          entry = { pendingBySlide: new Map(), isDraining: false };
+          queue.set(path, entry);
+        }
+        const existing = entry.pendingBySlide.get(slideIndex);
+        if (existing) {
+          existing.resolve({ ok: false, reason: 'COALESCED' });
+        }
+        entry.pendingBySlide.set(slideIndex, { note, etag, resolve });
+        if (!entry.isDraining) drain(path);
+      });
     }
 
     async function drain(path) {
@@ -37,12 +50,14 @@
           if (it.done) break;
           const [slideIndex, payload] = it.value;
           entry.pendingBySlide.delete(slideIndex);
+          let result;
           try {
-            await saveFn(path, slideIndex, payload.note, payload.etag);
+            result = await saveFn(path, slideIndex, payload.note, payload.etag);
           } catch (err) {
-            // Caller logs; never let drain break.
             console.error('saveQueue saveFn error', err);
+            result = { ok: false, reason: String(err && err.message || err) };
           }
+          payload.resolve(result);
         }
       } finally {
         entry.isDraining = false;
@@ -54,8 +69,11 @@
     function dropPath(path) {
       const entry = queue.get(path);
       if (!entry) return;
+      entry.pendingBySlide.forEach((payload) => {
+        payload.resolve({ ok: false, reason: 'DROPPED' });
+      });
       entry.pendingBySlide.clear();
-      // If a drain is isDraining, it will exit cleanly when the map is empty.
+      // If a drain is in-flight, it will exit cleanly once the map is empty.
       if (!entry.isDraining) queue.delete(path);
     }
 

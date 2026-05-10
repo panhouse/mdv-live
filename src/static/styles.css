@@ -911,9 +911,13 @@ body {
 .marp-slide img { max-width: 100%; max-height: 60vh; }
 .marp-slide .mermaid { margin: 16px 0; }
 
-/* Navigation Controls */
+/* Navigation Controls.
+   `position: fixed` keeps it visible while the user scrolls through long
+   speaker notes. The slide and notes panel use full width, so the nav
+   intentionally floats over them with a translucent backdrop — opacity
+   bumps to 1 on hover so it never blocks reading the content underneath. */
 .marp-nav {
-    position: absolute;
+    position: fixed;
     bottom: 24px;
     right: 24px;
     display: flex;
@@ -926,6 +930,14 @@ body {
     border: 1px solid var(--border);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
     user-select: none;
+    opacity: 0.85;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    transition: opacity 0.15s ease;
+}
+
+.marp-nav:hover {
+    opacity: 1;
 }
 
 .marp-nav button {
@@ -1050,9 +1062,138 @@ body.marp-fullscreen .marpit > svg[data-marpit-svg] {
     display: none !important;
 }
 
+/* Inline speaker notes panel (under each Marp slide in the main view).
+   Visibility follows the .active SVG: only the panel that immediately
+   follows the active slide is shown. Other panels are kept in the DOM
+   but hidden so the contentEditable state and per-slide debounce timers
+   survive slide navigation. */
+.speaker-notes-panel {
+    display: none;
+    width: 100%;
+    margin: 16px 0 0;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    font-size: 14px;
+    color: var(--text-primary);
+}
+
+.marpit > svg[data-marpit-svg].active + .speaker-notes-panel {
+    display: block;
+}
+
+.speaker-notes-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    user-select: none;
+}
+
+.speaker-notes-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: transparent;
+    border: 0;
+    padding: 4px 6px;
+    margin: -4px -6px;
+    border-radius: 4px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font: inherit;
+    font-weight: 500;
+}
+
+.speaker-notes-toggle:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.speaker-notes-toggle svg {
+    width: 14px;
+    height: 14px;
+    transition: transform 0.15s ease;
+}
+
+.speaker-notes-panel.collapsed .speaker-notes-toggle svg {
+    transform: rotate(-90deg);
+}
+
+.speaker-notes-panel.collapsed .speaker-notes-body {
+    display: none;
+}
+
+.speaker-notes-status {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--text-muted);
+    min-height: 16px;
+}
+
+.speaker-notes-status.ok { color: var(--success, #2da44e); }
+.speaker-notes-status.err { color: var(--danger, #c93636); }
+
+.speaker-notes-banner {
+    margin: 8px 14px 0;
+    padding: 8px 12px;
+    background: rgba(232, 152, 50, 0.12);
+    color: #c8851e;
+    border: 1px solid rgba(232, 152, 50, 0.3);
+    border-radius: 4px;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.speaker-notes-banner[hidden] { display: none; }
+
+.speaker-notes-body {
+    padding: 12px 16px 14px;
+}
+
+.speaker-notes-editor {
+    min-height: 60px;
+    padding: 8px 10px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    word-break: break-word;
+    outline: none;
+    color: var(--text-primary);
+    caret-color: var(--accent);
+    cursor: text;
+}
+
+.speaker-notes-editor:focus {
+    border-color: var(--accent);
+    background: var(--bg-primary);
+}
+
+.speaker-notes-editor[contenteditable="false"] {
+    cursor: default;
+    color: var(--text-muted);
+}
+
+/* CSS pseudo-element placeholder — never enters textContent so editing
+   can never accidentally save the placeholder string as a real note. */
+.speaker-notes-editor[data-placeholder]:empty::before {
+    content: attr(data-placeholder);
+    color: var(--text-muted);
+    font-style: italic;
+    pointer-events: none;
+}
+
+body.marp-fullscreen .speaker-notes-panel {
+    display: none !important;
+}
+
 /* Print styles for Marp */
 @media print {
     .marp-nav { display: none !important; }
+    .speaker-notes-panel { display: none !important; }
 
     .marpit {
         padding: 0 !important;

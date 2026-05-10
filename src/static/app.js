@@ -13,8 +13,12 @@
         THEME: 'mdv-theme',
         SIDEBAR_WIDTH: 'mdv-sidebar-width',
         PDF_STYLE_PATH: 'mdv-pdf-style-path',
-        PDF_OPTIONS_PATH: 'mdv-pdf-options-path'
+        PDF_OPTIONS_PATH: 'mdv-pdf-options-path',
+        NOTES_PANEL_COLLAPSED: 'mdv-notes-panel-collapsed',
+        NOTES_STALE_BACKUP: 'mdv-notes-stale-backup'
     };
+
+    const NOTES_AUTOSAVE_DEBOUNCE_MS = 800;
 
     const HLJS_THEMES = {
         light: 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css',
@@ -500,6 +504,20 @@
                 if (data.etag) tab.etag = data.etag;
                 if (data.lineEnding) tab.lineEnding = data.lineEnding;
                 if (typeof data.hasBom !== 'undefined') tab.hasBom = !!data.hasBom;
+
+                // If the user is mid-edit in the inline notes panel for THIS
+                // deck, suppress the re-render so their cursor isn't yanked
+                // out of contenteditable mid-keystroke. tab.{notes,etag,…}
+                // have already been refreshed above so the next render after
+                // blur will show fresh data; the presenter window still gets
+                // the broadcast and updates immediately because that path
+                // has its own `if (!editing)` guard.
+                if (InlineNotesPanel.editing
+                    && InlineNotesPanel.editingPath === tab.path) {
+                    PresenterView.broadcastSlides();
+                    return;
+                }
+
                 ContentRenderer.renderMarp(data.content, tab.css);
                 PresenterView.broadcastSlides();
             } else {
@@ -691,6 +709,314 @@
     let marpKeyHandler = null;
 
     // ============================================================
+    // Inline Speaker Notes Panel (under each Marp slide in the main view)
+    // ============================================================
+
+    // contenteditable inserts <div>/<br> nodes for line breaks; textContent
+    // flattens those without separators. Walk the DOM and emit \n at block
+    // boundaries so two-line edits arrive as `line1\nline2`. Mirrors the
+    // implementation in presenter.html.
+    function readEditableText(el) {
+        let out = '';
+        function walk(node) {
+            if (node.nodeType === Node.TEXT_NODE) {
+                out += node.textContent;
+                return;
+            }
+            if (node.nodeType !== Node.ELEMENT_NODE) return;
+            const tag = node.tagName;
+            if (tag === 'BR') { out += '\n'; return; }
+            const isBlock = tag === 'DIV' || tag === 'P' || tag === 'LI';
+            if (isBlock && out && !out.endsWith('\n')) out += '\n';
+            for (const child of node.childNodes) walk(child);
+            if (isBlock && !out.endsWith('\n')) out += '\n';
+        }
+        for (const child of el.childNodes) walk(child);
+        return out.replace(/\n+$/, '');
+    }
+
+    const TOGGLE_CHEVRON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>';
+
+    const InlineNotesPanel = {
+        attached: false,
+        editing: false,
+        editingSlideIndex: -1,
+        editingPath: '',
+        editingEtag: null,
+        saveTimer: null,
+        // Auto-clear save status text after a delay (one timer per slide).
+        statusClearTimers: new Map(),
+
+        getCollapsedDefault() {
+            return localStorage.getItem(STORAGE_KEYS.NOTES_PANEL_COLLAPSED) === '1';
+        },
+
+        setCollapsed(collapsed) {
+            localStorage.setItem(STORAGE_KEYS.NOTES_PANEL_COLLAPSED, collapsed ? '1' : '0');
+        },
+
+        // Build a panel for one slide. Caller appends it as a sibling of the
+        // SVG. The editor's text is set via textContent (NOT innerHTML) so a
+        // note containing HTML-like characters can never inject markup.
+        buildPanel(slideIndex, noteText, multiplicity, hasEtag, collapsedDefault) {
+            const canEdit = hasEtag && multiplicity <= 1;
+            const panel = document.createElement('aside');
+            panel.className = 'speaker-notes-panel';
+            if (collapsedDefault) panel.classList.add('collapsed');
+            panel.dataset.slideIndex = String(slideIndex);
+            panel.innerHTML = `
+                <header class="speaker-notes-header">
+                    <button class="speaker-notes-toggle" type="button" aria-expanded="${collapsedDefault ? 'false' : 'true'}">
+                        ${TOGGLE_CHEVRON_SVG}
+                        <span>Speaker notes</span>
+                    </button>
+                    <span class="speaker-notes-status" data-role="status"></span>
+                </header>
+                <div class="speaker-notes-banner" data-role="banner" hidden></div>
+                <div class="speaker-notes-body">
+                    <div class="speaker-notes-editor"
+                         data-role="editor"
+                         data-placeholder="（ノートなし）"
+                         spellcheck="false"
+                         role="textbox"
+                         aria-label="Speaker notes for slide ${slideIndex + 1}"></div>
+                </div>
+            `;
+            const editor = panel.querySelector('[data-role="editor"]');
+            editor.textContent = noteText || '';
+            editor.contentEditable = canEdit ? 'true' : 'false';
+
+            if (!canEdit) {
+                const banner = panel.querySelector('[data-role="banner"]');
+                let msg = '';
+                if (!hasEtag) {
+                    msg = 'このファイルは現在解析できないため自動保存は無効です。';
+                } else if (multiplicity > 1) {
+                    msg = 'このスライドは複数のコメントを含むため自動保存を無効化しています（markdown editor で直接編集してください）。';
+                }
+                banner.textContent = msg;
+                banner.hidden = false;
+            }
+            return panel;
+        },
+
+        // Attach event delegation to the content area. Idempotent: calling
+        // attach() twice is a no-op until detach() runs.
+        attach() {
+            if (this.attached) return;
+            elements.content.addEventListener('focusin', this.handleFocusIn);
+            elements.content.addEventListener('focusout', this.handleFocusOut);
+            elements.content.addEventListener('input', this.handleInput);
+            elements.content.addEventListener('click', this.handleClick);
+            elements.content.addEventListener('keydown', this.handleKeydown);
+            this.attached = true;
+        },
+
+        detach() {
+            // Always run flush even if attached=false: a previous detach call
+            // already removed the listeners but the editor could still be in
+            // the DOM with a pending timer (race during fast tab switching).
+            this.flush();
+            if (!this.attached) return;
+            elements.content.removeEventListener('focusin', this.handleFocusIn);
+            elements.content.removeEventListener('focusout', this.handleFocusOut);
+            elements.content.removeEventListener('input', this.handleInput);
+            elements.content.removeEventListener('click', this.handleClick);
+            elements.content.removeEventListener('keydown', this.handleKeydown);
+            this.attached = false;
+            this.statusClearTimers.forEach((t) => clearTimeout(t));
+            this.statusClearTimers.clear();
+            this.editing = false;
+            this.editingSlideIndex = -1;
+            this.editingPath = '';
+            this.editingEtag = null;
+        },
+
+        flush() {
+            if (this.saveTimer) {
+                clearTimeout(this.saveTimer);
+                this.saveTimer = null;
+                this.sendSave();
+            }
+        },
+
+        scheduleSave(editor) {
+            this.setStatus(editor, '編集中…', '');
+            if (this.saveTimer) clearTimeout(this.saveTimer);
+            this.saveTimer = setTimeout(() => {
+                this.saveTimer = null;
+                this.sendSave();
+            }, NOTES_AUTOSAVE_DEBOUNCE_MS);
+        },
+
+        async sendSave() {
+            const idx = this.editingSlideIndex;
+            const path = this.editingPath;
+            const etag = this.editingEtag;
+            if (idx < 0 || !path || !etag) return;
+            const editor = this.findEditor(idx);
+            if (!editor) return;
+            const value = readEditableText(editor);
+            this.setStatus(editor, '保存中…', '');
+
+            // Use the same saveQueue as the presenter window so concurrent
+            // edits to the same deck are serialized. The Promise resolves
+            // with the saveFn result (saveNote returns {ok, etag, reason}).
+            const saveQueue = PresenterView.saveQueue;
+            if (!saveQueue) {
+                this.setStatus(editor, '保存失敗: queue 未初期化', 'err');
+                return;
+            }
+            const result = await saveQueue.enqueue(path, idx, value, etag);
+
+            // While the save was in flight the user may have switched slides
+            // or tabs, removing this editor from the DOM. Re-resolve the
+            // editor each time we touch UI to avoid touching detached nodes.
+            const liveEditor = this.findEditor(idx);
+            if (!result || result.reason === 'COALESCED') {
+                // A newer enqueue superseded us. The newer one will update
+                // status when it resolves; don't overwrite "保存中…" here.
+                return;
+            }
+            if (result.ok) {
+                if (this.editing && this.editingSlideIndex === idx && result.etag) {
+                    this.editingEtag = result.etag;
+                }
+                if (liveEditor) this.setStatus(liveEditor, '保存済み', 'ok', 1800);
+            } else {
+                const isStale = result.code === 'STALE'
+                    || (typeof result.reason === 'string' && result.reason.indexOf('STALE') === 0);
+                if (isStale) {
+                    // Back up the in-progress text so the user can recover
+                    // after reloading. Mirrors presenter.html behavior.
+                    try {
+                        const draft = liveEditor ? readEditableText(liveEditor) : value;
+                        if (draft) {
+                            const key = STORAGE_KEYS.NOTES_STALE_BACKUP + ':' + path + '#' + idx;
+                            localStorage.setItem(key, draft);
+                        }
+                    } catch (e) { /* ignore */ }
+                }
+                const reason = result.reason || 'Save failed';
+                if (liveEditor) {
+                    // STALE messages stay until the next edit; transient
+                    // errors auto-clear after 5s.
+                    this.setStatus(liveEditor, '保存失敗: ' + reason, 'err', isStale ? 0 : 5000);
+                }
+            }
+        },
+
+        findEditor(slideIndex) {
+            return elements.content.querySelector(
+                `.speaker-notes-panel[data-slide-index="${slideIndex}"] [data-role="editor"]`
+            );
+        },
+
+        setStatus(editor, text, kind, autoClearMs) {
+            const panel = editor.closest('.speaker-notes-panel');
+            if (!panel) return;
+            const status = panel.querySelector('[data-role="status"]');
+            if (!status) return;
+            status.textContent = text || '';
+            status.classList.remove('ok', 'err');
+            if (kind) status.classList.add(kind);
+
+            const idx = Number(panel.dataset.slideIndex);
+            const prev = this.statusClearTimers.get(idx);
+            if (prev) clearTimeout(prev);
+            this.statusClearTimers.delete(idx);
+            if (autoClearMs && autoClearMs > 0) {
+                const t = setTimeout(() => {
+                    if (status.textContent === text) {
+                        status.textContent = '';
+                        status.classList.remove('ok', 'err');
+                    }
+                    this.statusClearTimers.delete(idx);
+                }, autoClearMs);
+                this.statusClearTimers.set(idx, t);
+            }
+        },
+
+        // ----- Event handlers (arrow funcs to keep `this` bound) -----------
+
+        handleClick: (event) => {
+            const toggle = event.target.closest('.speaker-notes-toggle');
+            if (!toggle) return;
+            const panel = toggle.closest('.speaker-notes-panel');
+            if (!panel) return;
+            const collapsed = !panel.classList.contains('collapsed');
+            // Apply to ALL panels at once: the user expects the per-slide
+            // panels to share a single open/closed state, not flip-flop as
+            // they navigate. localStorage persists the choice across reloads.
+            elements.content.querySelectorAll('.speaker-notes-panel').forEach((p) => {
+                p.classList.toggle('collapsed', collapsed);
+                const btn = p.querySelector('.speaker-notes-toggle');
+                if (btn) btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+            });
+            InlineNotesPanel.setCollapsed(collapsed);
+        },
+
+        handleFocusIn: (event) => {
+            const editor = event.target.closest('[data-role="editor"]');
+            if (!editor) return;
+            const panel = editor.closest('.speaker-notes-panel');
+            if (!panel) return;
+            if (editor.contentEditable !== 'true') return;
+            const tab = state.tabs[state.activeTabIndex];
+            if (!tab || !tab.isMarp) return;
+            InlineNotesPanel.editing = true;
+            InlineNotesPanel.editingSlideIndex = Number(panel.dataset.slideIndex);
+            InlineNotesPanel.editingPath = tab.path;
+            // Pin the etag at edit start, NOT the live tab.etag — a watcher
+            // refresh during the debounce would otherwise smuggle a write
+            // past the optimistic lock with the post-refresh etag.
+            InlineNotesPanel.editingEtag = tab.etag || null;
+        },
+
+        handleFocusOut: (event) => {
+            const editor = event.target.closest('[data-role="editor"]');
+            if (!editor) return;
+            InlineNotesPanel.editing = false;
+            InlineNotesPanel.flush();
+            InlineNotesPanel.editingSlideIndex = -1;
+            InlineNotesPanel.editingPath = '';
+            InlineNotesPanel.editingEtag = null;
+        },
+
+        handleInput: (event) => {
+            const editor = event.target.closest('[data-role="editor"]');
+            if (!editor) return;
+            const panel = editor.closest('.speaker-notes-panel');
+            if (!panel) return;
+            // Pin at first input as a safety net (focusin should already
+            // have set these but defenders add belts to suspenders).
+            if (InlineNotesPanel.editingSlideIndex < 0) {
+                const tab = state.tabs[state.activeTabIndex];
+                if (!tab || !tab.isMarp) return;
+                InlineNotesPanel.editing = true;
+                InlineNotesPanel.editingSlideIndex = Number(panel.dataset.slideIndex);
+                InlineNotesPanel.editingPath = tab.path;
+                InlineNotesPanel.editingEtag = tab.etag || null;
+            }
+            // Mirror local cache so a subsequent slide-switch + re-render
+            // doesn't immediately overwrite the just-typed value.
+            const tab = state.tabs[state.activeTabIndex];
+            if (tab && Array.isArray(tab.notes)) {
+                tab.notes[InlineNotesPanel.editingSlideIndex] = readEditableText(editor);
+            }
+            InlineNotesPanel.scheduleSave(editor);
+        },
+
+        handleKeydown: (event) => {
+            // Stop Marp's slide-navigation shortcuts (←/→/Space/F/N/P) from
+            // firing while the user is typing in the notes editor.
+            const editor = event.target.closest('[data-role="editor"]');
+            if (!editor) return;
+            event.stopPropagation();
+        }
+    };
+
+    // ============================================================
     // Presenter View (separate window with speaker notes)
     // ============================================================
 
@@ -749,22 +1075,30 @@
 
         // Persist a speaker note edit via the Marpit-token-based API. The
         // server resolves the path, validates ETag, and rewrites surgically.
-        // `editTimeEtag` is the etag captured by the presenter at edit start;
-        // we send that as If-Match (NOT the live tab.etag) so a watcher
-        // refresh during the debounce can't smuggle a write past the lock.
+        // `editTimeEtag` is the etag captured at edit start; we send that as
+        // If-Match (NOT the live tab.etag) so a watcher refresh during the
+        // debounce can't smuggle a write past the lock.
+        //
+        // Returns { ok, etag?, normalizedNote?, reason?, code? } so saveQueue
+        // can forward the result to enqueue() awaiters (the main-window inline
+        // notes panel reads this). The presenter window still gets results via
+        // the existing channel.postMessage('note-saved') broadcast.
         async saveNote(path, slideIndex, note, editTimeEtag) {
             const tab = state.tabs.find((t) => t.path === path);
-            if (!tab || !tab.isMarp) return;
+            if (!tab || !tab.isMarp) {
+                return { ok: false, reason: 'No active Marp tab' };
+            }
             const ifMatch = editTimeEtag || tab.etag;
             if (!ifMatch) {
                 // GET degrade or no etag yet — refuse without writing.
-                this.channel.postMessage({
-                    type: 'note-saved',
-                    slideIndex,
+                const result = {
                     ok: false,
                     reason: 'Deck not parseable (degraded mode)'
+                };
+                this.channel.postMessage({
+                    type: 'note-saved', slideIndex, ...result
                 });
-                return;
+                return result;
             }
 
             let res, data;
@@ -772,10 +1106,11 @@
                 ({ res, data } = await window.MDVApi.saveMarpNote(path, slideIndex, note, ifMatch));
             } catch (err) {
                 console.error('saveNote network error', err);
+                const result = { ok: false, reason: 'Network error' };
                 this.channel.postMessage({
-                    type: 'note-saved', slideIndex, ok: false, reason: 'Network error'
+                    type: 'note-saved', slideIndex, ...result
                 });
-                return;
+                return result;
             }
 
             if (res.status === 412 && data.code === 'STALE') {
@@ -786,13 +1121,15 @@
                 // file_update event will refresh tab.{content,notes,etag}
                 // together once chokidar sees the change. Until then, all
                 // PUTs from this tab keep returning 412.
-                this.channel.postMessage({
-                    type: 'note-saved',
-                    slideIndex,
+                const result = {
                     ok: false,
+                    code: 'STALE',
                     reason: 'STALE — file changed externally; please reload'
+                };
+                this.channel.postMessage({
+                    type: 'note-saved', slideIndex, ...result
                 });
-                return;
+                return result;
             }
 
             if (res.ok && data.ok) {
@@ -807,23 +1144,26 @@
                 if (Array.isArray(data.notesMultiplicity)) {
                     tab.notesMultiplicity = data.notesMultiplicity;
                 }
-                this.channel.postMessage({
-                    type: 'note-saved',
-                    slideIndex,
+                const result = {
                     ok: true,
                     etag: data.etag,
                     normalizedNote: data.normalizedNote
+                };
+                this.channel.postMessage({
+                    type: 'note-saved', slideIndex, ...result
                 });
                 // Re-broadcast so the presenter window picks up the new
                 // notes/etag without waiting for the watcher event.
                 this.broadcastSlides();
-                return;
+                return result;
             }
 
             const reason = data && (data.error || data.code) || 'Save failed';
+            const result = { ok: false, reason };
             this.channel.postMessage({
-                type: 'note-saved', slideIndex, ok: false, reason
+                type: 'note-saved', slideIndex, ...result
             });
+            return result;
         },
 
         open() {
@@ -924,16 +1264,22 @@
                 // Add new Marp style with navigation overrides
                 const style = document.createElement('style');
                 style.id = 'marp-style';
-                // Add slide navigation CSS
+                // Add slide navigation CSS.
+                // Slide + notes panel use the full content width; the bottom
+                // nav is `position: fixed` and given a translucent background
+                // so it floats above the slide / notes without forcing a
+                // narrow column. padding-bottom: 110px reserves a strip at
+                // the bottom so the nav doesn't sit on top of the last line
+                // of speaker notes when the user has scrolled to the end.
                 const navOverrides = `
                     /* Marp slide navigation */
                     .marpit {
                         position: relative;
                         display: flex;
                         flex-direction: column;
-                        align-items: center;
+                        align-items: stretch;
                         padding: 20px;
-                        padding-bottom: 80px;
+                        padding-bottom: 110px;
                     }
                     .marpit > svg[data-marpit-svg] {
                         display: none;
@@ -972,8 +1318,35 @@
 
             elements.content.innerHTML = htmlContent;
 
-            // Add navigation controls to marpit container
+            // Insert speaker-notes panels under each slide (main view).
+            // Panel visibility is driven by the .active SVG sibling rule in
+            // styles.css, so we don't need extra JS to keep them in sync
+            // when slide navigation flips .active classes around.
             const marpit = elements.content.querySelector('.marpit');
+            if (marpit) {
+                const tab = state.tabs[state.activeTabIndex];
+                const notes = (tab && Array.isArray(tab.notes)) ? tab.notes : [];
+                const multiplicity = (tab && Array.isArray(tab.notesMultiplicity))
+                    ? tab.notesMultiplicity : [];
+                const hasEtag = !!(tab && tab.etag);
+                const collapsedDefault = InlineNotesPanel.getCollapsedDefault();
+                const svgs = marpit.querySelectorAll('svg[data-marpit-svg]');
+                svgs.forEach((svg, i) => {
+                    const panel = InlineNotesPanel.buildPanel(
+                        i,
+                        notes[i] || '',
+                        multiplicity[i] || 0,
+                        hasEtag,
+                        collapsedDefault
+                    );
+                    // svg.nextSibling is null for the last slide → equivalent
+                    // to appendChild, which is the layout we want.
+                    marpit.insertBefore(panel, svg.nextSibling);
+                });
+                InlineNotesPanel.attach();
+            }
+
+            // Add navigation controls to marpit container
             if (marpit) {
                 const nav = document.createElement('div');
                 nav.className = 'marp-nav';
@@ -1179,6 +1552,9 @@
         },
 
         cleanupMarp() {
+            // Flush + detach BEFORE the DOM is wiped so a pending
+            // 800ms save timer doesn't fire after the editor element is gone.
+            InlineNotesPanel.detach();
             elements.content.classList.remove('marp-viewer');
             document.body.classList.remove('marp-fullscreen');
             if (marpKeyHandler) {
