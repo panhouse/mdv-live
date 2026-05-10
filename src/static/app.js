@@ -2336,86 +2336,103 @@
         async save() {
             if (state.activeTabIndex < 0) return;
 
-            // Cancel any pending autosave; whether we got here via the
-            // debounce timer, Cmd+S, or flushAutosave, this single save
-            // call covers what the timer would have done.
+            // Cancel any pending debounce; whether we got here via the
+            // timer, Cmd+S, or flushAutosave, this single save covers it.
             if (this.saveTimer) {
                 clearTimeout(this.saveTimer);
                 this.saveTimer = null;
             }
 
-            // Serialize against any in-flight save so overlapping POSTs
-            // can't reach the last-write-wins endpoint out of order.
-            // We swallow the prior save's rejection here — its own
-            // caller is the one responsible for surfacing it.
-            if (this.inFlight) {
-                try { await this.inFlight; } catch (_e) { /* ignore */ }
-            }
-
-            const tab = state.tabs[state.activeTabIndex];
-            // Use DOM presence (textarea exists), NOT state.isEditMode, as
-            // the gate. toggle() flips isEditMode to false BEFORE awaiting
-            // hide() — and hide()'s first step is flushAutosave(). With an
-            // isEditMode gate the flush would silently no-op exactly when
-            // we need it most (the user typed, then immediately clicked
-            // Edit→View within the debounce window).
+            // Pin tab, path, and content NOW. We must not re-read these
+            // after the prior save completes, because by then the active
+            // tab and textarea may have changed under us — and we still
+            // need to persist the snapshot the user actually authored
+            // when this save() was invoked.
+            const initialTab = state.tabs[state.activeTabIndex];
             const textarea = document.getElementById('editorTextarea');
-            if (!textarea) return;
+            if (!initialTab || !textarea) return;
+            const path = initialTab.path;
+            const content = textarea.value;
 
-            const newContent = textarea.value;
-
-            this.inFlight = (async () => {
-            try {
-                elements.editorStatus.textContent = 'Saving...';
-                elements.editorStatus.className = 'editor-status';
-
-                const response = await MDVApi.saveFile(tab.path, newContent);
-
-                const result = await response.json();
-
-                if (result.error) {
-                    elements.editorStatus.textContent = 'Error: ' + result.error;
-                    elements.editorStatus.className = 'editor-status modified';
-                    return;
+            // Chain after the previous save's Promise so concurrent saves
+            // reach the last-write-wins endpoint in invocation order.
+            // flushAutosave() awaits this.inFlight to drain the entire
+            // chain (not just the head), so any number of queued saves
+            // are guaranteed to complete before navigation proceeds.
+            const prior = this.inFlight;
+            const self = this;
+            const mine = (async () => {
+                if (prior) {
+                    try { await prior; } catch (_e) { /* ignore */ }
                 }
+                try {
+                    elements.editorStatus.textContent = 'Saving...';
+                    elements.editorStatus.className = 'editor-status';
 
-                tab.raw = newContent;
-                // Only clear dirty + show "Saved!" if the textarea hasn't
-                // moved on while the network round-trip was in flight. If
-                // the user kept typing, scheduleAutosave has already
-                // requeued a save for the newer text; flipping the flag
-                // false here would let handleFileUpdate's watcher echo
-                // overwrite that newer text with the just-persisted older
-                // snapshot. Pin "Modified" instead and let the queued save
-                // settle the state.
-                const stillFresh = textarea.value === newContent;
-                if (stillFresh) {
-                    state.hasUnsavedChanges = false;
-                    elements.editorStatus.textContent = 'Saved!';
-                    elements.editorStatus.className = 'editor-status saved';
+                    const response = await MDVApi.saveFile(path, content);
+                    const result = await response.json();
 
-                    if (this.savedStatusTimer) clearTimeout(this.savedStatusTimer);
-                    this.savedStatusTimer = setTimeout(() => {
-                        // Don't clobber a freshly-typed "Modified" — only
-                        // demote the toolbar back to Ready if it's still
-                        // showing our own "Saved!".
-                        if (elements.editorStatus.textContent === 'Saved!') {
-                            elements.editorStatus.textContent = 'Ready';
-                            elements.editorStatus.className = 'editor-status';
+                    if (result.error) {
+                        // Only paint status onto the toolbar if the user
+                        // is still on the deck we tried to save.
+                        const active = state.tabs[state.activeTabIndex];
+                        if (active && active.path === path) {
+                            elements.editorStatus.textContent = 'Error: ' + result.error;
+                            elements.editorStatus.className = 'editor-status modified';
                         }
-                        this.savedStatusTimer = null;
-                    }, 2000);
-                }
+                        return;
+                    }
 
-            } catch (e) {
-                elements.editorStatus.textContent = 'Error: ' + e.message;
-                elements.editorStatus.className = 'editor-status modified';
-            }
+                    // Mirror the saved content into the deck's tab even
+                    // if the user has navigated away — the on-disk file
+                    // and tab.raw should agree on what was persisted.
+                    const target = state.tabs.find((t) => t.path === path);
+                    if (target) target.raw = content;
+
+                    // Global hasUnsavedChanges and the toolbar are tied
+                    // to the ACTIVE tab. Don't clear them on behalf of a
+                    // save whose deck the user has already left, and
+                    // don't clear them when the user has typed more text
+                    // since this save was scheduled — the next debounce
+                    // is already requeued and will settle state itself.
+                    const active = state.tabs[state.activeTabIndex];
+                    if (active && active.path === path) {
+                        const liveTextarea = document.getElementById('editorTextarea');
+                        const stillFresh = liveTextarea && liveTextarea.value === content;
+                        if (stillFresh) {
+                            state.hasUnsavedChanges = false;
+                            elements.editorStatus.textContent = 'Saved!';
+                            elements.editorStatus.className = 'editor-status saved';
+                            if (self.savedStatusTimer) clearTimeout(self.savedStatusTimer);
+                            self.savedStatusTimer = setTimeout(() => {
+                                if (elements.editorStatus.textContent === 'Saved!') {
+                                    elements.editorStatus.textContent = 'Ready';
+                                    elements.editorStatus.className = 'editor-status';
+                                }
+                                self.savedStatusTimer = null;
+                            }, 2000);
+                        }
+                    }
+                } catch (e) {
+                    const active = state.tabs[state.activeTabIndex];
+                    if (active && active.path === path) {
+                        elements.editorStatus.textContent = 'Error: ' + e.message;
+                        elements.editorStatus.className = 'editor-status modified';
+                    }
+                }
             })();
+
+            // Make `mine` the new chain tail. flushAutosave awaits whatever
+            // is at the tail, so as long as each save replaces the tail
+            // with a Promise that internally awaits its predecessor, the
+            // caller always waits for the entire pending chain.
+            this.inFlight = mine;
             try {
-                await this.inFlight;
+                await mine;
             } finally {
-                this.inFlight = null;
+                // Only the tail clears inFlight. If a newer save has
+                // chained on after us, leave its Promise in place.
+                if (this.inFlight === mine) this.inFlight = null;
             }
         },
 
