@@ -5,6 +5,66 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.16] - 2026-05-09
+
+### Added — Inline Speaker Notes (PowerPoint-style)
+
+メインプレビューに **PowerPoint 風の上下分割レイアウト** を追加。
+
+- 上 = スライドステージ、下 = スピーカーノート編集領域、間に**ドラッグ可能な
+  仕切り**。ノート領域を広げるとスライドが連動して縮む（CSS Grid: `1fr` /
+  ハンドル / `--marp-notes-row`）。
+- 仕切りは:
+  - ドラッグでリサイズ → `localStorage` (`mdv-notes-row-px`) に永続化
+  - ダブルクリックでデフォルト 240px にリセット（短いビューポートでは clamp）
+  - ビューポートに対して `SLIDE_ROW_MIN_PX` を超えないよう attach 時 / drag 中に clamp
+  - 0px (完全閉じ) も有効値として保存され、リロードしても復元
+- ノート編集は `contenteditable`、**800ms debounce で自動保存**。Presenter View
+  と同じ `/api/marp/decks/:path/slides/:N/note` API、ETag 楽観的ロック、STALE
+  時はバックアップを `localStorage` に退避。
+- 多コメントスライド (`notesMultiplicity > 1`) と etag 不在のデッキは編集不可化、
+  banner で警告。
+- スライドナビ (← / → / Space / N / F / P) はノート編集中に **無効化** (keydown
+  stopPropagation)。
+- スライド切替 → アクティブな panel のみ表示 (JS 駆動の `.active` クラス)。
+
+### Changed — saveQueue contract
+
+- `enqueue()` が **`Promise<{ok, etag, reason, code}>`** を返すように変更
+  (既存 caller は戻り値を無視して動作継続)。
+- `enqueue()` / `saveFn` に **`origin`** 引数 (`'presenter'` / `'inline'` / undef)
+  を追加。coalesce / rebase / `lastSavedEtag` を **per-origin** で管理し、
+  Presenter ↔ Inline の同時編集で互いの ETag を踏まないようにした。
+- COALESCED / DROPPED の場合、superseded な enqueue() は対応する sentinel で
+  resolve する (caller が `await` で永遠に止まらない)。
+
+### Changed — Marp viewer
+
+- `position: fixed` の `.marp-nav` を半透明 backdrop で右下に floating（広い
+  notes panel と被ってもスライド/ノートが透けて見える）。
+- `body.marp-fullscreen` 時はノート領域・ハンドルを 0 行にして全画面プレゼン。
+- 印刷 (`@media print`): split・ハンドル・ノート領域を hide、`.marpit` を
+  `display: block` に戻して 1 ページ 1 スライドに復帰（multi-slide PDF が 1 枚に
+  collapse する regression を fix）。
+
+### Fixed (codex review round 1〜10 で潰した issues)
+
+- file_update が編集中に来た場合の deferred render（focus blur 後に再描画）
+- tab 切替中の status 誤配信 / 誤った deck の STALE backup 上書き
+- drag 中に detach されたとき body cursor / userSelect の残留
+- BroadcastChannel 不在環境での `queue 未初期化` regression（saveQueue を channel
+  から独立させた）
+- Presenter editing 中に inline 由来の `note-saved` で status / backup が汚染
+- 古い save が完了した時点で `保存済み` と表示する誤報（live editor とのテキスト
+  一致 + pending timer 不在を確認）
+
+### Tests
+
+- 251 → **257 件 (+6)**:
+  - saveQueue の Promise 返却 / COALESCED / DROPPED / origin forwarding /
+    per-origin coalesce 5 件
+  - 既存 saveQueue regression の vm sandbox 互換 fix 1 件
+
 ## [0.5.15] - 2026-05-09
 
 ### Refactored
