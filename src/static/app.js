@@ -1980,6 +1980,13 @@
         },
 
         async switch(index) {
+            // Pin the target by PATH (not by index) before any await:
+            // the user could close a tab while we're flushing, which
+            // would shift the indices and turn `index` into either the
+            // wrong tab or an out-of-bounds dereference.
+            const targetPath = state.tabs[index] && state.tabs[index].path;
+            if (!targetPath) return;
+
             if (state.activeTabIndex >= 0 && state.activeTabIndex < state.tabs.length) {
                 if (state.isEditMode) {
                     // Flush a pending autosave for the OUTGOING tab before
@@ -2017,12 +2024,17 @@
                 EditorManager.updateButton();
             }
 
-            state.activeTabIndex = index;
+            // Re-resolve the target by path post-await — its index may
+            // have shifted (or it may have been closed entirely) during
+            // the flush.
+            const newIndex = state.tabs.findIndex((t) => t.path === targetPath);
+            if (newIndex < 0) return;
+            state.activeTabIndex = newIndex;
             this.render();
             this.renderActive();
-            WebSocketManager.watchFile(state.tabs[index].path);
+            WebSocketManager.watchFile(state.tabs[newIndex].path);
             FileTreeManager.updateHighlight();
-            updateUrlPath(state.tabs[index].path);
+            updateUrlPath(state.tabs[newIndex].path);
         },
 
         close(index) {
@@ -2348,13 +2360,16 @@
             // textarea, so swapping back to View mode would refetch the
             // older version and lose the in-progress edits. Stay in edit
             // mode with the existing 'Error: ...' status visible so the
-            // user can retry / fix the underlying issue.
+            // user can retry / fix the underlying issue. Re-throw so
+            // toggle()'s callers (PrintManager.print and friends) can
+            // detect the failure instead of silently exporting from the
+            // pre-edit on-disk content.
             try {
                 await this.flushAutosave();
-            } catch (_e) {
+            } catch (e) {
                 state.isEditMode = true;
                 this.updateButton();
-                return;
+                throw e;
             }
 
             const textarea = document.getElementById('editorTextarea');
@@ -2506,7 +2521,31 @@
                     // if the user has navigated away — the on-disk file
                     // and tab.raw should agree on what was persisted.
                     const target = state.tabs.find((t) => t.path === path);
-                    if (target) target.raw = content;
+                    if (target) {
+                        target.raw = content;
+                        // Re-fetch the rendered HTML / Marp metadata for
+                        // the SAVED tab in the background. Otherwise the
+                        // user can switch away mid-debounce, the watcher
+                        // file_update is filtered (it's not the active
+                        // tab), and switching back later would render
+                        // tab.content from BEFORE this save. Fire and
+                        // forget — we don't block the save chain on this
+                        // refresh because the textarea is the source of
+                        // truth for the editor view.
+                        MDVApi.fetchFile(path)
+                            .then((r) => r.json())
+                            .then((data) => {
+                                const t = state.tabs.find((x) => x.path === path);
+                                if (!t) return;
+                                if (typeof data.content === 'string') t.content = data.content;
+                                if (typeof data.css !== 'undefined') t.css = data.css;
+                                if (Array.isArray(data.notes)) t.notes = data.notes;
+                                if (Array.isArray(data.notesMultiplicity)) t.notesMultiplicity = data.notesMultiplicity;
+                                if (data.etag) t.etag = data.etag;
+                                if (typeof data.isMarp !== 'undefined') t.isMarp = data.isMarp;
+                            })
+                            .catch(() => { /* watcher will catch up */ });
+                    }
 
                     // Global hasUnsavedChanges and the toolbar are tied
                     // to the ACTIVE tab. Don't clear them on behalf of a
@@ -2571,7 +2610,9 @@
         },
 
         init() {
-            elements.editToggle.addEventListener('click', () => this.toggle());
+            elements.editToggle.addEventListener('click', () => {
+                this.toggle().catch(() => { /* status already shown */ });
+            });
         }
     };
 
@@ -2593,9 +2634,15 @@
 
             const tab = state.tabs[state.activeTabIndex];
 
-            // editモード中は閉じてからPDF生成
+            // editモード中は閉じてからPDF生成。autosave が失敗していた
+            // ら toggle() が throw する → 印刷を中止して edit モード維持
+            // (古い on-disk 内容で勝手に PDF 化しないように)。
             if (state.isEditMode) {
-                await EditorManager.toggle();
+                try {
+                    await EditorManager.toggle();
+                } catch (_e) {
+                    return;
+                }
             }
 
             if (tab.isMarp || this.isMarpPresentation()) {
@@ -3134,7 +3181,7 @@
         shortcuts: {
             'b': { handler: () => SidebarManager.toggle() },
             'w': { handler: () => TabManager.close(state.activeTabIndex), requiresTab: true },
-            'e': { handler: () => EditorManager.toggle(), requiresTab: true },
+            'e': { handler: () => EditorManager.toggle().catch(() => { /* status already shown */ }), requiresTab: true },
             's': { handler: () => EditorManager.save(), requiresEditMode: true },
             'p': { handler: () => PrintManager.print(), requiresTab: true }
         },
