@@ -889,7 +889,19 @@
                     && result.etag) {
                     this.editingEtag = result.etag;
                 }
-                if (liveEditor) this.setStatus(liveEditor, '保存済み', 'ok', 1800);
+                if (liveEditor) {
+                    // Only show "保存済み" when the live editor still
+                    // matches what we just saved AND no newer autosave is
+                    // pending. Otherwise the user has already typed more
+                    // and the success message would be a lie about which
+                    // text is actually durable; leave the status as-is so
+                    // the upcoming save's "編集中…/保存中…/保存済み" can
+                    // describe the truth.
+                    const liveText = readEditableText(liveEditor);
+                    if (liveText === value && !this.saveTimer) {
+                        this.setStatus(liveEditor, '保存済み', 'ok', 1800);
+                    }
+                }
             } else {
                 const isStale = result.code === 'STALE'
                     || (typeof result.reason === 'string' && result.reason.indexOf('STALE') === 0);
@@ -1179,11 +1191,18 @@
 
         onDoubleClick: () => {
             const self = MarpSplitHandle;
-            self.setNotesPx(NOTES_ROW_DEFAULT_PX);
-            localStorage.setItem(
-                STORAGE_KEYS.NOTES_ROW_PX,
-                String(NOTES_ROW_DEFAULT_PX)
-            );
+            // Clamp the default against the current split height so the
+            // reset can't violate SLIDE_ROW_MIN_PX in a short viewport.
+            // Drag / restore paths already clamp; doubleclick used to
+            // skip it and could shrink the slide pane to zero.
+            const totalHeight = self.splitEl
+                ? self.splitEl.getBoundingClientRect().height
+                : 0;
+            const target = totalHeight > 0
+                ? self.clampNotesPx(NOTES_ROW_DEFAULT_PX, totalHeight)
+                : NOTES_ROW_DEFAULT_PX;
+            self.setNotesPx(target);
+            localStorage.setItem(STORAGE_KEYS.NOTES_ROW_PX, String(target));
         }
     };
 
