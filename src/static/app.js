@@ -1048,6 +1048,10 @@
         onMouseMove: null,
         onMouseUp: null,
 
+        // Read the persisted notes row height. Returns NOTES_ROW_DEFAULT_PX
+        // only when the value is missing or non-finite. A literal stored
+        // `0` (user dragged the pane fully closed) is a valid value and is
+        // preserved as 0.
         getSavedNotesPx() {
             const raw = localStorage.getItem(STORAGE_KEYS.NOTES_ROW_PX);
             if (raw === null) return NOTES_ROW_DEFAULT_PX;
@@ -1068,11 +1072,35 @@
             return notesPx;
         },
 
+        // Always clear any body-level drag chrome we may have set so we
+        // can't leak a row-resize cursor / userSelect:none into the rest
+        // of the app even if the mouseup handler never gets a chance to
+        // run (re-render mid-drag, tab switch, etc.).
+        clearDragChrome() {
+            this.dragging = false;
+            if (this.handleEl) this.handleEl.classList.remove('dragging');
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        },
+
         attach(splitEl, handleEl) {
             this.detach();
             this.splitEl = splitEl;
             this.handleEl = handleEl;
-            this.setNotesPx(this.getSavedNotesPx());
+            // Clamp the restored value against the current split height —
+            // a value persisted on a tall window should not collapse the
+            // slide pane to nothing when the deck is reopened on a smaller
+            // viewport. We can't measure before the element is in the DOM,
+            // so do it lazily on the next animation frame.
+            const requested = this.getSavedNotesPx();
+            requestAnimationFrame(() => {
+                if (!this.splitEl) return;
+                const totalHeight = this.splitEl.getBoundingClientRect().height;
+                const clamped = totalHeight > 0
+                    ? this.clampNotesPx(requested, totalHeight)
+                    : requested;
+                this.setNotesPx(clamped);
+            });
 
             this.onMouseMove = (e) => {
                 if (!this.dragging) return;
@@ -1083,16 +1111,19 @@
             };
             this.onMouseUp = () => {
                 if (!this.dragging) return;
-                this.dragging = false;
-                this.handleEl.classList.remove('dragging');
-                document.body.style.cursor = '';
-                document.body.style.userSelect = '';
+                this.clearDragChrome();
                 // Persist the resolved px (read from CSS var, not the drag
                 // delta) so a clamp at the edge is what we save, not the
-                // unbounded value.
+                // unbounded value. Use an explicit Number.isFinite check
+                // — `||` would coerce a legitimate 0 (pane fully closed)
+                // back to the default and stop the user's choice from
+                // surviving a reload.
                 const computed = getComputedStyle(this.splitEl)
                     .getPropertyValue('--marp-notes-row');
-                const px = parseFloat(computed) || NOTES_ROW_DEFAULT_PX;
+                const parsed = parseFloat(computed);
+                const px = Number.isFinite(parsed) && parsed >= 0
+                    ? parsed
+                    : NOTES_ROW_DEFAULT_PX;
                 localStorage.setItem(STORAGE_KEYS.NOTES_ROW_PX, String(px));
             };
 
@@ -1103,6 +1134,11 @@
         },
 
         detach() {
+            // If the user is mid-drag when we tear down (re-render mid-
+            // gesture, tab switch, etc.), the document mouseup handler
+            // we registered would never fire — clean up the body chrome
+            // ourselves so the cursor and userSelect don't get stuck.
+            if (this.dragging) this.clearDragChrome();
             if (this.handleEl) {
                 this.handleEl.removeEventListener('mousedown', this.onMouseDown);
                 this.handleEl.removeEventListener('dblclick', this.onDoubleClick);
