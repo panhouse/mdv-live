@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.17] - 2026-05-10
+
+### Added — Edit-mode Autosave
+
+Markdown エディタを **入力 → 1500ms debounce で自動保存** に。これまで Cmd+S を
+押し忘れると未保存で View に戻すと内容が消える挙動だった。
+
+- `input` で 1500ms debounce → `EditorManager.save()` が `/api/file` に POST
+- toolbar status の遷移: `Modified → Saving... → Saved! → (2s 後) Ready`
+- **Cmd+S** は引き続き使えて、押すと pending な debounce を即 flush
+- View 切替 / タブ切替 / 別ファイル open 時に **flush + await** で未保存破棄事故を防止
+- save 中の連続 input は serialize（chain）。古い save が後着して新しい save を
+  上書きしないよう、各 save 自身の Promise を chain tail にして flush は末尾まで drain
+- save 失敗時は `hide()` / `switch()` / `open()` がすべて navigation を中止して
+  Edit mode を維持。toolbar に `Error: ...` を表示してリトライ余地を残す
+- discard-on-close ダイアログ: AbortController で in-flight POST も abort。
+  ただしサーバーが既に request 受信済みの race window は残るため、ダイアログ
+  メッセージで「自動保存処理中の場合、その時点までの内容がファイルに残る可能性が
+  あります」と明示
+
+### Changed
+
+- `MDVApi.saveFile(path, content, signal?)` に AbortSignal 引数追加（既存
+  caller は signal 省略で動作継続）
+- `TabManager.switch()` を `async` 化（path で target を pin → flush await →
+  index 再 lookup で navigation race 回避）
+- save 成功時に `MDVApi.fetchFile(path)` を chain 内で await して
+  `tab.{content,css,notes,notesMultiplicity,etag,isMarp}` を更新（古い fetch
+  が新しい fetch の後に到着して content を上書きする race を排除）
+
+### Fixed (codex review round 1〜14 で潰した issues)
+
+- 保存中に typing 続いた場合の dirty フラグ誤クリア（live editor とのテキスト一致
+  を確認してから "Saved!" 表示）
+- 連続 autosave で古い ETag の POST が新しい save の後に到着して overwrite
+- BroadcastChannel 経由じゃない、HTTP 経路独自の serialize chain
+- 編集中のタブを close したときに edit mode flag が残る regression
+- discard-on-close で saveTimer / inFlight 両方 abort + lastAutosaveError も clear
+- open() で fetch 中の typing をブロック（textarea.readOnly）+ error 時に restore
+- debounce-fired save が silent fail したまま flushAutosave が成功扱いする問題
+  （`lastAutosaveError` を保持し、navigation 時に再 throw）
+
 ## [0.5.16] - 2026-05-09
 
 ### Added — Inline Speaker Notes (PowerPoint-style)
