@@ -1203,10 +1203,7 @@
         lastSavedInlineEtag: new Map(),
 
         init() {
-            if (typeof BroadcastChannel === 'undefined') return;
-            if (!window.MDVPresenterChannel || !window.MDVSaveQueue) return;
-            this.channel = window.MDVPresenterChannel.create();
-            if (!this.channel) return;
+            if (!window.MDVSaveQueue) return;
 
             // saveQueue rebases queued edits onto the etag of our last own
             // save when there has been no external watcher update. If an
@@ -1224,6 +1221,11 @@
             // The 5th arg (`origin`) is forwarded to saveNote so the
             // note-saved broadcast can be filtered correctly on the
             // presenter side.
+            //
+            // The queue is created unconditionally — independent of
+            // BroadcastChannel availability — so the inline notes panel
+            // can autosave in environments (older browsers / sandboxed
+            // webviews) where the Presenter window cannot be opened.
             this.saveQueue = window.MDVSaveQueue.createSaveQueue({
                 saveFn: (path, slideIndex, note, etag, origin) => {
                     let useEtag = etag;
@@ -1242,20 +1244,6 @@
                 }
             });
 
-            this.channel.addEventListener('message', (e) => {
-                const msg = e.data || {};
-                if (msg.type === 'request-slides') {
-                    this.broadcastSlides();
-                } else if (msg.type === 'goto') {
-                    this.gotoSlide(msg.index);
-                } else if (msg.type === 'edit-note') {
-                    if (!msg.path) return;
-                    this.saveQueue.enqueue(
-                        msg.path, msg.slideIndex, msg.note, msg.etag || null, 'presenter'
-                    );
-                }
-            });
-
             // When a tab closes, drop its queued saves and own-etag entry to
             // prevent a slow leak under long sessions with many decks.
             if (window.MDVTabRegistry) {
@@ -1264,6 +1252,31 @@
                     this.lastSavedEtag.delete(path);
                     this.lastSavedInlineEtag.delete(path);
                 });
+            }
+
+            // BroadcastChannel powers the cross-window presenter view.
+            // Where it's missing we keep the inline path working with
+            // saveQueue alone — broadcastSlides / saveNote then no-op
+            // their channel.postMessage calls (channel === null).
+            if (typeof BroadcastChannel !== 'undefined'
+                && window.MDVPresenterChannel) {
+                this.channel = window.MDVPresenterChannel.create();
+                if (this.channel) {
+                    this.channel.addEventListener('message', (e) => {
+                        const msg = e.data || {};
+                        if (msg.type === 'request-slides') {
+                            this.broadcastSlides();
+                        } else if (msg.type === 'goto') {
+                            this.gotoSlide(msg.index);
+                        } else if (msg.type === 'edit-note') {
+                            if (!msg.path) return;
+                            this.saveQueue.enqueue(
+                                msg.path, msg.slideIndex, msg.note,
+                                msg.etag || null, 'presenter'
+                            );
+                        }
+                    });
+                }
             }
 
             window.addEventListener('beforeunload', () => {
@@ -1291,6 +1304,10 @@
         // the existing channel.postMessage('note-saved') broadcast.
         async saveNote(path, slideIndex, note, editTimeEtag, origin) {
             const broadcast = (payload) => {
+                // No-op when BroadcastChannel was unavailable at init —
+                // inline autosaves still work because callers also read
+                // the saveFn return value via saveQueue.enqueue().then().
+                if (!this.channel) return;
                 this.channel.postMessage({
                     type: 'note-saved',
                     slideIndex,
