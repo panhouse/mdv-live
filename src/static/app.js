@@ -2247,6 +2247,13 @@
                 this.saveAbortController.abort();
                 this.saveAbortController = null;
             }
+            // Drop any stored failure too — discard means "I don't care
+            // about that buffer anymore." Without this, the next edit
+            // session for an unrelated file would inherit the prior
+            // failure and flushAutosave would throw on its first
+            // navigation, blocking work that has nothing to do with
+            // the discarded tab.
+            this.lastAutosaveError = null;
         },
 
         // Flush a pending autosave NOW (instead of waiting for the
