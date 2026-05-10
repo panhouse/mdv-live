@@ -1911,7 +1911,7 @@
         async open(path) {
             const existingIndex = state.tabs.findIndex(t => t.path === path);
             if (existingIndex >= 0) {
-                this.switch(existingIndex);
+                await this.switch(existingIndex);
                 return;
             }
 
@@ -1957,9 +1957,15 @@
             updateUrlPath(path);
         },
 
-        switch(index) {
+        async switch(index) {
             if (state.activeTabIndex >= 0 && state.activeTabIndex < state.tabs.length) {
                 if (state.isEditMode) {
+                    // Flush a pending autosave for the OUTGOING tab before
+                    // we render it out. Otherwise the debounce timer
+                    // captures #editorTextarea at fire time, finds it
+                    // gone, and the last keystrokes are stuck only in
+                    // tab.raw without ever reaching disk.
+                    await EditorManager.flushAutosave();
                     const textarea = document.getElementById('editorTextarea');
                     if (textarea) {
                         state.tabs[state.activeTabIndex].raw = textarea.value;
@@ -2338,27 +2344,32 @@
                 }
 
                 tab.raw = newContent;
-                // Only clear the dirty flag when the on-disk text actually
-                // matches the textarea right now. If the user kept typing
-                // during the network round trip, scheduleAutosave has
-                // already requeued — leaving hasUnsavedChanges=true here
-                // would be wrong (we DID just persist a snapshot), so we
-                // flip it false and let the next input flip it back.
-                state.hasUnsavedChanges = false;
-                elements.editorStatus.textContent = 'Saved!';
-                elements.editorStatus.className = 'editor-status saved';
+                // Only clear dirty + show "Saved!" if the textarea hasn't
+                // moved on while the network round-trip was in flight. If
+                // the user kept typing, scheduleAutosave has already
+                // requeued a save for the newer text; flipping the flag
+                // false here would let handleFileUpdate's watcher echo
+                // overwrite that newer text with the just-persisted older
+                // snapshot. Pin "Modified" instead and let the queued save
+                // settle the state.
+                const stillFresh = textarea.value === newContent;
+                if (stillFresh) {
+                    state.hasUnsavedChanges = false;
+                    elements.editorStatus.textContent = 'Saved!';
+                    elements.editorStatus.className = 'editor-status saved';
 
-                if (this.savedStatusTimer) clearTimeout(this.savedStatusTimer);
-                this.savedStatusTimer = setTimeout(() => {
-                    // Don't clobber a freshly-typed "Modified" — only
-                    // demote the toolbar back to Ready if it's still
-                    // showing our own "Saved!".
-                    if (elements.editorStatus.textContent === 'Saved!') {
-                        elements.editorStatus.textContent = 'Ready';
-                        elements.editorStatus.className = 'editor-status';
-                    }
-                    this.savedStatusTimer = null;
-                }, 2000);
+                    if (this.savedStatusTimer) clearTimeout(this.savedStatusTimer);
+                    this.savedStatusTimer = setTimeout(() => {
+                        // Don't clobber a freshly-typed "Modified" — only
+                        // demote the toolbar back to Ready if it's still
+                        // showing our own "Saved!".
+                        if (elements.editorStatus.textContent === 'Saved!') {
+                            elements.editorStatus.textContent = 'Ready';
+                            elements.editorStatus.className = 'editor-status';
+                        }
+                        this.savedStatusTimer = null;
+                    }, 2000);
+                }
 
             } catch (e) {
                 elements.editorStatus.textContent = 'Error: ' + e.message;
