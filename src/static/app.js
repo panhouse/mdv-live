@@ -1934,6 +1934,12 @@
                 const outgoingTextarea = document.getElementById('editorTextarea');
                 if (outgoingTextarea) {
                     state.tabs[state.activeTabIndex].raw = outgoingTextarea.value;
+                    // Lock the editor while the new file loads. Without
+                    // this, slow file loads let the user type more text
+                    // that schedules a fresh autosave, then open() tears
+                    // the textarea out before that timer ever fires and
+                    // the last keystrokes are lost.
+                    outgoingTextarea.readOnly = true;
                 }
             }
 
@@ -2523,28 +2529,29 @@
                     const target = state.tabs.find((t) => t.path === path);
                     if (target) {
                         target.raw = content;
-                        // Re-fetch the rendered HTML / Marp metadata for
-                        // the SAVED tab in the background. Otherwise the
-                        // user can switch away mid-debounce, the watcher
-                        // file_update is filtered (it's not the active
-                        // tab), and switching back later would render
-                        // tab.content from BEFORE this save. Fire and
-                        // forget — we don't block the save chain on this
-                        // refresh because the textarea is the source of
-                        // truth for the editor view.
-                        MDVApi.fetchFile(path)
-                            .then((r) => r.json())
-                            .then((data) => {
-                                const t = state.tabs.find((x) => x.path === path);
-                                if (!t) return;
+                        // Re-fetch rendered HTML / Marp metadata INLINE,
+                        // not fire-and-forget. The save chain is
+                        // serialized per-tab; awaiting the refresh here
+                        // ensures the older save's refresh can never
+                        // arrive after a newer save's refresh and
+                        // overwrite the newer rendered state. The
+                        // perceived latency cost is the round trip,
+                        // which only blocks a *follow-up* autosave (the
+                        // user's typing is unblocked the instant we
+                        // dispatched POST).
+                        try {
+                            const refreshRes = await MDVApi.fetchFile(path);
+                            const data = await refreshRes.json();
+                            const t = state.tabs.find((x) => x.path === path);
+                            if (t) {
                                 if (typeof data.content === 'string') t.content = data.content;
                                 if (typeof data.css !== 'undefined') t.css = data.css;
                                 if (Array.isArray(data.notes)) t.notes = data.notes;
                                 if (Array.isArray(data.notesMultiplicity)) t.notesMultiplicity = data.notesMultiplicity;
                                 if (data.etag) t.etag = data.etag;
                                 if (typeof data.isMarp !== 'undefined') t.isMarp = data.isMarp;
-                            })
-                            .catch(() => { /* watcher will catch up */ });
+                            }
+                        } catch (_e) { /* watcher will catch up */ }
                     }
 
                     // Global hasUnsavedChanges and the toolbar are tied
