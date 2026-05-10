@@ -2125,10 +2125,14 @@
         // toolbar doesn't pin a stale success message. inFlight serializes
         // overlapping save() calls so a slow earlier POST can't reach the
         // last-write-wins server endpoint after a faster newer POST and
-        // overwrite the user's newer text.
+        // overwrite the user's newer text. saveAbortController abort()s
+        // every save sharing the chain, so an explicit discard (close-
+        // without-saving) can cancel an in-flight POST instead of letting
+        // it persist text the user just discarded.
         saveTimer: null,
         savedStatusTimer: null,
         inFlight: null,
+        saveAbortController: null,
 
         async toggle() {
             if (state.activeTabIndex < 0) return;
@@ -2152,15 +2156,18 @@
             }, EDITOR_AUTOSAVE_DEBOUNCE_MS);
         },
 
-        // Cancel a pending debounce so a discard-on-close (or any other
-        // explicit discard) is honored. Cannot abort a save that has
-        // already left for the network — that would require AbortController
-        // plumbing in MDVApi.saveFile — but stops the more common
-        // "still in the debounce window" leak.
+        // Cancel a pending debounce AND any in-flight POST so a discard-
+        // on-close is fully honored. The aborted save() resolves silently
+        // (its catch maps AbortError → no-op), so the chain unblocks and
+        // no toolbar status mutation runs.
         cancelPendingAutosave() {
             if (this.saveTimer) {
                 clearTimeout(this.saveTimer);
                 this.saveTimer = null;
+            }
+            if (this.saveAbortController) {
+                this.saveAbortController.abort();
+                this.saveAbortController = null;
             }
         },
 
@@ -2378,6 +2385,15 @@
             const path = initialTab.path;
             const content = textarea.value;
 
+            // One AbortController governs the whole chain: cancel-pending
+            // calls .abort() once and every queued / in-flight save sees
+            // the same signal. We only create a fresh one when the chain
+            // is currently empty (or has been previously aborted+cleared).
+            if (!this.saveAbortController) {
+                this.saveAbortController = new AbortController();
+            }
+            const signal = this.saveAbortController.signal;
+
             // Chain after the previous save's Promise so concurrent saves
             // reach the last-write-wins endpoint in invocation order.
             // flushAutosave() awaits this.inFlight to drain the entire
@@ -2389,11 +2405,14 @@
                 if (prior) {
                     try { await prior; } catch (_e) { /* ignore */ }
                 }
+                // If the chain was aborted while we were waiting in line,
+                // skip the POST entirely.
+                if (signal.aborted) return;
                 try {
                     elements.editorStatus.textContent = 'Saving...';
                     elements.editorStatus.className = 'editor-status';
 
-                    const response = await MDVApi.saveFile(path, content);
+                    const response = await MDVApi.saveFile(path, content, signal);
                     const result = await response.json();
 
                     if (result.error) {
@@ -2438,6 +2457,9 @@
                         }
                     }
                 } catch (e) {
+                    // Abort is intentional (discard-on-close cancelled
+                    // us). Don't treat that as a failure.
+                    if (e.name === 'AbortError') return;
                     const active = state.tabs[state.activeTabIndex];
                     if (active && active.path === path) {
                         elements.editorStatus.textContent = 'Error: ' + e.message;
@@ -2455,8 +2477,16 @@
                 await mine;
             } finally {
                 // Only the tail clears inFlight. If a newer save has
-                // chained on after us, leave its Promise in place.
-                if (this.inFlight === mine) this.inFlight = null;
+                // chained on after us, leave its Promise in place — and
+                // leave the shared AbortController in place too so the
+                // newer save can still be cancelled via the same handle.
+                if (this.inFlight === mine) {
+                    this.inFlight = null;
+                    if (this.saveAbortController
+                        && this.saveAbortController.signal === signal) {
+                        this.saveAbortController = null;
+                    }
+                }
             }
         },
 

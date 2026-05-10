@@ -42,11 +42,12 @@
   function fetchFile(path) {
     return fetch('/api/file?path=' + encodeURIComponent(path));
   }
-  function saveFile(path, content) {
+  function saveFile(path, content, signal) {
     return fetch('/api/file', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path, content })
+      body: JSON.stringify({ path, content }),
+      signal
     });
   }
   function fetchInfo() { return fetch('/api/info'); }
