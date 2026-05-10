@@ -547,6 +547,17 @@
       const isOwnSave = !msg.origin
         || msg.origin === 'presenter'
         || msg.origin === 'unknown';
+
+      // While the presenter is mid-edit, don't let an inline save's
+      // result overwrite our save status / STALE backup. Showing
+      // 保存済み for someone else's save would mask the presenter's own
+      // pending draft, and an inline STALE backup would be written with
+      // the presenter's in-progress text under the wrong key. We also
+      // don't want to advance editingEtag for foreign saves (already
+      // gated by isOwnSave above). Bail out before the status / backup
+      // logic when the result isn't ours.
+      if (!isOwnSave && editing) return;
+
       if (msg.ok && editing && isOwnSave && msg.etag) editingEtag = msg.etag;
 
       // STALE: back up the in-progress text to localStorage so the user can
