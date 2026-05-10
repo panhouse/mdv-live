@@ -1919,11 +1919,18 @@
             // that switch() does. If the user types and then clicks a
             // brand-new file within the 1.5s debounce, the textarea is
             // ripped out before the timer fires and the last edits are
-            // lost. Mirror switch()'s outgoing flush + raw capture here.
+            // lost. Mirror switch()'s outgoing flush + raw capture here,
+            // including the abort-on-flush-failure behavior so a failed
+            // save doesn't quietly kick the user off the tab they were
+            // editing.
             if (state.activeTabIndex >= 0
                 && state.activeTabIndex < state.tabs.length
                 && state.isEditMode) {
-                await EditorManager.flushAutosave();
+                try {
+                    await EditorManager.flushAutosave();
+                } catch (_e) {
+                    return;
+                }
                 const outgoingTextarea = document.getElementById('editorTextarea');
                 if (outgoingTextarea) {
                     state.tabs[state.activeTabIndex].raw = outgoingTextarea.value;
@@ -1980,7 +1987,16 @@
                     // captures #editorTextarea at fire time, finds it
                     // gone, and the last keystrokes are stuck only in
                     // tab.raw without ever reaching disk.
-                    await EditorManager.flushAutosave();
+                    //
+                    // If the flush rejects, the user's edits did NOT
+                    // reach disk; aborting the switch keeps them in
+                    // edit mode so they can retry instead of losing
+                    // work behind a tab they walked away from.
+                    try {
+                        await EditorManager.flushAutosave();
+                    } catch (_e) {
+                        return;
+                    }
                     const textarea = document.getElementById('editorTextarea');
                     if (textarea) {
                         state.tabs[state.activeTabIndex].raw = textarea.value;
@@ -2013,7 +2029,13 @@
             // Warn about unsaved changes
             if (state.isEditMode && state.hasUnsavedChanges && index === state.activeTabIndex) {
                 DialogManager.show('未保存の変更', {
-                    message: '変更を保存せずにタブを閉じますか？',
+                    // The autosave runs every 1.5s. If a POST is already
+                    // in flight when the user discards, the server may
+                    // have received the request before our AbortController
+                    // can cancel it — so the discarded text can still
+                    // land on disk in that small window. Be honest about
+                    // it rather than promising a guarantee we can't keep.
+                    message: '変更を保存せずにタブを閉じますか？\n（自動保存処理中の場合、その時点までの内容がファイルに残る可能性があります）',
                     isConfirm: true,
                     danger: true,
                     confirmText: '閉じる',
@@ -2152,7 +2174,12 @@
             if (this.saveTimer) clearTimeout(this.saveTimer);
             this.saveTimer = setTimeout(() => {
                 this.saveTimer = null;
-                this.save();
+                // Debounce-fired saves swallow rejections — the toolbar
+                // status already reflects the error, and there is no
+                // caller waiting for the Promise. Without this catch
+                // every failed autosave would surface as an
+                // "Unhandled Promise rejection" in the console.
+                this.save().catch(() => { /* status already shown */ });
             }, EDITOR_AUTOSAVE_DEBOUNCE_MS);
         },
 
@@ -2282,7 +2309,20 @@
             // overwrite tab.raw with the on-disk version while the user's
             // last keystrokes (still inside the debounce window) are
             // silently discarded.
-            await this.flushAutosave();
+            //
+            // If the flush throws (a write failed somewhere in the chain),
+            // bail out: the on-disk content does NOT match the user's
+            // textarea, so swapping back to View mode would refetch the
+            // older version and lose the in-progress edits. Stay in edit
+            // mode with the existing 'Error: ...' status visible so the
+            // user can retry / fix the underlying issue.
+            try {
+                await this.flushAutosave();
+            } catch (_e) {
+                state.isEditMode = true;
+                this.updateButton();
+                return;
+            }
 
             const textarea = document.getElementById('editorTextarea');
             let topLineNumber = -1;
@@ -2423,7 +2463,10 @@
                             elements.editorStatus.textContent = 'Error: ' + result.error;
                             elements.editorStatus.className = 'editor-status modified';
                         }
-                        return;
+                        // Throw so flushAutosave / hide() can detect that
+                        // the write failed and avoid silently overwriting
+                        // the user's edits with the on-disk content.
+                        throw new Error(result.error);
                     }
 
                     // Mirror the saved content into the deck's tab even
@@ -2465,6 +2508,10 @@
                         elements.editorStatus.textContent = 'Error: ' + e.message;
                         elements.editorStatus.className = 'editor-status modified';
                     }
+                    // Re-throw so a flushAutosave caller (hide / switch /
+                    // open / Cmd+S) can react and refuse to discard the
+                    // unsaved buffer.
+                    throw e;
                 }
             })();
 
