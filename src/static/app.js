@@ -2092,7 +2092,15 @@
     // Editor Manager
     // ============================================================
 
+    const EDITOR_AUTOSAVE_DEBOUNCE_MS = 1500;
+
     const EditorManager = {
+        // Debounced-autosave state. saveTimer is the pending input→save
+        // schedule; savedStatusTimer auto-clears the "Saved!" toast so the
+        // toolbar doesn't pin a stale success message.
+        saveTimer: null,
+        savedStatusTimer: null,
+
         async toggle() {
             if (state.activeTabIndex < 0) return;
             const tab = state.tabs[state.activeTabIndex];
@@ -2105,6 +2113,25 @@
             state.isEditMode = !state.isEditMode;
             this.updateButton();
             state.isEditMode ? this.show() : await this.hide();
+        },
+
+        scheduleAutosave() {
+            if (this.saveTimer) clearTimeout(this.saveTimer);
+            this.saveTimer = setTimeout(() => {
+                this.saveTimer = null;
+                this.save();
+            }, EDITOR_AUTOSAVE_DEBOUNCE_MS);
+        },
+
+        // Flush a pending autosave NOW (instead of waiting for the
+        // debounce timer). Used by Cmd+S and by hide() so leaving edit
+        // mode never silently drops the last unsaved keystrokes.
+        async flushAutosave() {
+            if (this.saveTimer) {
+                clearTimeout(this.saveTimer);
+                this.saveTimer = null;
+                await this.save();
+            }
         },
 
         updateButton() {
@@ -2138,6 +2165,7 @@
                 state.hasUnsavedChanges = true;
                 elements.editorStatus.textContent = 'Modified';
                 elements.editorStatus.className = 'editor-status modified';
+                EditorManager.scheduleAutosave();
             });
 
             setTimeout(() => {
@@ -2184,6 +2212,13 @@
         async hide() {
             if (state.activeTabIndex < 0) return;
             const tab = state.tabs[state.activeTabIndex];
+
+            // Flush any pending autosave BEFORE we read the textarea +
+            // re-fetch the file. Otherwise the post-fetch render would
+            // overwrite tab.raw with the on-disk version while the user's
+            // last keystrokes (still inside the debounce window) are
+            // silently discarded.
+            await this.flushAutosave();
 
             const textarea = document.getElementById('editorTextarea');
             let topLineNumber = -1;
@@ -2266,9 +2301,23 @@
         },
 
         async save() {
-            if (state.activeTabIndex < 0 || !state.isEditMode) return;
+            if (state.activeTabIndex < 0) return;
+
+            // Cancel any pending autosave; whether we got here via the
+            // debounce timer, Cmd+S, or flushAutosave, this single save
+            // call covers what the timer would have done.
+            if (this.saveTimer) {
+                clearTimeout(this.saveTimer);
+                this.saveTimer = null;
+            }
 
             const tab = state.tabs[state.activeTabIndex];
+            // Use DOM presence (textarea exists), NOT state.isEditMode, as
+            // the gate. toggle() flips isEditMode to false BEFORE awaiting
+            // hide() — and hide()'s first step is flushAutosave(). With an
+            // isEditMode gate the flush would silently no-op exactly when
+            // we need it most (the user typed, then immediately clicked
+            // Edit→View within the debounce window).
             const textarea = document.getElementById('editorTextarea');
             if (!textarea) return;
 
@@ -2289,13 +2338,26 @@
                 }
 
                 tab.raw = newContent;
+                // Only clear the dirty flag when the on-disk text actually
+                // matches the textarea right now. If the user kept typing
+                // during the network round trip, scheduleAutosave has
+                // already requeued — leaving hasUnsavedChanges=true here
+                // would be wrong (we DID just persist a snapshot), so we
+                // flip it false and let the next input flip it back.
                 state.hasUnsavedChanges = false;
                 elements.editorStatus.textContent = 'Saved!';
                 elements.editorStatus.className = 'editor-status saved';
 
-                setTimeout(() => {
-                    elements.editorStatus.textContent = 'Ready';
-                    elements.editorStatus.className = 'editor-status';
+                if (this.savedStatusTimer) clearTimeout(this.savedStatusTimer);
+                this.savedStatusTimer = setTimeout(() => {
+                    // Don't clobber a freshly-typed "Modified" — only
+                    // demote the toolbar back to Ready if it's still
+                    // showing our own "Saved!".
+                    if (elements.editorStatus.textContent === 'Saved!') {
+                        elements.editorStatus.textContent = 'Ready';
+                        elements.editorStatus.className = 'editor-status';
+                    }
+                    this.savedStatusTimer = null;
                 }, 2000);
 
             } catch (e) {
