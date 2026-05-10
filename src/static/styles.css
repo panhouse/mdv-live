@@ -1256,6 +1256,12 @@ body.marp-fullscreen .marp-notes-area {
     .marpit {
         padding: 0 !important;
         background: transparent !important;
+        /* The runtime layout makes .marpit a row-oriented flex container
+           so the active SVG can be centered; for printing, force it back
+           to block flow so each `display: block` SVG honors page-break-
+           after and lands on its own page (otherwise multi-slide PDFs
+           collapse into a single wide row). */
+        display: block !important;
     }
 
     .marp-slide-area .marpit > svg[data-marpit-svg],

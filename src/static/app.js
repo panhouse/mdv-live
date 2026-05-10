@@ -1157,9 +1157,16 @@
             if (!self.splitEl || !self.handleEl) return;
             self.dragging = true;
             self.startY = e.clientY;
+            // Use an explicit finite-number check so a stored 0 (the user
+            // has previously collapsed the pane) isn't coerced to DEFAULT
+            // by `||`. Otherwise the next drag jumps from 240px instead
+            // of resizing from the collapsed state.
             const computed = getComputedStyle(self.splitEl)
                 .getPropertyValue('--marp-notes-row');
-            self.startNotesPx = parseFloat(computed) || NOTES_ROW_DEFAULT_PX;
+            const parsed = parseFloat(computed);
+            self.startNotesPx = Number.isFinite(parsed) && parsed >= 0
+                ? parsed
+                : NOTES_ROW_DEFAULT_PX;
             self.handleEl.classList.add('dragging');
             document.body.style.cursor = 'row-resize';
             document.body.style.userSelect = 'none';
