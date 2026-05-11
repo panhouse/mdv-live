@@ -18,6 +18,7 @@ const vendorDir = resolve(repoRoot, 'src/static/vendor');
 
 const TAILWIND_VERSION = '3.4.17';
 const TAILWIND_URL = `https://cdn.tailwindcss.com/${TAILWIND_VERSION}`;
+const TAILWIND_LICENSE_URL = `https://raw.githubusercontent.com/tailwindlabs/tailwindcss/v${TAILWIND_VERSION}/LICENSE`;
 
 async function copyFromNodeModules(relSource, relDest) {
   const src = resolve(repoRoot, 'node_modules', relSource);
@@ -60,6 +61,14 @@ async function downloadTailwind() {
   console.log(`downloaded tailwind ${TAILWIND_VERSION} -> vendor/tailwind.min.js (${body.length} bytes)`);
 }
 
+async function downloadTailwindLicense() {
+  const dest = resolve(vendorDir, 'licenses/tailwindcss.LICENSE');
+  const body = await downloadToString(TAILWIND_LICENSE_URL);
+  await mkdir(dirname(dest), { recursive: true });
+  await writeFile(dest, body);
+  console.log(`downloaded tailwind LICENSE -> vendor/licenses/tailwindcss.LICENSE (${body.length} bytes)`);
+}
+
 async function main() {
   if (existsSync(vendorDir)) {
     await rm(vendorDir, { recursive: true, force: true });
@@ -72,7 +81,19 @@ async function main() {
   await copyFromNodeModules('mermaid/dist/mermaid.min.js', 'mermaid.min.js');
   await copyFromNodeModules('html2pdf.js/dist/html2pdf.bundle.min.js', 'html2pdf.bundle.min.js');
 
+  // Third-party license notices. html2pdf.bundle.min.js has an inline pointer
+  // ("For license information please see html2pdf.bundle.min.js.LICENSE.txt")
+  // that would otherwise dangle once the bundle ships in src/static/vendor/.
+  await copyFromNodeModules(
+    'html2pdf.js/dist/html2pdf.bundle.min.js.LICENSE.txt',
+    'html2pdf.bundle.min.js.LICENSE.txt',
+  );
+  await copyFromNodeModules('html2pdf.js/LICENSE', 'licenses/html2pdf.js.LICENSE');
+  await copyFromNodeModules('mermaid/LICENSE', 'licenses/mermaid.LICENSE');
+  await copyFromNodeModules('@highlightjs/cdn-assets/LICENSE', 'licenses/highlight.js.LICENSE');
+
   await downloadTailwind();
+  await downloadTailwindLicense();
 
   const readme = `# vendor/
 
@@ -81,11 +102,12 @@ index.html used to load from CDN. Regenerate it with:
 
     node scripts/sync-vendor.js
 
-Sources and licenses:
+Sources and licenses (full text in vendor/licenses/):
 - highlight.min.js / highlight/*.css — @highlightjs/cdn-assets (BSD-3-Clause)
 - mermaid.min.js — mermaid (MIT)
-- html2pdf.bundle.min.js — html2pdf.js (MIT)
-- tailwind.min.js — Tailwind Play CDN ${TAILWIND_VERSION} (MIT)
+- html2pdf.bundle.min.js — html2pdf.js (MIT); see also
+  html2pdf.bundle.min.js.LICENSE.txt for embedded notices
+- tailwind.min.js — Tailwind CSS Play CDN ${TAILWIND_VERSION} (MIT)
 `;
   await writeFile(resolve(vendorDir, 'README.md'), readme);
   console.log('wrote   vendor/README.md');

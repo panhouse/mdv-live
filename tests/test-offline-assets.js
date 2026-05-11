@@ -30,6 +30,19 @@ const REQUIRED_VENDOR_FILES = [
   'mermaid.min.js',
   'html2pdf.bundle.min.js',
   'tailwind.min.js',
+  // License sidecars — the html2pdf bundle header references the .LICENSE.txt
+  // file by name, so it has to ship alongside the bundle.
+  'html2pdf.bundle.min.js.LICENSE.txt',
+  'licenses/html2pdf.js.LICENSE',
+  'licenses/mermaid.LICENSE',
+  'licenses/highlight.js.LICENSE',
+  'licenses/tailwindcss.LICENSE',
+];
+
+const VENDOR_ONLY_PACKAGES = [
+  '@highlightjs/cdn-assets',
+  'mermaid',
+  'html2pdf.js',
 ];
 
 const EXTERNAL_URL_RE = /https?:\/\/(?:cdn|cdnjs|jsdelivr|unpkg|tailwindcss)\b[^\s"'`)]+/gi;
@@ -56,4 +69,16 @@ describe('offline asset bundling', () => {
       assert.ok(info.size > 0, `vendor/${rel} is empty`);
     });
   }
+
+  it('vendor-only packages stay out of runtime dependencies', async () => {
+    const pkgPath = path.join(repoRoot, 'package.json');
+    const pkg = JSON.parse(await readFile(pkgPath, 'utf8'));
+    const runtime = Object.keys(pkg.dependencies || {});
+    const leaked = VENDOR_ONLY_PACKAGES.filter((name) => runtime.includes(name));
+    assert.deepStrictEqual(
+      leaked,
+      [],
+      `These packages are only used by scripts/sync-vendor.js and should live in devDependencies, not dependencies: ${leaked.join(', ')}`,
+    );
+  });
 });
