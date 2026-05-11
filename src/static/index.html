@@ -12,7 +12,7 @@
     <link rel="apple-touch-icon" sizes="128x128" href="/static/images/icon-128.png">
 
     <!-- Stylesheets -->
-    <link id="hljs-theme" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <link id="hljs-theme" rel="stylesheet" href="/static/vendor/highlight/github-dark.min.css">
     <link rel="stylesheet" href="/static/styles.css">
 
     <!-- Theme initialization (FOUC prevention) -->
@@ -24,13 +24,13 @@
         })();
     </script>
 
-    <!-- External libraries -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <!-- External libraries (offline, served from src/static/vendor/) -->
+    <script src="/static/vendor/highlight.min.js"></script>
+    <script src="/static/vendor/mermaid.min.js"></script>
+    <script src="/static/vendor/html2pdf.bundle.min.js"></script>
 
     <!-- Tailwind CSS (for Marp slides) -->
-    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/static/vendor/tailwind.min.js"></script>
     <script>
         tailwind.config = {
             corePlugins: { preflight: false, container: false },

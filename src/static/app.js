@@ -25,8 +25,8 @@
     const SLIDE_ROW_MIN_PX = 80;
 
     const HLJS_THEMES = {
-        light: 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css',
-        dark: 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css'
+        light: '/static/vendor/highlight/github.min.css',
+        dark: '/static/vendor/highlight/github-dark.min.css'
     };
 
     const MERMAID_THEMES = {
