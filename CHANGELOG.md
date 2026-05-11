@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.18] - 2026-05-12
+
+### Fixed — Offline operation
+
+ビューワがネットワーク接続なしでも完全に動くようになった。これまで
+`index.html` が 5 つの CDN (highlight.js / Mermaid / html2pdf.js / Tailwind /
+hljs テーマ CSS) を直接読み込んでいたため、Wi-Fi 切断時はシンタックスハイ
+ライト・図表・PDF 出力・全 UI スタイルが死ぬ状態だった。
+
+- `src/static/vendor/` に各ライブラリのオフライン版を同梱
+- `scripts/sync-vendor.js` でメンテナが version bump 時に node_modules /
+  Tailwind Play CDN から再生成 (`node scripts/sync-vendor.js`)
+- Tailwind は v3.4.17 で pin (v4 系は `tailwind.config` 構文が変わるため)
+- `index.html` と `app.js` (`HLJS_THEMES`) の CDN URL を `/static/vendor/...`
+  に置換
+- 各ライブラリのライセンス本文を `vendor/licenses/` に同梱、
+  html2pdf bundle が名指しする `html2pdf.bundle.min.js.LICENSE.txt` も sidecar 配置
+- `@highlightjs/cdn-assets` / `mermaid` / `html2pdf.js` は **devDependencies**
+  (vendor 元、runtime では使わないので global install 時にダウンロードされない)
+- `tests/test-offline-assets.js` で「served HTML/JS に外部 CDN URL がない」
+  「必須 vendor ファイル / license 一式が揃う」「vendor-only パッケージが
+  dependencies に逆流していない」を 14 件の assert で常時保証
+
+### Verified
+
+- 272 テスト 全 PASS (既存 258 + 新規 14)
+- Playwright dogfood (`docs/dogfood-offline-2026-05-11/`): 非 localhost への
+  リクエスト 0 件、code highlight / mermaid / Tailwind / edit autosave /
+  theme 切替 / Marp split layout / inline notes すべて回帰なし
+- Codex review 2 round で「No actionable regressions」収束
+
 ## [0.5.17] - 2026-05-10
 
 ### Added — Edit-mode Autosave
