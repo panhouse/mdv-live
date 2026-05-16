@@ -73,7 +73,9 @@ function rewriteMediaPaths(html, relativeDir) {
     /background-image:\s*url\(\s*(?:(&quot;|"|')([\s\S]*?)\1|([^)\s'"]+))\s*\)/gi,
     (match, quote, quotedSrc, bareSrc) => {
       const src = quote ? quotedSrc : bareSrc;
-      if (/^(https?:\/\/|data:|\/raw\/|\/)/.test(src)) return match;
+      // Empty quoted URL (url(&quot;&quot;)) — leave it alone, as the old
+      // pattern did; rewriting it to /raw/ would invent a bogus request.
+      if (!src || /^(https?:\/\/|data:|\/raw\/|\/)/.test(src)) return match;
       const resolved = relativeDir ? `${relativeDir}/${src}` : src;
       const q = quote || '';
       return `background-image:url(${q}/raw/${resolved}${q})`;

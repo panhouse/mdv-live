@@ -343,6 +343,27 @@ describe('Markdown Rendering', () => {
       );
     });
 
+    // Regression (codex-loop round 2): the quoted branch uses `*?`, which
+    // can match an empty URL. Marp drops `![bg]()` entirely (no figure), so
+    // this just confirms an empty ![bg] renders without inventing a /raw/ URL.
+    it('should not emit a spurious /raw/ URL for an empty ![bg]', async () => {
+      const content = [
+        '---',
+        'marp: true',
+        '---',
+        '',
+        '![bg]()',
+        '',
+        '# Slide'
+      ].join('\n');
+      const data = await createAndFetch('marp-bg-empty.md', content);
+      assert.strictEqual(data.isMarp, true);
+      assert.ok(
+        !data.content.includes('url(&quot;/raw/&quot;)'),
+        'empty ![bg] must not be rewritten to an empty /raw/ URL'
+      );
+    });
+
     it('should leave an absolute-URL ![bg] untouched', async () => {
       const content = [
         '---',
