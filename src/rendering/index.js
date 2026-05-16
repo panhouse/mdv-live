@@ -69,6 +69,13 @@ function rewriteMediaPaths(html, relativeDir) {
   // matching closing quote — not the first `)` — so filenames containing
   // parentheses (e.g. "cover (1).png", which Marp emits as
   // url(&quot;cover%20(1).png&quot;)) survive intact.
+  //
+  // Known limitation: only the first url() of a `background-image:` declaration
+  // is rewritten. Every `![bg]` produces its own <figure> with a single-url
+  // declaration, so this never affects `![bg]`; it only leaves later urls of a
+  // comma-separated `backgroundImage:` directive (a rare hand-authored case)
+  // SPA-relative. Bounding the declaration is unreliable because the encoded
+  // quote `&quot;` itself contains the `;` that would delimit it.
   out = out.replace(
     /background-image:\s*url\(\s*(?:(&quot;|"|')([\s\S]*?)\1|([^)\s'"]+))\s*\)/gi,
     (match, quote, quotedSrc, bareSrc) => {
