@@ -65,10 +65,14 @@ function rewriteMediaPaths(html, relativeDir) {
 
   // Marp `![bg](...)` renders as <figure style="background-image:url(...)">,
   // never as an <img>, so the rule above never sees it. marp-core HTML-encodes
-  // the surrounding quotes (&quot;), so the pattern must accept those too.
+  // the surrounding quotes (&quot;). For the quoted form the URL runs to the
+  // matching closing quote — not the first `)` — so filenames containing
+  // parentheses (e.g. "cover (1).png", which Marp emits as
+  // url(&quot;cover%20(1).png&quot;)) survive intact.
   out = out.replace(
-    /background-image:\s*url\((&quot;|'|")?([^)'"]+?)\1?\)/gi,
-    (match, quote, src) => {
+    /background-image:\s*url\(\s*(?:(&quot;|"|')([\s\S]*?)\1|([^)\s'"]+))\s*\)/gi,
+    (match, quote, quotedSrc, bareSrc) => {
+      const src = quote ? quotedSrc : bareSrc;
       if (/^(https?:\/\/|data:|\/raw\/|\/)/.test(src)) return match;
       const resolved = relativeDir ? `${relativeDir}/${src}` : src;
       const q = quote || '';

@@ -306,6 +306,43 @@ describe('Markdown Rendering', () => {
       );
     });
 
+    // Regression (codex-loop round 1, P2): the rewrite must read the quoted
+    // URL to its closing quote, not to the first `)`. A filename containing
+    // parentheses used to be cut mid-path (.../cover(1 + stray &quot;).png).
+    it('should preserve parentheses in a ![bg] filename', async () => {
+      const content = [
+        '---',
+        'marp: true',
+        '---',
+        '',
+        '![bg](images/cover(1).png)',
+        '',
+        '# Slide'
+      ].join('\n');
+      const data = await createAndFetch('marp-bg-parens.md', content);
+      assert.ok(
+        data.content.includes('background-image:url(&quot;/raw/images/cover(1).png&quot;)'),
+        '![bg] filename with parentheses must be rewritten without truncation'
+      );
+    });
+
+    it('should preserve a percent-encoded space in a ![bg] filename', async () => {
+      const content = [
+        '---',
+        'marp: true',
+        '---',
+        '',
+        '![bg](<images/cover (1).png>)',
+        '',
+        '# Slide'
+      ].join('\n');
+      const data = await createAndFetch('marp-bg-space.md', content);
+      assert.ok(
+        data.content.includes('background-image:url(&quot;/raw/images/cover%20(1).png&quot;)'),
+        '![bg] filename with an encoded space + parentheses must survive intact'
+      );
+    });
+
     it('should leave an absolute-URL ![bg] untouched', async () => {
       const content = [
         '---',
