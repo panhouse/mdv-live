@@ -54,7 +54,7 @@ function renderText(content) {
  */
 function rewriteMediaPaths(html, relativeDir) {
   // Match src="..." that are not absolute URLs or data URIs
-  return html.replace(
+  let out = html.replace(
     /(<(?:img|video|audio|source)\s[^>]*?\bsrc=")([^"]+)(")/gi,
     (match, before, src, after) => {
       if (/^(https?:\/\/|data:|\/raw\/|\/)/.test(src)) return match;
@@ -62,6 +62,21 @@ function rewriteMediaPaths(html, relativeDir) {
       return `${before}/raw/${resolved}${after}`;
     }
   );
+
+  // Marp `![bg](...)` renders as <figure style="background-image:url(...)">,
+  // never as an <img>, so the rule above never sees it. marp-core HTML-encodes
+  // the surrounding quotes (&quot;), so the pattern must accept those too.
+  out = out.replace(
+    /background-image:\s*url\((&quot;|'|")?([^)'"]+?)\1?\)/gi,
+    (match, quote, src) => {
+      if (/^(https?:\/\/|data:|\/raw\/|\/)/.test(src)) return match;
+      const resolved = relativeDir ? `${relativeDir}/${src}` : src;
+      const q = quote || '';
+      return `background-image:url(${q}/raw/${resolved}${q})`;
+    }
+  );
+
+  return out;
 }
 
 /**

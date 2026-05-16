@@ -264,4 +264,67 @@ describe('Markdown Rendering', () => {
       assert.strictEqual(data.isMarp, false);
     });
   });
+
+  describe('Marp background images (![bg])', () => {
+    // Regression: marp-core renders `![bg]` as
+    // <figure style="background-image:url(&quot;path&quot;)">, not as <img>.
+    // rewriteMediaPaths used to miss the CSS background-image form, so relative
+    // ![bg] paths 404'd silently and the slide rendered blank.
+    it('should rewrite a relative ![bg] path to /raw/', async () => {
+      const content = [
+        '---',
+        'marp: true',
+        '---',
+        '',
+        '![bg](images/cover.png)',
+        '',
+        '# Slide'
+      ].join('\n');
+      const data = await createAndFetch('marp-bg.md', content);
+      assert.strictEqual(data.isMarp, true);
+      assert.ok(
+        data.content.includes('background-image:url(&quot;/raw/images/cover.png&quot;)'),
+        'relative ![bg] path must be rewritten to /raw/'
+      );
+    });
+
+    it('should resolve a relative ![bg] path against the file directory', async () => {
+      await fs.mkdir(path.join(tempDir, 'decks'), { recursive: true });
+      const content = [
+        '---',
+        'marp: true',
+        '---',
+        '',
+        '![bg](pics/a.jpg)',
+        '',
+        '# Slide'
+      ].join('\n');
+      const data = await createAndFetch('decks/marp-bg-sub.md', content);
+      assert.ok(
+        data.content.includes('background-image:url(&quot;/raw/decks/pics/a.jpg&quot;)'),
+        '![bg] path must be resolved relative to the source file directory'
+      );
+    });
+
+    it('should leave an absolute-URL ![bg] untouched', async () => {
+      const content = [
+        '---',
+        'marp: true',
+        '---',
+        '',
+        '![bg](https://example.com/x.png)',
+        '',
+        '# Slide'
+      ].join('\n');
+      const data = await createAndFetch('marp-bg-url.md', content);
+      assert.ok(
+        data.content.includes('background-image:url(&quot;https://example.com/x.png&quot;)'),
+        'absolute-URL ![bg] must not be rewritten'
+      );
+      assert.ok(
+        !data.content.includes('/raw/https'),
+        'absolute-URL ![bg] must not be prefixed with /raw/'
+      );
+    });
+  });
 });
