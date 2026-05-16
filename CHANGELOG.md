@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.19] - 2026-05-16
+
+### Fixed — Marp `![bg]` background images
+
+Marp の `![bg](画像)` 背景画像構文を含むスライドが mdv で真っ白になっていた
+バグを修正。NotebookLM 製の図解 13 枚を `![bg]` で全面配置したプレゼンが mdv
+で全スライド空白になり発覚（157_イディアコーポレーション案件）。
+
+- 原因: marp-core は `![bg]` を `<img>` ではなく
+  `<figure style="background-image:url(&quot;パス&quot;)">` として出力する。
+  `rewriteMediaPaths` は `<img>/<video>/<audio>/<source>` の `src` 属性しか
+  `/raw/` に書き換えず、CSS の `background-image:url(...)` を素通ししていた。
+  結果、相対パスが SPA の現在 URL 基準で誤解決され 404 → CSS 背景画像のため
+  コンソールエラーも出ず真っ白になっていた
+- `rewriteMediaPaths` に `background-image:url(...)` 書き換えルールを追加。
+  marp-core が HTML エンコードするクォート（`&quot;`）に対応
+- quoted URL は **対応する閉じクォートまで** を URL として読む。最初の `)` で
+  切らないため、`cover (1).png` のような括弧入りファイル名
+  （Marp 出力 `url(&quot;cover%20(1).png&quot;)`）も壊れない
+- 絶対 URL・data URI・空 URL は書き換えない
+- 既知の制約: 1 つの `background-image:` 宣言に複数 `url()` がある場合は先頭
+  のみ書き換わる。`![bg]` は 1 枚ごとに別 `<figure>` になるため影響なし。
+  カンマ区切りの `backgroundImage:` ディレクティブのみのエッジケース
+
+### Verified
+
+- 278 テスト 全 PASS（既存 272 + 新規 6: `![bg]` 相対/サブディレクトリ/括弧/
+  エンコード空白/空/絶対 URL）
+- Playwright dogfood（`docs/dogfood_20260516/`）: 全面 bg / bg fit / split bg /
+  インライン画像 / 絶対 URL bg / サブディレクトリ解決の 6 ケースを実機目視、
+  コンソールエラー 0
+- Codex review 3 round（codex-loop）で収束。round 1 [P2] 括弧切れ修正、
+  round 2 [P3] 空 URL ガード、round 3 [P3] 複数 url 制約を文書化
+
 ## [0.5.18] - 2026-05-12
 
 ### Fixed — Offline operation
