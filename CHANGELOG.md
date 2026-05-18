@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.20] - 2026-05-18
+
+### Fixed — Presenter View のノート編集が毎回 STALE エラー
+
+Presenter View で speaker note を編集すると、毎回一瞬
+`保存失敗: STALE — file changed externally; please reload`（赤）が出る
+バグを修正。同じ deck を mdv のタブ/ウィンドウで 2 つ以上開いていると
+必ず発生していた。
+
+- 原因: Presenter View はノート保存を自前で行わず、`BroadcastChannel` の
+  `edit-note` メッセージで **メインウィンドウに保存を委譲** する。この
+  メッセージは同一ブラウザの **全メインウィンドウ** に届くため、deck を
+  複数ウィンドウで開いていると **全員が同じ `If-Match` で PUT** し、サーバの
+  楽観ロックで 1 つだけ成功、残りが 412 STALE になっていた。負けた側が
+  `note-saved {ok:false, STALE}` を Presenter にブロードキャストし、赤い
+  エラー表示になっていた（保存自体は 1 つ成功するため「一瞬だけ」見える）
+- 各メインウィンドウに一意な `windowId` を付与。`slides` メッセージに
+  `sourceWindowId` を載せ、Presenter は最初に deck を返したウィンドウを
+  saver として固定、`edit-note` に `targetWindowId` を載せて **その 1
+  ウィンドウだけが保存** するようルーティング
+- saver ウィンドウが閉じた/凍結した場合は保存タイムアウト（6 秒）で
+  検知し、`find-saver` 問い合わせで deck を持つ別ウィンドウ（非アクティブ
+  な背景タブ含む）を探して再ピン・再送するフェイルオーバーを実装
+- 各 `edit-note` に一意な `requestId` を付与し `note-saved` で echo。
+  古い保存の ack が新しい保存のフェイルオーバー監視を誤って解除する問題を
+  防止
+- `saveNote` が「対象 Marp タブなし」のとき `note-saved` をブロードキャスト
+  せず return していたため Presenter が `保存中…` のまま固まり得た問題も
+  併せて修正（`code:'NO_DECK'` を返してフェイルオーバーを誘発）
+
+### Verified
+
+- 既存 278 + 新規 3（`tests/test-presenter-channel.js`: `newWindowId` の
+  一意性 / フォールバック / モジュール API）
+- Playwright dogfood: メインウィンドウ 2 枚 + Presenter で speaker note を
+  編集 → STALE が出ないこと、メインウィンドウ 1 枚で回帰がないことを実機確認
+
 ## [0.5.19] - 2026-05-16
 
 ### Fixed — Marp `![bg]` background images

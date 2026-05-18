@@ -287,6 +287,33 @@
   let deckPath = '';
   let saveTimer = null;
 
+  // Window-routing + failover state: the presenter delegates saving to
+  // ONE main window (saverWindowId — the first that can serve this deck).
+  // saveAckTimer detects when that window stops answering. inflightSave /
+  // pendingSave hold a FROZEN copy of the edit ({path, slideIndex, note,
+  // etag, requestId}) so a failover resends the original edit, not
+  // whatever the editor shows after a later blur / slide navigation.
+  let saverWindowId = null;
+  let saveAckTimer = null;
+  let findSaverTimer = null; // bounds the wait for a find-saver reply
+  let inflightSave = null;   // routed, awaiting ack | null
+  let pendingSave = null;    // deferred until a saver is (re)pinned | null
+  const SAVE_ACK_TIMEOUT_MS = 6000;
+  const FIND_SAVER_TIMEOUT_MS = 3000;
+
+  // Each edit-note carries a globally-unique requestId so its note-saved
+  // ack matches the exact save that produced it — an older save's ack
+  // must never clear a newer save's failover timer. The presenterId
+  // prefix keeps ids distinct across multiple presenter windows.
+  const presenterId = (window.MDVPresenterChannel && window.MDVPresenterChannel.newWindowId)
+    ? window.MDVPresenterChannel.newWindowId()
+    : ('p-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+  let saveRequestSeq = 0;
+  function newRequestId() {
+    saveRequestSeq += 1;
+    return presenterId + ':' + saveRequestSeq;
+  }
+
   const notesBanner = document.getElementById('notesBanner');
 
   function applyCss(css) {
@@ -384,21 +411,16 @@
 
   function loadSlides(payload) {
     if (payload.empty) {
-      // Main window switched to a non-Marp tab or closed the deck — clear
-      // everything so the user can't keep editing notes that would land in
-      // the wrong file. saveQueue retains nothing because path mismatches.
-      slidesHtml = '';
-      cssText = '';
-      applyCss('');
+      // Once a deck is shown, the presenter never blanks itself on an
+      // `empty`: with multiple main windows `request-slides` is global and
+      // any window on a non-Marp tab — including the pinned saver, which
+      // can still save the deck from a background tab — broadcasts `empty`.
+      // Blanking mid-presentation on that noise is wrong; keep the current
+      // slides and let save routing / failover handle reachability. Only
+      // an `empty` arriving before any deck has loaded shows the hint.
+      if (deckPath !== '') return;
       fillStage(stageCurrent, '<div class="empty-state">メイン画面で Marp ファイルを開いてください。</div>');
       fillStage(stageNext, '');
-      notes = [];
-      notesMultiplicity = [];
-      deckEtag = null;
-      deckPath = '';
-      slideCount = 0;
-      counter.textContent = '– / –';
-      setNotesText('');
       applyReadOnlyState();
       return;
     }
@@ -416,7 +438,20 @@
     notes = Array.isArray(payload.notes) ? payload.notes : [];
     notesMultiplicity = Array.isArray(payload.notesMultiplicity) ? payload.notesMultiplicity : [];
     deckEtag = payload.etag || null;
+    // Detect a deck switch BEFORE updating deckPath: the presenter window
+    // can be reused by another main window for another deck, and the old
+    // saver may not hold the new deck (→ "No active Marp tab", no retry).
+    const deckChanged = !!payload.path && payload.path !== deckPath;
     deckPath = payload.path || deckPath;
+    // Pin the window serving this deck as our saver, so edit-note saves
+    // route to exactly one window (no duplicate PUTs). A non-empty
+    // `slides` proves the sender holds the deck. Re-pin on a deck switch
+    // (the presenter window can be reused by another main window).
+    // Failover (saver gone) is handled separately via find-saver /
+    // saver-here, which also discovers inactive background deck tabs.
+    if (payload.sourceWindowId && (saverWindowId === null || deckChanged)) {
+      saverWindowId = payload.sourceWindowId;
+    }
     slideCount = stageCurrent.querySelectorAll('.marpit > svg[data-marpit-svg]').length;
     render(typeof payload.current === 'number' ? payload.current : currentIndex);
   }
@@ -451,24 +486,97 @@
     }
   }
 
+  // Broadcast a find-saver query for `path` and bound the wait: a deck
+  // open in ANY window's tab (active OR background) answers `saver-here`;
+  // if none does within the timeout the deck has no reachable window, so
+  // surface an honest error instead of spinning on 保存中… forever.
+  function requestSaver(path) {
+    channel.postMessage({ type: 'find-saver', path });
+    if (findSaverTimer !== null) clearTimeout(findSaverTimer);
+    findSaverTimer = setTimeout(() => {
+      findSaverTimer = null;
+      if (pendingSave !== null) {
+        pendingSave = null;
+        setSaveStatus('保存失敗: 保存先ウィンドウが見つかりません', 'err');
+      }
+    }, FIND_SAVER_TIMEOUT_MS);
+  }
+
+  // Re-pin a live saver and resend `payload` (the exact edit that could
+  // not be delivered). Used when the saver window stops answering or no
+  // longer holds the deck.
+  function failOver(payload) {
+    if (saveAckTimer !== null) {
+      clearTimeout(saveAckTimer);
+      saveAckTimer = null;
+    }
+    saverWindowId = null;
+    inflightSave = null;
+    if (!payload) return;
+    pendingSave = payload;
+    requestSaver(payload.path);
+  }
+
+  // The saver window never acknowledged our edit-note (it was closed or
+  // frozen). Fail over, resending the exact edit that timed out.
+  function onSaveAckTimeout() {
+    saveAckTimer = null;
+    failOver(inflightSave);
+  }
+
   function sendNoteSave() {
-    // Use the slide / deck / etag captured when the user started editing —
-    // not the live values, which can change under us if the main window
-    // navigates, switches tabs, or receives a watcher update during the
-    // debounce. Sending the live etag would let a watcher-refreshed etag
-    // pass If-Match against the post-edit deck.
+    // Freeze the slide / deck / etag captured when the user started
+    // editing — not the live values, which can change under us if the
+    // main window navigates, switches tabs, or receives a watcher update
+    // during the debounce. The frozen payload also lets a failover resend
+    // the exact edit even after a later blur / slide navigation.
     const idx = editingSlideIndex >= 0 ? editingSlideIndex : currentIndex;
-    const path = editingPath || deckPath;
-    const etag = editingEtag || deckEtag;
     const value = getNotesText();
     notes[idx] = value.trim();
+    postEditNote({
+      path: editingPath || deckPath,
+      slideIndex: idx,
+      note: value,
+      etag: editingEtag || deckEtag
+    });
+  }
+
+  // Route one frozen edit payload to the pinned saver, or defer it until
+  // a saver is (re)pinned.
+  function postEditNote(payload) {
     setSaveStatus('保存中…');
+
+    // No live saver pinned yet (first edit before slides arrived, or the
+    // previous saver window went away). Routing an edit-note without a
+    // targetWindowId would let EVERY main window save it and collide on
+    // the optimistic lock — the exact bug this routing fixes. Instead ask
+    // who can serve this deck; the saver-here handler re-pins and resends.
+    if (saverWindowId === null) {
+      pendingSave = payload;
+      requestSaver(payload.path);
+      return;
+    }
+
+    // Fresh requestId per actual send: a failover resend must NOT reuse
+    // the timed-out original's id, or that original's late ack would be
+    // mistaken for the resend's ack.
+    inflightSave = {
+      path: payload.path,
+      slideIndex: payload.slideIndex,
+      note: payload.note,
+      etag: payload.etag,
+      requestId: newRequestId()
+    };
+    if (saveAckTimer !== null) clearTimeout(saveAckTimer);
+    saveAckTimer = setTimeout(onSaveAckTimeout, SAVE_ACK_TIMEOUT_MS);
     channel.postMessage({
       type: 'edit-note',
-      path,
-      etag,
-      slideIndex: idx,
-      note: value
+      path: inflightSave.path,
+      etag: inflightSave.etag,
+      slideIndex: inflightSave.slideIndex,
+      note: inflightSave.note,
+      requestId: inflightSave.requestId,
+      targetWindowId: saverWindowId
     });
   }
 
@@ -533,7 +641,56 @@
       // the new etag came from our own successful save.
     } else if (msg.type === 'index') {
       render(msg.index);
+    } else if (msg.type === 'saver-here') {
+      // A window answered our find-saver query. Pin it and resend the
+      // deferred edit — but only if it serves the exact deck that edit
+      // targets (find-saver is path-scoped, yet guard defensively). The
+      // first answer wins; later answers find pendingSave already null.
+      if (pendingSave !== null
+          && msg.windowId
+          && msg.path === pendingSave.path) {
+        if (findSaverTimer !== null) {
+          clearTimeout(findSaverTimer);
+          findSaverTimer = null;
+        }
+        saverWindowId = msg.windowId;
+        const queued = pendingSave;
+        pendingSave = null;
+        postEditNote(queued);
+      }
     } else if (msg.type === 'note-saved') {
+      // Is this the answer to OUR routed save? Match on the unique
+      // requestId so an older save's ack can't clear a newer save's
+      // failover timer, and a foreign save (e.g. an inline edit) for the
+      // same slide is ignored — inline saves carry no requestId.
+      const isOwnAck = inflightSave !== null
+        && msg.requestId != null
+        && msg.requestId === inflightSave.requestId;
+      // A note-saved that carries a requestId but isn't our current
+      // inflight save is a superseded / timed-out save's late ack — drop
+      // it so it can't overwrite status / backup / editingEtag for the
+      // current edit. requestId-less acks (inline edits) still fall
+      // through to the observer logic below.
+      if (!isOwnAck && msg.requestId != null) return;
+      if (isOwnAck) {
+        // The pinned saver no longer holds this deck (tab closed / switched
+        // away). It IS alive, but cannot save — fail over to a window that
+        // can, resending the same edit, instead of surfacing an error.
+        if (msg.code === 'NO_DECK') {
+          failOver(inflightSave);
+          return;
+        }
+        // A real answer (success OR genuine STALE) — stop the failover
+        // timer and let the status handling below run.
+        if (saveAckTimer !== null) {
+          clearTimeout(saveAckTimer);
+          saveAckTimer = null;
+        }
+        inflightSave = null;
+      }
+      // Ignore results for a different deck — a second presenter window,
+      // or the main window having switched decks mid-flight.
+      if (msg.path && deckPath && msg.path !== deckPath) return;
       const targetIdx = editingSlideIndex >= 0 ? editingSlideIndex : currentIndex;
       if (msg.slideIndex !== targetIdx) return;
       // Only OUR own successful saves should advance editingEtag. The

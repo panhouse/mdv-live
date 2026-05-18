@@ -11,10 +11,12 @@
  * - Crucially, coalescing is scoped per origin: an inline save and a
  *   presenter save for the same slide do NOT replace each other. Both run
  *   serially so neither editor silently loses a draft.
- * - `saveFn(path, slideIndex, note, etag, origin)` is supplied by the
- *   caller; `origin` is an optional tag (e.g. 'presenter' / 'inline') the
+ * - `saveFn(path, slideIndex, note, etag, origin, requestId)` is supplied by
+ *   the caller; `origin` is an optional tag (e.g. 'presenter' / 'inline') the
  *   queue uses for keying and also forwards verbatim so saveFn can route
- *   notifications back to the right editor.
+ *   notifications back to the right editor. `requestId` is an optional
+ *   opaque token forwarded verbatim so a caller can correlate the save's
+ *   result with the request that triggered it.
  * - enqueue() returns a Promise that resolves with the saveFn's result (or a
  *   COALESCED sentinel). Existing callers that ignore the return value or
  *   skip the origin argument keep working unchanged.
@@ -32,7 +34,7 @@
     /** @type {Map<string, { pending: Map<string, {slideIndex:number, note:string, etag:string|null, origin:string|undefined, resolve:Function}>, isDraining: boolean }>} */
     const queue = new Map();
 
-    function enqueue(path, slideIndex, note, etag, origin) {
+    function enqueue(path, slideIndex, note, etag, origin, requestId) {
       return new Promise((resolve) => {
         let entry = queue.get(path);
         if (!entry) {
@@ -44,7 +46,7 @@
         if (existing) {
           existing.resolve({ ok: false, reason: 'COALESCED' });
         }
-        entry.pending.set(key, { slideIndex, note, etag, origin, resolve });
+        entry.pending.set(key, { slideIndex, note, etag, origin, requestId, resolve });
         if (!entry.isDraining) drain(path);
       });
     }
@@ -62,7 +64,8 @@
           let result;
           try {
             result = await saveFn(
-              path, payload.slideIndex, payload.note, payload.etag, payload.origin
+              path, payload.slideIndex, payload.note, payload.etag,
+              payload.origin, payload.requestId
             );
           } catch (err) {
             console.error('saveQueue saveFn error', err);

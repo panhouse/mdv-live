@@ -1212,6 +1212,10 @@
 
     const PresenterView = {
         channel: null,
+        // Unique id for this main window. The presenter echoes it back as
+        // `edit-note.targetWindowId` so that exactly one main window saves,
+        // even when the same deck is open in several windows.
+        windowId: null,
         presenterWindow: null,
         saveQueue: null,            // MDVSaveQueue instance (created in init)
         // Map<path, etag> — own-save chain rebase. We track presenter and
@@ -1246,7 +1250,7 @@
             // can autosave in environments (older browsers / sandboxed
             // webviews) where the Presenter window cannot be opened.
             this.saveQueue = window.MDVSaveQueue.createSaveQueue({
-                saveFn: (path, slideIndex, note, etag, origin) => {
+                saveFn: (path, slideIndex, note, etag, origin, requestId) => {
                     let useEtag = etag;
                     const tab = state.tabs.find((t) => t.path === path);
                     // Pick the "own etag" map that matches this save's
@@ -1259,7 +1263,7 @@
                         : this.lastSavedEtag;
                     const own = ownMap.get(path);
                     if (tab && own && tab.etag === own) useEtag = own;
-                    return this.saveNote(path, slideIndex, note, useEtag, origin);
+                    return this.saveNote(path, slideIndex, note, useEtag, origin, requestId);
                 }
             });
 
@@ -1279,6 +1283,7 @@
             // their channel.postMessage calls (channel === null).
             if (typeof BroadcastChannel !== 'undefined'
                 && window.MDVPresenterChannel) {
+                this.windowId = window.MDVPresenterChannel.newWindowId();
                 this.channel = window.MDVPresenterChannel.create();
                 if (this.channel) {
                     this.channel.addEventListener('message', (e) => {
@@ -1287,11 +1292,38 @@
                             this.broadcastSlides();
                         } else if (msg.type === 'goto') {
                             this.gotoSlide(msg.index);
+                        } else if (msg.type === 'find-saver') {
+                            // Failover discovery: the presenter lost its
+                            // saver and asks who can save `path`. Answer if
+                            // this window holds that deck in ANY tab —
+                            // saveNote() resolves by path, so an inactive
+                            // background tab counts (broadcastSlides only
+                            // reports the active tab and would miss it).
+                            if (msg.path
+                                && state.tabs.some((t) => t.path === msg.path && t.isMarp)) {
+                                this.channel.postMessage({
+                                    type: 'saver-here',
+                                    path: msg.path,
+                                    windowId: this.windowId
+                                });
+                            }
                         } else if (msg.type === 'edit-note') {
                             if (!msg.path) return;
+                            // Route: only the main window the presenter
+                            // picked as its saver performs the save. Without
+                            // this, every main window showing the same deck
+                            // fires its own PUT and all but one collide on
+                            // the optimistic lock → spurious "STALE" in the
+                            // presenter. A missing targetWindowId (older
+                            // presenter build) falls back to handling it so
+                            // saves still work, just without dedup.
+                            if (msg.targetWindowId
+                                && msg.targetWindowId !== this.windowId) {
+                                return;
+                            }
                             this.saveQueue.enqueue(
                                 msg.path, msg.slideIndex, msg.note,
-                                msg.etag || null, 'presenter'
+                                msg.etag || null, 'presenter', msg.requestId
                             );
                         }
                     });
@@ -1317,11 +1349,16 @@
         // next autosave would skip the STALE conflict it should otherwise
         // hit and silently overwrite the inline edit).
         //
+        // `requestId` is the opaque token from the presenter's edit-note;
+        // echoing it back in note-saved lets the presenter match this
+        // result to the exact save it sent (older saves' acks then can't
+        // cancel a newer save's failover timer).
+        //
         // Returns { ok, etag?, normalizedNote?, reason?, code? } so saveQueue
         // can forward the result to enqueue() awaiters (the main-window inline
         // notes panel reads this). The presenter window still gets results via
         // the existing channel.postMessage('note-saved') broadcast.
-        async saveNote(path, slideIndex, note, editTimeEtag, origin) {
+        async saveNote(path, slideIndex, note, editTimeEtag, origin, requestId) {
             const broadcast = (payload) => {
                 // No-op when BroadcastChannel was unavailable at init —
                 // inline autosaves still work because callers also read
@@ -1329,15 +1366,28 @@
                 if (!this.channel) return;
                 this.channel.postMessage({
                     type: 'note-saved',
+                    path,
                     slideIndex,
                     origin: origin || 'unknown',
+                    sourceWindowId: this.windowId,
+                    requestId,
                     ...payload
                 });
             };
 
             const tab = state.tabs.find((t) => t.path === path);
             if (!tab || !tab.isMarp) {
-                return { ok: false, reason: 'No active Marp tab' };
+                // This window no longer holds the deck (tab closed / switched
+                // away). Broadcast a NO_DECK failure so a presenter that
+                // routed here can fail over to another window instead of
+                // hanging on "保存中…" or surfacing a dead-end error.
+                const result = {
+                    ok: false,
+                    code: 'NO_DECK',
+                    reason: 'No active Marp tab'
+                };
+                broadcast(result);
+                return result;
             }
             const ifMatch = editTimeEtag || tab.etag;
             if (!ifMatch) {
@@ -1447,7 +1497,8 @@
                 this.channel.postMessage({
                     type: 'slides',
                     empty: true,
-                    reason: 'main-switched-away'
+                    reason: 'main-switched-away',
+                    sourceWindowId: this.windowId
                 });
                 return;
             }
@@ -1459,7 +1510,8 @@
                 notes: tab.notes || [],
                 notesMultiplicity: tab.notesMultiplicity || [],
                 etag: tab.etag || null,
-                current: marpCurrentSlide
+                current: marpCurrentSlide,
+                sourceWindowId: this.windowId
             });
         },
 
