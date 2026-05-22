@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.21] - 2026-05-22
+
+### Fixed — Marp スライドが横長ペインで上下に見切れる
+
+ウィンドウ表示（split モード）で、スライドペインがスライドのアスペクト比
+（16:9）より横長になると、スライド（特に全面画像）の上下が見切れていた。
+
+- 原因: スライドペイン内の `.marpit` に確定した高さがなく、active SVG の
+  `max-height: 100%` が無効化されていた。SVG が「幅 100%」だけで決まるため、
+  ペインが 16:9 より横長だと縦にあふれて上下がクリップされていた
+  （フルスクリーン表示は `.marpit` が `height: 100vh` を持つため影響なし）。
+- 修正: `.marpit` に `height: 100%` を与え、active SVG を
+  `width/height: auto` + `max-width/height: 100%` の真の "contain" に変更。
+  ペインが横長・縦長どちらでもスライド全体が必ず収まる。
+
+### Added — トラックパッドのピンチズーム / パン
+
+Marp スライド表示で、トラックパッドのピンチ操作（macOS では ctrl+wheel、
+マウスの ctrl+スクロールも同様）でスライドを拡大・縮小できるように。
+
+- 二本指スクロールでパン（ペインのネイティブ overflow スクロール）。ピンチと
+  パンは分離（ctrl 付き wheel のみズーム）。
+- カーソル位置を中心にズーム。ズーム範囲は fit（等倍）〜6倍。
+- ダブルクリック / `0` キーで全体表示（fit）に復帰。`=` / `-` キーでも増減。
+- スライド送り・フルスクリーン切替・ペインのリサイズで自動的に fit に追従。
+- ズーム計算（contain fit / クランプ / wheel→zoom）は DOM 非依存の
+  `src/static/lib/marpZoom.js` に分離し、単体テスト（`tests/test-marp-zoom.js`、
+  12 件）を追加。
+
 ## [0.5.20] - 2026-05-18
 
 ### Fixed — Presenter View のノート編集が毎回 STALE エラー
