@@ -47,15 +47,15 @@ describe('buildFileTree depth control (expand = direct children only)', () => {
     assert.ok(children.find((c) => c.name === 'direct.md'), 'direct file is present');
   });
 
-  it('initial (depth=0) preloads one level of grandchildren', async () => {
+  it('buildFileTree at depth 0 still supports one level of lookahead (capability)', async () => {
     const parent = path.join(tempDir, 'parent');
     const children = await buildFileTree(parent, tempDir, 0);
 
     const childDir = children.find((c) => c.name === 'child');
-    assert.strictEqual(childDir.loaded, true, 'initial lookahead loads child contents');
+    assert.strictEqual(childDir.loaded, true, 'depth 0 loads child contents');
     assert.ok(
       childDir.children.find((g) => g.name === 'grandchild.md'),
-      'grandchild is preloaded at the initial depth'
+      'grandchild is preloaded at depth 0'
     );
   });
 });
@@ -115,6 +115,9 @@ describe('GET /api/tree/page endpoint', () => {
         fs.writeFile(path.join(tempDir, `g${String(i).padStart(2, '0')}.md`), 'x')
       )
     );
+    // A subdirectory with a child, to assert the initial tree does NOT preload.
+    await fs.mkdir(path.join(tempDir, 'sub'));
+    await fs.writeFile(path.join(tempDir, 'sub', 'inside.md'), 'x');
     server = createMdvServer({ rootDir: tempDir, port: PORT });
     await server.start();
   });
@@ -131,7 +134,7 @@ describe('GET /api/tree/page endpoint', () => {
     assert.strictEqual(items.length, 6, '5 items + sentinel');
     assert.strictEqual(items[5].type, 'more');
     assert.strictEqual(items[5].offset, 5);
-    assert.strictEqual(items[5].total, 12);
+    assert.strictEqual(items[5].total, 13); // 12 files + 1 subdirectory
   });
 
   it('rejects path traversal', async () => {
@@ -139,6 +142,17 @@ describe('GET /api/tree/page endpoint', () => {
       `http://localhost:${PORT}/api/tree/page?path=${encodeURIComponent('../../etc')}&offset=0&limit=5`
     );
     assert.strictEqual(res.status, 403);
+  });
+
+  it('GET /api/tree returns subdirectories unloaded (no eager lookahead)', async () => {
+    const res = await fetch(`http://localhost:${PORT}/api/tree`);
+    assert.strictEqual(res.status, 200);
+    const tree = await res.json();
+    const sub = tree.find((n) => n.name === 'sub');
+    assert.ok(sub, 'subdirectory present at top level');
+    assert.strictEqual(sub.type, 'directory');
+    assert.strictEqual(sub.loaded, false, 'subdirectory is lazy, not preloaded');
+    assert.deepStrictEqual(sub.children, [], 'no children materialized up front');
   });
 });
 

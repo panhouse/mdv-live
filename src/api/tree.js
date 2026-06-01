@@ -152,10 +152,14 @@ export async function readDirPage(dirPath, rootDir, offset, limit) {
  * @param {Express} app - Express app instance
  */
 export function setupTreeRoutes(app) {
-  // Get full tree
+  // Get the top level of the tree. Direct children only (subdirectories come
+  // back unloaded), same as expand. Without this depth argument the initial
+  // load eagerly materialized one level of grandchildren into hidden DOM — a
+  // root with many large subdirectories could mount tens of thousands of nodes
+  // up front and freeze the tab. Each folder now loads its children on expand.
   app.get('/api/tree', async (req, res) => {
     try {
-      const tree = await buildFileTree(app.locals.rootDir, app.locals.rootDir);
+      const tree = await buildFileTree(app.locals.rootDir, app.locals.rootDir, MAX_INITIAL_DEPTH);
       res.json(tree);
     } catch (err) {
       res.status(500).json({ error: err.message });

@@ -628,10 +628,11 @@
 
             this.reconcile(treeEl, tree);
 
-            // `tree` only carries the lookahead depth, so directories expanded
-            // deeper than that must be refreshed explicitly to pick up changes.
-            // Done in parallel and reconciled in place (keeps their expansion).
-            await this.refreshExpanded();
+            // `/api/tree` only carries the top level, so every directory whose
+            // children have been loaded must be refreshed explicitly to pick up
+            // changes. Done in parallel and reconciled in place (keeps each
+            // folder's expansion state).
+            await this.refreshLoaded();
 
             treeEl.scrollTop = prevScroll;
             this.updateHighlight();
@@ -742,16 +743,21 @@
             return tmp.firstElementChild;
         },
 
-        async refreshExpanded() {
-            const expanded = [];
+        // Refresh every directory whose children have been loaded — expanded or
+        // collapsed. A collapsed-but-loaded folder still holds cached rows in
+        // the DOM; without refetching it here, a file added or removed inside it
+        // stays stale until reload (the top-level payload no longer carries a
+        // lookahead that refreshed those folders for free). reconcile keeps each
+        // folder's expanded descendants intact.
+        async refreshLoaded() {
+            const loaded = [];
             document.querySelectorAll('.tree-item').forEach(item => {
-                const children = item.querySelector(':scope > .tree-children');
-                if (children && !children.classList.contains('collapsed') && item.dataset.loaded === 'true') {
-                    expanded.push(item.dataset.path);
+                if (item.dataset.loaded === 'true' && item.querySelector(':scope > .tree-children')) {
+                    loaded.push(item.dataset.path);
                 }
             });
 
-            await Promise.all(expanded.map(async (dirPath) => {
+            await Promise.all(loaded.map(async (dirPath) => {
                 try {
                     const response = await MDVApi.expandTree(dirPath);
                     if (!response.ok) return;
@@ -760,7 +766,7 @@
                     const box = item && item.querySelector(':scope > .tree-children');
                     if (box) this.reconcile(box, children);
                 } catch (e) {
-                    // best-effort refresh of one expanded directory; ignore
+                    // best-effort refresh of one loaded directory; ignore
                 }
             }));
         },
