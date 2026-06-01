@@ -455,8 +455,10 @@
                 if (data.type === 'file_update' && state.activeTabIndex >= 0) {
                     this.handleFileUpdate(data);
                 } else if (data.type === 'tree_update') {
-                    // tree_update を受信したらAPIから最新ツリーを取得
-                    await FileTreeManager.refresh();
+                    // Coalesce bursts: bulk FS ops (git checkout, npm install)
+                    // emit hundreds of tree_update frames. Schedule a single
+                    // refresh instead of refreshing once per frame.
+                    FileTreeManager.scheduleRefresh();
                 }
             };
 
@@ -565,7 +567,38 @@
             elements.fileTree.innerHTML = '<div style="padding: 16px; color: var(--text-muted);">読み込みに失敗しました。<br><button onclick="location.reload()" style="margin-top: 8px; cursor: pointer;">再読み込み</button></div>';
         },
 
+        // --- tree refresh coalescing --------------------------------------
+        // A burst of tree_update frames (a bulk FS operation emits hundreds)
+        // must collapse into a single tree refresh. Refreshing once per frame
+        // tears down and rebuilds the whole tree repeatedly and freezes the
+        // tab. We also never run two refreshes concurrently: the old code did
+        // `await refresh()` per ws message, so overlapping fetches could let a
+        // stale response overwrite a newer tree. `_refreshInFlight` serializes
+        // them; `_refreshDirty` runs exactly one more pass for events that
+        // arrived mid-flight.
+        _refreshTimer: null,
+        _refreshInFlight: false,
+        _refreshDirty: false,
+
+        scheduleRefresh() {
+            if (this._refreshInFlight) {
+                // A refresh is running; remember to re-run once after it ends.
+                this._refreshDirty = true;
+                return;
+            }
+            if (this._refreshTimer) return; // burst already scheduled
+            this._refreshTimer = setTimeout(() => {
+                this._refreshTimer = null;
+                this.refresh();
+            }, 50);
+        },
+
         async refresh() {
+            if (this._refreshInFlight) {
+                this._refreshDirty = true;
+                return;
+            }
+            this._refreshInFlight = true;
             try {
                 const response = await MDVApi.fetchTree();
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -573,6 +606,12 @@
                 await this.update(tree);
             } catch (e) {
                 console.error('Failed to refresh tree:', e);
+            } finally {
+                this._refreshInFlight = false;
+                if (this._refreshDirty) {
+                    this._refreshDirty = false;
+                    this.scheduleRefresh();
+                }
             }
         },
 

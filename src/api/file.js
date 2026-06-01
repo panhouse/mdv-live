@@ -25,6 +25,15 @@ async function resolveAndValidate(relativePath, rootDir) {
 }
 
 /**
+ * Check whether a file or directory exists at the given path.
+ * @param {string} fullPath - Absolute path
+ * @returns {Promise<boolean>} True if it exists
+ */
+async function pathExists(fullPath) {
+  return fs.access(fullPath).then(() => true).catch(() => false);
+}
+
+/**
  * Broadcast tree_update to all WebSocket clients
  * @param {Express} app - Express app instance
  * @returns {void}
@@ -184,8 +193,14 @@ export function setupFileRoutes(app) {
     }
 
     try {
+      // Only a *new* file changes the tree structure; editing existing content
+      // does not. Broadcasting tree_update on every autosave makes all clients
+      // re-fetch and re-render the whole tree needlessly (a tree storm during
+      // normal editing). Content updates already reach watchers via the
+      // targeted file_update channel, so an existing-file save stays silent.
+      const isNewFile = !(await pathExists(fullPath));
       await fs.writeFile(fullPath, content, 'utf-8');
-      broadcastTreeUpdate(app);
+      if (isNewFile) broadcastTreeUpdate(app);
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: err.message });

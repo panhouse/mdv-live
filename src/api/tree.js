@@ -106,7 +106,11 @@ export function setupTreeRoutes(app) {
       }
 
       const fullPath = path.join(app.locals.rootDir, relativePath);
-      const children = await buildFileTree(fullPath, app.locals.rootDir, 0);
+      // Direct children only: start at the depth cap so subdirectories come
+      // back unloaded (loaded:false, children:[]). Lazy-loading one level per
+      // expand avoids reading a whole grandchild level on every expand of a
+      // wide directory (which made expanding/restoring large trees expensive).
+      const children = await buildFileTree(fullPath, app.locals.rootDir, MAX_INITIAL_DEPTH);
       res.json(children);
     } catch (err) {
       res.status(500).json({ error: err.message });
