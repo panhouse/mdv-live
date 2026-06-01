@@ -616,46 +616,196 @@
         },
 
         async update(tree) {
-            // 展開済みかつ読み込み済みのパスを保存
-            const expandedPaths = new Set();
+            // Keyed, in-place reconcile instead of an innerHTML teardown. The
+            // old code rebuilt the whole tree on every external change, which
+            // (a) flickered, (b) lost scroll position, and (c) collapsed any
+            // folder deeper than the lookahead because those nodes were not in
+            // the rebuilt DOM. Reconciling by path key preserves scroll,
+            // selection, and already-expanded subtrees, and only touches nodes
+            // that actually changed.
+            const treeEl = elements.fileTree;
+            const prevScroll = treeEl.scrollTop;
+
+            this.reconcile(treeEl, tree);
+
+            // `tree` only carries the lookahead depth, so directories expanded
+            // deeper than that must be refreshed explicitly to pick up changes.
+            // Done in parallel and reconciled in place (keeps their expansion).
+            await this.refreshExpanded();
+
+            treeEl.scrollTop = prevScroll;
+            this.updateHighlight();
+        },
+
+        nodeKey(el) {
+            if (el.classList && el.classList.contains('tree-item')) {
+                // Include kind so a file and a directory at the same path get
+                // different keys: if an entry is replaced by one of the other
+                // kind, reconcile treats it as remove+add and rebuilds correct
+                // markup instead of reusing a node that can't toggle kind.
+                const kind = el.querySelector(':scope > .tree-children') ? 'd' : 'f';
+                return 'item:' + kind + ':' + el.dataset.path;
+            }
+            if (el.classList && el.classList.contains('tree-more')) return 'more:' + (el.dataset.dir || '');
+            return null;
+        },
+
+        itemKey(item) {
+            if (item.type === 'more') return 'more:' + (item.path || '');
+            const kind = item.type === 'directory' ? 'd' : 'f';
+            return 'item:' + kind + ':' + item.path;
+        },
+
+        // Reconcile `container`'s direct children against `items` by path key:
+        // reuse matching nodes (preserving their subtrees), create new ones,
+        // remove deleted ones, and fix ordering — without tearing the list down.
+        reconcile(container, items) {
+            const list = Array.isArray(items) ? items : [];
+
+            // Don't clobber a directory the user has paged into. When the
+            // incoming list is capped (ends with a "more" sentinel) but the DOM
+            // already shows more rows than it carries, the user clicked
+            // "load more" here; reconciling against only the first page would
+            // prune those extra rows — hiding content they just revealed (and
+            // possibly the open file). Leave it intact; it refreshes on
+            // re-expand. (A genuinely shrunken directory is not capped, so it
+            // still reconciles normally.)
+            const capped = list.length > 0 && list[list.length - 1].type === 'more';
+            if (capped) {
+                const incomingItems = list.length - 1; // excluding the sentinel
+                let existingItems = 0;
+                for (const el of container.children) {
+                    if (el.classList && el.classList.contains('tree-item')) existingItems++;
+                }
+                if (existingItems > incomingItems) return;
+            }
+
+            const existing = new Map();
+            for (const el of Array.from(container.children)) {
+                const key = this.nodeKey(el);
+                if (key) existing.set(key, el);
+            }
+
+            const used = new Set();
+            let prev = null;
+            for (const item of list) {
+                const key = this.itemKey(item);
+                let el = existing.get(key);
+                if (el && !used.has(key)) {
+                    this.updateNode(el, item);
+                } else {
+                    el = this.createNode(item);
+                }
+                used.add(key);
+
+                const desiredNext = prev ? prev.nextSibling : container.firstChild;
+                if (el !== desiredNext) {
+                    container.insertBefore(el, desiredNext);
+                }
+                prev = el;
+            }
+
+            for (const [key, el] of existing) {
+                if (!used.has(key)) el.remove();
+            }
+        },
+
+        updateNode(el, item) {
+            if (item.type === 'directory') {
+                // Only refresh the child level when the new data carries it
+                // (loaded:true). When it doesn't (loaded:false), leave the
+                // existing — possibly deeper-expanded — subtree untouched and
+                // never downgrade an already-loaded directory.
+                if (item.loaded === true) {
+                    el.dataset.loaded = 'true';
+                    const childrenBox = el.querySelector(':scope > .tree-children');
+                    if (childrenBox) this.reconcile(childrenBox, item.children || []);
+                }
+            } else if (item.type === 'more') {
+                el.dataset.offset = item.offset;
+                el.dataset.total = item.total;
+                const name = el.querySelector('.name');
+                if (name) {
+                    const remaining = item.remaining != null ? item.remaining : (item.total - item.offset);
+                    name.textContent = `… 残り ${remaining} 件を表示`;
+                }
+            }
+            // files: name/icon are keyed by path, so a rename is add + remove
+        },
+
+        createNode(item) {
+            const html = item.type === 'directory' ? this.renderDirectory(item)
+                : item.type === 'more' ? this.renderMore(item)
+                : this.renderFile(item);
+            const tmp = document.createElement('div');
+            tmp.innerHTML = html.trim();
+            return tmp.firstElementChild;
+        },
+
+        async refreshExpanded() {
+            const expanded = [];
             document.querySelectorAll('.tree-item').forEach(item => {
-                const children = item.querySelector('.tree-children');
+                const children = item.querySelector(':scope > .tree-children');
                 if (children && !children.classList.contains('collapsed') && item.dataset.loaded === 'true') {
-                    expandedPaths.add(item.dataset.path);
+                    expanded.push(item.dataset.path);
                 }
             });
 
-            elements.fileTree.innerHTML = this.renderItems(tree);
-
-            // 展開済みディレクトリを復元（子要素も再取得）
-            for (const path of expandedPaths) {
-                const item = document.querySelector(`.tree-item[data-path="${CSS.escape(path)}"]`);
-                if (item) {
-                    const children = item.querySelector('.tree-children');
-                    const chevron = item.querySelector('.chevron');
-
-                    // 子要素を再取得
-                    if (children && item.dataset.loaded !== 'true') {
-                        await this.expandDirectory(path, children);
-                    }
-
-                    if (children) children.classList.remove('collapsed');
-                    if (chevron) chevron.classList.add('expanded');
+            await Promise.all(expanded.map(async (dirPath) => {
+                try {
+                    const response = await MDVApi.expandTree(dirPath);
+                    if (!response.ok) return;
+                    const children = await response.json();
+                    const item = document.querySelector(`.tree-item[data-path="${CSS.escape(dirPath)}"]`);
+                    const box = item && item.querySelector(':scope > .tree-children');
+                    if (box) this.reconcile(box, children);
+                } catch (e) {
+                    // best-effort refresh of one expanded directory; ignore
                 }
-            }
-
-            this.updateHighlight();
+            }));
         },
 
         renderItems(items) {
             if (!items || items.length === 0) return '';
 
             return items.map(item => {
-                if (item.type === 'directory') {
-                    return this.renderDirectory(item);
-                }
+                if (item.type === 'directory') return this.renderDirectory(item);
+                if (item.type === 'more') return this.renderMore(item);
                 return this.renderFile(item);
             }).join('');
+        },
+
+        // "Load more" row shown when a directory has more children than the
+        // per-directory cap. Clicking it fetches the next page and splices the
+        // rows in. Not a .tree-item, so it never matches the file-open / drag /
+        // context-menu delegation.
+        renderMore(item) {
+            const remaining = item.remaining != null ? item.remaining : (item.total - item.offset);
+            const safeDir = escapeHtml(item.path || '');
+            return `
+                <div class="tree-more" data-dir="${safeDir}" data-offset="${item.offset}" data-total="${item.total}" onclick="MDV.loadMore(this)">
+                    <span class="name">… 残り ${remaining} 件を表示</span>
+                </div>
+            `;
+        },
+
+        async loadMore(el) {
+            if (el.classList.contains('loading')) return;
+            el.classList.add('loading');
+            const dir = el.dataset.dir || '';
+            const offset = parseInt(el.dataset.offset, 10) || 0;
+            try {
+                const response = await MDVApi.pageTree(dir, offset);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const items = await response.json();
+                // Splice the new rows in before this node, then drop it. The
+                // page response carries its own trailing "more" row if needed.
+                el.insertAdjacentHTML('beforebegin', this.renderItems(items));
+                el.remove();
+            } catch (e) {
+                console.error('Failed to load more:', e);
+                el.classList.remove('loading');
+            }
         },
 
         renderDirectory(item) {
@@ -3556,6 +3706,7 @@
         openFile: (path) => TabManager.open(path),
         switchTab: (index) => TabManager.switch(index),
         closeTab: (index) => TabManager.close(index),
+        loadMore: (element) => FileTreeManager.loadMore(element),
         toggleDirectory: async (element) => {
             const chevron = element.querySelector('.chevron');
             const children = element.nextElementSibling;

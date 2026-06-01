@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import WebSocket from 'ws';
 
-import { buildFileTree } from '../src/api/tree.js';
+import { buildFileTree, readDirPage } from '../src/api/tree.js';
 import { createMdvServer } from '../src/server.js';
 
 describe('buildFileTree depth control (expand = direct children only)', () => {
@@ -57,6 +57,88 @@ describe('buildFileTree depth control (expand = direct children only)', () => {
       childDir.children.find((g) => g.name === 'grandchild.md'),
       'grandchild is preloaded at the initial depth'
     );
+  });
+});
+
+describe('directory pagination (cap + load more)', () => {
+  let tempDir;
+  const CAP = 500; // mirrors MAX_CHILDREN_PER_DIR in src/api/tree.js
+  const TOTAL = 505;
+
+  before(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-page-'));
+    // TOTAL flat files (zero-padded so sort order is deterministic).
+    await Promise.all(
+      Array.from({ length: TOTAL }, (_, i) =>
+        fs.writeFile(path.join(tempDir, `f${String(i).padStart(4, '0')}.md`), 'x')
+      )
+    );
+  });
+
+  after(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('buildFileTree caps children and appends a "more" sentinel', async () => {
+    const items = await buildFileTree(tempDir, tempDir, 0);
+    const more = items[items.length - 1];
+    assert.strictEqual(items.length, CAP + 1, 'CAP items + 1 sentinel');
+    assert.strictEqual(more.type, 'more');
+    assert.strictEqual(more.offset, CAP);
+    assert.strictEqual(more.total, TOTAL);
+    assert.strictEqual(more.remaining, TOTAL - CAP);
+    assert.strictEqual(more.path, '', 'sentinel path is the (root) directory');
+    assert.ok(items.slice(0, CAP).every((i) => i.type === 'file'), 'capped items are files');
+  });
+
+  it('readDirPage returns the requested slice and a sentinel until exhausted', async () => {
+    const page1 = await readDirPage(tempDir, tempDir, 0, 100);
+    assert.strictEqual(page1.length, 101, '100 items + sentinel');
+    assert.strictEqual(page1[100].type, 'more');
+    assert.strictEqual(page1[100].offset, 100);
+
+    const lastPage = await readDirPage(tempDir, tempDir, 500, 100);
+    assert.strictEqual(lastPage.length, TOTAL - 500, 'final 5 items, no sentinel');
+    assert.ok(!lastPage.some((i) => i.type === 'more'), 'no sentinel on the last page');
+  });
+});
+
+describe('GET /api/tree/page endpoint', () => {
+  let server;
+  let tempDir;
+  const PORT = 19969;
+
+  before(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-pageapi-'));
+    await Promise.all(
+      Array.from({ length: 12 }, (_, i) =>
+        fs.writeFile(path.join(tempDir, `g${String(i).padStart(2, '0')}.md`), 'x')
+      )
+    );
+    server = createMdvServer({ rootDir: tempDir, port: PORT });
+    await server.start();
+  });
+
+  after(async () => {
+    if (server) await server.stop();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('paginates the root directory', async () => {
+    const res = await fetch(`http://localhost:${PORT}/api/tree/page?path=&offset=0&limit=5`);
+    assert.strictEqual(res.status, 200);
+    const items = await res.json();
+    assert.strictEqual(items.length, 6, '5 items + sentinel');
+    assert.strictEqual(items[5].type, 'more');
+    assert.strictEqual(items[5].offset, 5);
+    assert.strictEqual(items[5].total, 12);
+  });
+
+  it('rejects path traversal', async () => {
+    const res = await fetch(
+      `http://localhost:${PORT}/api/tree/page?path=${encodeURIComponent('../../etc')}&offset=0&limit=5`
+    );
+    assert.strictEqual(res.status, 403);
   });
 });
 
