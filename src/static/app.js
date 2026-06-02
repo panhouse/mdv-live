@@ -626,7 +626,16 @@
             const treeEl = elements.fileTree;
             const prevScroll = treeEl.scrollTop;
 
-            this.reconcile(treeEl, tree);
+            // `tree` is the first capped page of the root. If the user paged the
+            // root past it ("load more"), refetch the full shown range so
+            // reconcile keeps AND refreshes those extra rows rather than pruning
+            // them or going stale.
+            const rootCapped = tree.length > 0 && tree[tree.length - 1].type === 'more';
+            const rootRows = this.countItemRows(treeEl);
+            const rootList = (rootCapped && rootRows > tree.length - 1)
+                ? await this.fetchChildrenUpTo('', rootRows)
+                : tree;
+            this.reconcile(treeEl, rootList);
 
             // `/api/tree` only carries the top level, so every directory whose
             // children have been loaded must be refreshed explicitly to pick up
@@ -663,24 +672,10 @@
         reconcile(container, items) {
             const list = Array.isArray(items) ? items : [];
 
-            // Don't clobber a directory the user has paged into. When the
-            // incoming list is capped (ends with a "more" sentinel) but the DOM
-            // already shows more rows than it carries, the user clicked
-            // "load more" here; reconciling against only the first page would
-            // prune those extra rows — hiding content they just revealed (and
-            // possibly the open file). Leave it intact; it refreshes on
-            // re-expand. (A genuinely shrunken directory is not capped, so it
-            // still reconciles normally.)
-            const capped = list.length > 0 && list[list.length - 1].type === 'more';
-            if (capped) {
-                const incomingItems = list.length - 1; // excluding the sentinel
-                let existingItems = 0;
-                for (const el of container.children) {
-                    if (el.classList && el.classList.contains('tree-item')) existingItems++;
-                }
-                if (existingItems > incomingItems) return;
-            }
-
+            // Callers always pass a list covering at least the rows currently
+            // shown (paged directories are refetched in full via
+            // fetchChildrenUpTo before reconciling), so the keyed diff below can
+            // prune freely without dropping load-more'd rows.
             const existing = new Map();
             for (const el of Array.from(container.children)) {
                 const key = this.nodeKey(el);
@@ -743,6 +738,44 @@
             return tmp.firstElementChild;
         },
 
+        countItemRows(container) {
+            let n = 0;
+            for (const el of container.children) {
+                if (el.classList && el.classList.contains('tree-item')) n++;
+            }
+            return n;
+        },
+
+        // Fetch a directory's children up to at least `minCount` rows, paging
+        // through /api/tree/page. Used to refresh a directory the user has
+        // "load more"d past the cap: re-read exactly what is currently shown
+        // (plus a trailing "more" row if further entries remain) so reconcile
+        // can apply adds/deletes without dropping the loaded rows. For a normal
+        // (<= one page) directory this is a single request. `dirPath` is '' for
+        // the root.
+        async fetchChildrenUpTo(dirPath, minCount) {
+            let items = [];
+            let offset = 0;
+            // Bounded as a safety net; each page advances the offset.
+            for (let guard = 0; guard < 1000; guard++) {
+                const response = await MDVApi.pageTree(dirPath, offset);
+                if (!response.ok) break;
+                const page = await response.json();
+                let more = null;
+                if (page.length && page[page.length - 1].type === 'more') {
+                    more = page.pop();
+                }
+                items = items.concat(page);
+                if (!more) return items;             // directory fully read
+                if (items.length >= minCount) {       // covered what is shown
+                    items.push(more);                 // keep the "load more" row
+                    return items;
+                }
+                offset = more.offset;
+            }
+            return items;
+        },
+
         // Refresh every directory whose children have been loaded — expanded or
         // collapsed. A collapsed-but-loaded folder still holds cached rows in
         // the DOM; without refetching it here, a file added or removed inside it
@@ -752,16 +785,17 @@
         async refreshLoaded() {
             const loaded = [];
             document.querySelectorAll('.tree-item').forEach(item => {
-                if (item.dataset.loaded === 'true' && item.querySelector(':scope > .tree-children')) {
-                    loaded.push(item.dataset.path);
+                const box = item.querySelector(':scope > .tree-children');
+                if (item.dataset.loaded === 'true' && box) {
+                    loaded.push({ path: item.dataset.path, count: this.countItemRows(box) });
                 }
             });
 
-            await Promise.all(loaded.map(async (dirPath) => {
+            await Promise.all(loaded.map(async ({ path: dirPath, count }) => {
                 try {
-                    const response = await MDVApi.expandTree(dirPath);
-                    if (!response.ok) return;
-                    const children = await response.json();
+                    // Re-read exactly what is shown (paging if it was load-more'd)
+                    // so reconcile refreshes the directory without dropping rows.
+                    const children = await this.fetchChildrenUpTo(dirPath, count);
                     const item = document.querySelector(`.tree-item[data-path="${CSS.escape(dirPath)}"]`);
                     const box = item && item.querySelector(':scope > .tree-children');
                     if (box) this.reconcile(box, children);
