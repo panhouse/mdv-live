@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.22] - 2026-06-02
+
+### Fixed — 大量のファイル/フォルダがあるディレクトリで開くとタブが固まる
+
+ファイル数の多いディレクトリ（例: Downloads、サブフォルダが多いルート）で
+mdv を開く、あるいは開いている間に一括 FS 操作（git checkout / npm install /
+一括保存）が走ると、ブラウザタブが固まることがあった。原因はすべてブラウザ側の
+左ファイルツリーの再描画（サーバー側は無罪）。2 系統あった:
+
+- **イベント storm**: FS イベントごとに `tree_update` を連発し、クライアントが
+  そのたびにツリーを全再構築していた。
+- **一括描画**: 1 ディレクトリの大量エントリ、および初回ロードの先読み
+  （lookahead）で大量の DOM ノードを一度に生成していた。
+
+修正:
+
+- **storm 抑制**: クライアントの `tree_update` を 1 回の refresh に集約
+  （in-flight + dirty で直列化、古いレスポンスの上書き競合も解消）。watcher の
+  broadcast を 150ms デバウンス。`POST /api/file` はファイル新規作成時のみ
+  `tree_update` を送る（既存ファイル保存ではツリーを更新しない）。
+- **ディレクトリ上限 + 遅延ページング**: 1 ディレクトリあたり 500 件で打ち切り、
+  「もっと読み込む」で残りを `GET /api/tree/page` から取得。
+- **先読み廃止**: `/api/tree` は最上位のみを返し、各フォルダは展開時に遅延
+  ロード。どの形のフォルダでも初回オープンの DOM ノード数を最大 1 段（~500 行）
+  に固定（サブフォルダ多数ルートで実測 60,206 → 166 ノード）。
+- **差分描画**: ツリーを innerHTML で全破棄せず、パス + 種別キーで差分 reconcile。
+  外部変更時もスクロール位置・展開状態・選択を維持。ロード済み（折りたたみ含む）
+  および load-more 済みのディレクトリは、表示中の範囲を再取得して反映。
+- **deep-link reveal**: cap を超える位置のエントリへ URL/リンクで遷移した際も、
+  親をページングして当該ノードを reveal + ハイライト。
+
+302 テスト全 PASS。Codex (GPT-5.5) 異種モデルクロスレビュー済み。
+
 ## [0.5.21] - 2026-05-22
 
 ### Fixed — Marp スライドが横長ペインで上下に見切れる
