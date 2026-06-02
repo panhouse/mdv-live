@@ -884,6 +884,32 @@
             }
         },
 
+        // Page a directory's listing until `targetPath` appears, so URL/link
+        // navigation can reveal an entry that sorts past the per-directory cap.
+        // The parent must already be loaded (expandToPath processes parents
+        // first). Returns the node, or null if it genuinely isn't there.
+        async revealInParent(targetPath) {
+            const slash = targetPath.lastIndexOf('/');
+            const parentPath = slash >= 0 ? targetPath.slice(0, slash) : '';
+            const container = parentPath
+                ? document.querySelector(`.tree-item[data-path="${CSS.escape(parentPath)}"] > .tree-children`)
+                : elements.fileTree;
+            if (!container) return null;
+
+            const sel = `:scope > .tree-item[data-path="${CSS.escape(targetPath)}"]`;
+            for (let guard = 0; guard < 1000; guard++) {
+                const found = container.querySelector(sel);
+                if (found) return found;
+                const more = container.querySelector(':scope > .tree-more');
+                if (!more) return null; // listing exhausted; target not present
+                const offsetBefore = more.dataset.offset;
+                await this.loadMore(more);
+                const moreAfter = container.querySelector(':scope > .tree-more');
+                if (moreAfter && moreAfter.dataset.offset === offsetBefore) return null; // no progress
+            }
+            return null;
+        },
+
         async expandToPath(filePath) {
             // パスを分割して順番に展開
             const parts = filePath.split('/');
@@ -892,7 +918,12 @@
             for (const part of parts) {
                 currentPath = currentPath ? `${currentPath}/${part}` : part;
 
-                const item = document.querySelector(`.tree-item[data-path="${CSS.escape(currentPath)}"]`);
+                let item = document.querySelector(`.tree-item[data-path="${CSS.escape(currentPath)}"]`);
+                if (!item) {
+                    // The node may sort past its parent's per-directory cap and
+                    // not be rendered yet. Page the parent in until it appears.
+                    item = await this.revealInParent(currentPath);
+                }
                 if (!item) continue;
 
                 const children = item.querySelector('.tree-children');
