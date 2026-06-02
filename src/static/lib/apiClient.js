@@ -39,6 +39,12 @@
   function expandTree(path) {
     return fetch('/api/tree/expand?path=' + encodeURIComponent(path));
   }
+  /** GET /api/tree/page — next page of a large directory's children */
+  function pageTree(path, offset, limit) {
+    const params = new URLSearchParams({ path: path || '', offset: String(offset || 0) });
+    if (limit) params.set('limit', String(limit));
+    return fetch('/api/tree/page?' + params.toString());
+  }
   function fetchFile(path) {
     return fetch('/api/file?path=' + encodeURIComponent(path));
   }
@@ -65,6 +71,7 @@
       saveMarpNote,
       fetchTree,
       expandTree,
+      pageTree,
       fetchFile,
       saveFile,
       fetchInfo,

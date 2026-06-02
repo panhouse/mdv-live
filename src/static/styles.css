@@ -166,6 +166,20 @@ body {
 .tree-item-content .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-children { padding-left: 16px; }
 .tree-children.collapsed { display: none; }
+
+/* "Load more" row for directories with more children than the per-dir cap */
+.tree-more {
+    display: flex;
+    align-items: center;
+    padding: 6px 12px 6px 34px;
+    cursor: pointer;
+    font-size: 12px;
+    font-style: italic;
+    color: var(--text-muted);
+    user-select: none;
+}
+.tree-more:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+.tree-more.loading { opacity: 0.5; cursor: default; }
 .chevron { transition: transform 0.15s; }
 .chevron.expanded { transform: rotate(90deg); }
 .chevron.loading { animation: spin 0.6s linear infinite; }

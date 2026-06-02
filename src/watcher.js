@@ -56,11 +56,21 @@ export function setupWatcher(rootDir, wss, options = {}) {
     return path.relative(rootDir, filePath).split(path.sep).join('/');
   }
 
+  // Coalesce bursts: a bulk FS operation (git checkout, npm install, unzip)
+  // fires many add/unlink events. Emit at most one tree_update per debounce
+  // window so clients don't re-fetch and re-render the whole tree per event.
+  const TREE_UPDATE_DEBOUNCE_MS = 150;
+  let treeUpdateTimer = null;
+
   function broadcastTreeUpdate() {
-    wss.broadcast({
-      type: 'tree_update',
-      tree: null
-    });
+    if (treeUpdateTimer) return; // a broadcast is already scheduled for this burst
+    treeUpdateTimer = setTimeout(() => {
+      treeUpdateTimer = null;
+      wss.broadcast({
+        type: 'tree_update',
+        tree: null
+      });
+    }, TREE_UPDATE_DEBOUNCE_MS);
   }
 
   watcher.on('change', async (filePath) => {
