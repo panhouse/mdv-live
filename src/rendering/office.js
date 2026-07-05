@@ -433,6 +433,12 @@ function formatExcelDate(serial, hasTime, date1904, hasSeconds) {
   // into the date — otherwise 44197.9999999 renders as the PREVIOUS day
   // at 00:00 instead of the next day (near-midnight timestamps).
   let timeStr = '';
+  // INTENTIONAL (codex round-15 finding declined): exact whole-day serials
+  // in datetime formats render date-only, without a " 00:00" suffix. Excel
+  // itself would show the zeros, but this is a 雰囲気プレビュー — openpyxl
+  // stamps its default datetime format on plain date values, and a column
+  // of "2026/7/5 00:00:00" is noise, not information. The banner already
+  // says 正確な表示は元アプリで.
   if (hasTime && fraction > 1e-6) {
     const unit = hasSeconds ? 86400 : 1440;
     let ticks = Math.round(fraction * unit);

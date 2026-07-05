@@ -1153,3 +1153,20 @@ describe('renderXlsxPreview — codex round-14 fix (formats on cached formula va
     assert.strictEqual(dates, 2, 'both the plain and the formula cell must render as dates');
   });
 });
+
+describe('renderXlsxPreview — intentional display choices', () => {
+  it('whole-day serials in datetime formats render date-only (no 00:00 noise) by design', () => {
+    const stylesXml = buildStylesXml({
+      numFmts: [{ id: 172, code: 'yyyy-mm-dd h:mm:ss' }],
+      cellXfsNumFmtIds: [0, 172],
+    });
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody: '<row r="1"><c r="A1" s="1"><v>44197</v></c></row>',
+      stylesXml,
+    });
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(html.includes('2021/1/1'));
+    assert.ok(!html.includes('00:00'), 'midnight suffix intentionally suppressed for readability');
+  });
+});
