@@ -155,9 +155,11 @@ test('unread badges: external edit lights up a non-open file + its folder, openi
 
     // note1 had a known etag -> genuinely confirmed (✓), not just cleared.
     await expect(note1Badge).toHaveClass(/is-seen/, { timeout: 5000 });
-    // note3 had no known etag -> cleared from the unread set with no
-    // badge at all (can't claim positive knowledge of a hash it never had).
-    await expect(note3Badge).toHaveCount(0, { timeout: 5000 });
+    // note3 arrived as an 'added' item, which carries a content etag as of
+    // codex rounds 2-4 — so folder mark-all can genuinely confirm it too
+    // (✓), same as note1. (The old "cleared with no badge" expectation only
+    // applies to oversized/unreadable adds, which ship without an etag.)
+    await expect(note3Badge).toHaveClass(/is-seen/, { timeout: 5000 });
     await expect(dirBadge).toHaveCount(0);
     await expect(chip).toBeHidden();
 });

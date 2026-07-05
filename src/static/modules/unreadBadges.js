@@ -122,11 +122,11 @@ export const UnreadBadgesManager = {
             }
 
             if (item.kind === 'added' && !item.etag) {
-                // Etag-less add (oversized/unreadable at add time): no way
-                // to compare — unconditionally unread unless this client
-                // already confirmed some version (best effort; a real edit
-                // arrives as 'changed' and is judged properly).
-                if (getLastSeen(item.path)) continue;
+                // Etag-less add (oversized/unreadable at add time): the
+                // content CANNOT be compared to any baseline, so a stale ✓
+                // must not survive — unconditionally unread (codex
+                // round-4). Normal-size adds carry an etag and take the
+                // hash-compare branch below instead.
                 this._unreadEtag.set(item.path, null);
                 this._seenKnown.delete(item.path);
                 continue;
