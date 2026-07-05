@@ -1,13 +1,46 @@
 /**
- * MDV - Diff Review (0.6.4: 差分バー + ハイライト + ジャンプ)
+ * MDV - Diff Review (0.6.4: 差分バー + ハイライト + ジャンプ →
+ * 0.6.8: 専用バーを廃止し、ツールバーの「変更 N」/「✓ 確認」ボタンに置き換え)
  *
  * Task ② of the 0.6.x review-surface plan
  * (docs/plan-review-surface-0.6.x.md) — see that doc's "② 変更ハイライト"
- * section for the product spec, docs/ARCHITECTURE.md's "§ WS file_update" /
- * "GET /api/diff" notes for the backend contract, and the mock
- * (`mock/mdv-review-surface-mock.html`, scene 1 — ignore its agent-banner
- * and 検収 buttons, out of scope) for the look this replicates with the
- * app's own CSS variables (both themes).
+ * section for the ORIGINAL (0.6.4〜0.6.6) product spec and
+ * docs/ARCHITECTURE.md's "§ WS file_update" / "GET /api/diff" notes for the
+ * backend contract — both unchanged by 0.6.8, which only touches the
+ * frontend surface described below.
+ *
+ * ---------------------------------------------------------------------
+ * 0.6.8: Word's 変更履歴 model — no more 3rd band
+ * ---------------------------------------------------------------------
+ * Owner feedback verbatim: 「Wordと全く同じ機能にしたほうがみやすい。変更
+ * 履歴on/offボタンを一番上におす。3列目でてくるのうざい」「機能が過剰」.
+ * The standalone `#diffReviewBar` row that used to sit between the tab bar
+ * and the content pane (0.6.4-0.6.7) is DELETED — no replacement band.
+ * Instead, two buttons live as ordinary static markup in the TOOLBAR
+ * (index.html, right after the Edit button, cached in dom.js's `elements`
+ * like every other toolbar button) and are shown/hidden per active-tab
+ * state by `_syncToolbar()`:
+ *   - `#diffToggleBtn` ("変更 N", N = `_current.count`) — Word's 変更内容
+ *     の表示 toggle. `aria-pressed` mirrors `_highlightsOn` (default ON
+ *     whenever a diff appears); toggling only adds/removes the SAME
+ *     .diff-added/.diff-changed/.diff-removed-after marks as before
+ *     (_applyHighlightClasses()) — the ⌥↑↓ jump (_handleJumpKey()) is
+ *     untouched and keeps working whenever those marks are visible. The
+ *     ON/OFF choice is remembered PER PATH (`_highlightsOnByPath`) while
+ *     that path's diff stays open, so switching tabs away and back does
+ *     not silently flip it back to ON — see markSeen()'s cleanup call for
+ *     when that memory is dropped (the diff is resolved, so there is
+ *     nothing left to remember).
+ *   - `#diffConfirmBtn` ("✓ 確認") — identical action to the old
+ *     0.6.4-0.6.7 「最新を確認済みにする」: adopts `currentHash` as the new
+ *     baseline via markSeen(), which clears both buttons AND (via the
+ *     onSeen seam below) the tree's unread ● in modules/unreadBadges.js.
+ * Unknown-baseline/too-large (`kind: 'unavailable'`) shows "変更 ?" (title
+ * tooltip 「差分は取得できませんでした」) + the confirm button, with no
+ * highlighting — same case the old bar's "unavailable" branch handled.
+ * Both buttons carry the `.hidden` class (no diff / non-diffable tab /
+ * welcome / edit mode) — the toolbar shows NOTHING extra in the normal
+ * case; that subtraction is the entire point of this revision.
  *
  * ---------------------------------------------------------------------
  * Baseline model (localStorage) — THE SHARED FOUNDATION 0.6.5 builds on
@@ -21,14 +54,15 @@
  * explicit 確認済み click — see markSeen()).
  *
  * getLastSeen(path) / markSeen(path, hash) are the ONLY functions that
- * touch this storage key — 0.6.5 (未読●/✓/フォルダバッジ,
- * modules/unreadBadges.js) imports both directly from this module rather
- * than re-deriving the schema. It also needs to know the MOMENT a path
- * becomes seen (first-sight, 確認済み, or 0.6.5's own フォルダ内を
- * 確認済みにする, which calls markSeen() per-path) so its unread map can
- * flip that path to ✓ without polling — onSeen(fn) below is the tiny
- * subscription seam for that, rather than duplicating the "what does
- * seen mean" logic in a second module.
+ * touch this storage key — 0.6.5 (未読●フォルダバッジ,
+ * modules/unreadBadges.js; its ✓ badge was removed in 0.6.8, see that
+ * module's docstring) imports both directly from this module rather than
+ * re-deriving the schema. It also needs to know the MOMENT a path becomes
+ * seen (first-sight, 確認 click, or 0.6.5's own フォルダ内を確認済みにする,
+ * which calls markSeen() per-path) so its unread map can clear that path's
+ * ● without polling — onSeen(fn) below is the tiny subscription seam for
+ * that, rather than duplicating the "what does seen mean" logic in a
+ * second module.
  *
  * ---------------------------------------------------------------------
  * Why this module does NOT trust `tab.etag` as "always populated"
@@ -49,7 +83,7 @@
  * `tab.etag === lastSeen.hash` check (since `tab.etag` may still be null)
  * and ask the server — which is merely a wasted round trip, not a
  * correctness bug, EXCEPT for step (a): a `null` baseline can never
- * legitimately match a later real hash, so the bar would falsely claim
+ * legitimately match a later real hash, so the toolbar would falsely claim
  * "changed" forever. _resolveCurrentHash() below closes that gap by
  * falling back to `MDVApi.diff(path, '')`'s `currentHash` (every /api/diff
  * response includes it except the one pre-hash "file too large to even
@@ -59,7 +93,8 @@
  * Wiring (no changes to modules/tabs.js — out of this task's file scope)
  * ---------------------------------------------------------------------
  * refresh() is the single entry point that re-checks the ACTIVE tab
- * against its localStorage baseline and updates the bar/highlights. Two
+ * against its localStorage baseline and updates the toolbar controls/
+ * highlights. Two
  * call sites, both wired from app.js's init() (see that file):
  *   1. WebSocketManager.setOnFileRendered(() => DiffReviewManager.refresh())
  *      — after a live file_update repaints the content pane (see
@@ -111,10 +146,10 @@ import { elements } from './dom.js';
 import { STORAGE_KEYS, DIFF_JUMP_FLASH_MS } from './constants.js';
 import { MDVApi } from '../lib/apiClient.js';
 
-// Tabs the change-tracking bar applies to at all (matches the plan doc's
-// "共通基盤" scope: non-Marp markdown gets full highlighting; Marp/code/
-// text get the bar with API-sourced counts only — no per-line mapping).
-// Binary/image/pdf/video/audio/office/html tabs never show the bar.
+// Tabs the change-tracking toolbar controls apply to at all (matches the
+// plan doc's "共通基盤" scope: non-Marp markdown gets full highlighting;
+// Marp/code/text get the count-only 「変更 N」 button — no per-line
+// mapping). Binary/image/pdf/video/audio/office/html tabs never show it.
 const DIFFABLE_FILE_TYPES = new Set(['markdown', 'code', 'text']);
 
 // ---------------------------------------------------------------------
@@ -152,8 +187,8 @@ function writeStore(store) {
     try {
         localStorage.setItem(STORAGE_KEYS.LAST_SEEN, JSON.stringify(store));
     } catch {
-        // Storage full/unavailable (private-browsing quota, etc.) — the bar
-        // just won't persist across reloads in that case; not fatal.
+        // Storage full/unavailable (private-browsing quota, etc.) — the
+        // toolbar controls just won't persist across reloads; not fatal.
     }
 }
 
@@ -205,6 +240,15 @@ export function markSeen(path, hash) {
         store[key] = { hash, ts: Date.now() };
     }
     writeStore(store);
+    // 0.6.8: a resolved baseline means any pending diff for this path is
+    // gone — drop the remembered per-path highlight-toggle preference
+    // (DiffReviewManager._highlightsOnByPath, see this module's docstring)
+    // so a FUTURE diff starts back at the Word-like default (ON) instead of
+    // inheriting a stale OFF from a diff that no longer exists. Safe to
+    // reference DiffReviewManager here even though it's declared further
+    // down this file — by the time anything actually CALLS markSeen() at
+    // runtime, module evaluation has long finished (no TDZ hit).
+    DiffReviewManager._highlightsOnByPath.delete(path);
     for (const fn of seenListeners) {
         try {
             fn(path, hash || null);
@@ -214,15 +258,13 @@ export function markSeen(path, hash) {
     }
 }
 
-function formatHHMM(ts) {
-    const d = new Date(ts);
-    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
-}
-
 export const DiffReviewManager = {
-    _barEl: null,
     _current: null, // see _applyResponse() for shape
     _highlightsOn: true,
+    // Per-path remembered ON/OFF for the toolbar's 「変更 N」 toggle (0.6.8)
+    // — see this module's docstring's "0.6.8" section. Entries are dropped
+    // by markSeen() the moment that path's diff is resolved.
+    _highlightsOnByPath: new Map(),
     _jumpIndex: -1,
     _reviewSeq: 0,
     _seededPaths: new Set(),
@@ -244,28 +286,21 @@ export const DiffReviewManager = {
     },
 
     init() {
-        this._buildDom();
+        this._bindToolbarControls();
     },
 
-    _buildDom() {
-        const bar = document.createElement('div');
-        bar.id = 'diffReviewBar';
-        bar.className = 'diff-bar hidden';
-        // Sibling insertion (below the tab bar, above the content pane —
-        // mock scene-1 placement), rather than static markup in
-        // index.html: mirrors modules/searchPalette.js's DOM-ownership
-        // approach (build once here, own it entirely) instead of adding
-        // index.html markup this task doesn't otherwise need to touch.
-        elements.content.parentElement.insertBefore(bar, elements.content);
-        this._barEl = bar;
-
-        bar.addEventListener('click', (e) => {
-            if (e.target.closest('#diffHighlightToggle')) {
-                this._toggleHighlights();
-            } else if (e.target.closest('#diffConfirmBtn')) {
-                this._confirmLatest();
-            }
-        });
+    /**
+     * Wire the two STATIC toolbar buttons (index.html, cached in dom.js's
+     * `elements` like every other toolbar button — see this module's
+     * docstring's "0.6.8" section for why they're static markup now
+     * instead of a JS-built `#diffReviewBar`). Both start `.hidden`;
+     * `_syncToolbar()` is the only place that flips that.
+     */
+    _bindToolbarControls() {
+        const toggleBtn = elements.diffToggleBtn;
+        const confirmBtn = elements.diffConfirmBtn;
+        if (toggleBtn) toggleBtn.addEventListener('click', () => this._toggleHighlights());
+        if (confirmBtn) confirmBtn.addEventListener('click', () => this._confirmLatest());
 
         // ⌥↑↓ jump. keyboard.js's shortcut table only recognizes
         // Cmd/Ctrl+<key> (see its handleModShortcut()) — no Alt support —
@@ -276,9 +311,9 @@ export const DiffReviewManager = {
 
     /**
      * Re-check the ACTIVE tab against its localStorage baseline and
-     * update the bar/highlights. Safe to call redundantly (tab reselect,
-     * theme toggle re-render, etc.) — idempotent, and guarded against
-     * out-of-order async responses via _reviewSeq.
+     * update the toolbar controls/highlights. Safe to call redundantly
+     * (tab reselect, theme toggle re-render, etc.) — idempotent, and
+     * guarded against out-of-order async responses via _reviewSeq.
      */
     async refresh() {
         const mySeq = ++this._reviewSeq;
@@ -287,19 +322,19 @@ export const DiffReviewManager = {
         if (!tab || state.isEditMode || !DIFFABLE_FILE_TYPES.has(tab.fileType)) {
             // Edit mode: the textarea replaces the rendered blocks, so
             // highlights/jump have no targets and a confirm click could
-            // acknowledge a pre-edit hash (codex round-5) — hide until
-            // the editor closes (EditorManager.hide() re-renders through
-            // renderActive(), which brings the bar back if still relevant).
+            // acknowledge a pre-edit hash (codex round-5) — hide until the
+            // editor closes (EditorManager.hide() re-renders through
+            // renderActive(), which brings the controls back if relevant).
             this._hide();
             return;
         }
 
         const lastSeen = getLastSeen(tab.path);
 
-        // Path switches hide the PREVIOUS tab's bar synchronously, before
-        // any await: a slow/failed request otherwise leaves the old tab's
-        // 確認済み button mounted over the new content, confirming the
-        // wrong file (codex round-15).
+        // Path switches hide the PREVIOUS tab's toolbar controls
+        // synchronously, before any await: a slow/failed request otherwise
+        // leaves the old tab's 確認 button mounted over the new content,
+        // confirming the wrong file (codex round-15).
         const pathChanged = tab.path !== this._lastPath;
         this._lastPath = tab.path;
         if (pathChanged) this._hide();
@@ -429,7 +464,8 @@ export const DiffReviewManager = {
                 // File too large to even hash (/api/diff's pre-read bail).
                 // It can never become diffable and 確認済み could never
                 // stick (no hash to store) — treat like a binary tab: no
-                // bar, and drop any stale baseline (codex round-4).
+                // toolbar controls, and drop any stale baseline (codex
+                // round-4).
                 markSeen(tab.path, null);
                 this._hide();
                 return;
@@ -437,7 +473,7 @@ export const DiffReviewManager = {
             this._current = { path: tab.path, kind: 'unavailable', currentHash: data.currentHash };
             this._jumpIndex = -1;
             this._clearHighlightClasses();
-            this._renderBar();
+            this._syncToolbar();
             return;
         }
 
@@ -451,7 +487,7 @@ export const DiffReviewManager = {
             // identical:false but zero hunks: a CRLF/trailing-newline-only
             // change that diffLines() normalizes away. No visible line
             // difference to review — silently adopt the new hash instead
-            // of showing a 「0箇所」 bar (codex round-3).
+            // of showing 「変更 0」 (codex round-3).
             markSeen(tab.path, data.currentHash);
             this._hide();
             return;
@@ -463,67 +499,70 @@ export const DiffReviewManager = {
             added,
             changed,
             removedAt,
-            count,
-            lastSeenTs: lastSeen.ts
+            count
         };
-        this._highlightsOn = true; // default ON each time a new diff is shown
+        // 0.6.8: remember the toggle's ON/OFF PER PATH while this diff
+        // stays open (this module's docstring's "0.6.8" section) — only
+        // default to ON the first time this path shows a pending diff.
+        if (this._highlightsOnByPath.has(tab.path)) {
+            this._highlightsOn = this._highlightsOnByPath.get(tab.path);
+        } else {
+            this._highlightsOn = true;
+            this._highlightsOnByPath.set(tab.path, true);
+        }
         this._jumpIndex = -1;
-        this._renderBar();
+        this._syncToolbar();
         this._applyHighlightClasses();
     },
 
     _hide() {
         this._current = null;
         this._jumpIndex = -1;
-        if (this._barEl) {
-            this._barEl.classList.add('hidden');
-            this._barEl.innerHTML = '';
-        }
+        this._syncToolbar();
         this._clearHighlightClasses();
     },
 
-    _renderBar() {
-        if (!this._barEl || !this._current) return;
+    /**
+     * Paint the two static toolbar buttons from `_current`/`_highlightsOn`
+     * — the 0.6.8 replacement for the old `_renderBar()`'s innerHTML
+     * rebuild. See this module's docstring's "0.6.8" section for the
+     * three states this covers (no diff / pending diff / unavailable).
+     */
+    _syncToolbar() {
+        const toggleBtn = elements.diffToggleBtn;
+        const confirmBtn = elements.diffConfirmBtn;
+        if (!toggleBtn || !confirmBtn) return;
         const c = this._current;
-        this._barEl.classList.remove('hidden');
 
-        if (c.kind === 'unavailable') {
-            this._barEl.innerHTML = `
-                <span class="diff-bar-summary">変更あり（差分は取得できませんでした）</span>
-                <button type="button" id="diffConfirmBtn" class="btn-confirm diff-bar-confirm">最新を確認済みにする</button>
-            `;
+        if (!c) {
+            toggleBtn.classList.add('hidden');
+            confirmBtn.classList.add('hidden');
             return;
         }
 
-        const timeStr = formatHHMM(c.lastSeenTs);
-        const summary = `前回確認 <b>${timeStr}</b> から <span class="diff-bar-count">${c.count}箇所</span>変更されました`;
+        confirmBtn.classList.remove('hidden');
+        toggleBtn.classList.remove('hidden');
 
-        if (c.kind === 'full') {
-            this._barEl.innerHTML = `
-                <span class="diff-bar-summary">${summary}</span>
-                <button type="button" id="diffHighlightToggle" class="diff-toggle" aria-pressed="${this._highlightsOn}">
-                    <span class="diff-toggle-track"></span>変更をハイライト
-                </button>
-                <span class="diff-bar-hint">⌥↑↓ で変更箇所へジャンプ</span>
-                <button type="button" id="diffConfirmBtn" class="btn-confirm diff-bar-confirm">最新を確認済みにする</button>
-            `;
-        } else {
-            // 'bar-only': Marp/code/text — counts from the API, no inline
-            // highlight support (no per-line source mapping in v1).
-            this._barEl.innerHTML = `
-                <span class="diff-bar-summary">${summary}</span>
-                <span class="diff-bar-note">ハイライトは Markdown のみ対応</span>
-                <button type="button" id="diffConfirmBtn" class="btn-confirm diff-bar-confirm">最新を確認済みにする</button>
-            `;
+        if (c.kind === 'unavailable') {
+            toggleBtn.textContent = '変更 ?';
+            toggleBtn.title = '差分は取得できませんでした';
+            toggleBtn.removeAttribute('aria-pressed');
+            toggleBtn.classList.remove('active');
+            return;
         }
+
+        toggleBtn.textContent = `変更 ${c.count}`;
+        toggleBtn.title = '変更をハイライト表示/非表示（⌥↑↓ でジャンプ）';
+        toggleBtn.setAttribute('aria-pressed', String(this._highlightsOn));
+        toggleBtn.classList.toggle('active', this._highlightsOn);
     },
 
     _toggleHighlights() {
         if (!this._current || this._current.kind !== 'full') return;
         this._highlightsOn = !this._highlightsOn;
+        this._highlightsOnByPath.set(this._current.path, this._highlightsOn);
         this._applyHighlightClasses();
-        const btn = this._barEl.querySelector('#diffHighlightToggle');
-        if (btn) btn.setAttribute('aria-pressed', String(this._highlightsOn));
+        this._syncToolbar();
     },
 
     async _confirmLatest() {

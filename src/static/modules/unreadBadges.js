@@ -1,11 +1,24 @@
 /**
- * MDV - Unread/Seen Tree Badges (0.6.5)
+ * MDV - Unread Tree Badges (0.6.5; ✓ seen badge REMOVED in 0.6.8)
  *
  * Task ③ of the 0.6.x review-surface plan
  * (docs/plan-review-surface-0.6.x.md — "③ 確認チェック") — see that doc's
- * "③" section for the product spec and modules/diffReview.js's docstring
- * for the baseline model (`getLastSeen`/`markSeen`, localStorage,
+ * "③" section for the ORIGINAL (0.6.5) product spec (it also specced a
+ * green ✓ "confirmed" badge — dropped below) and modules/diffReview.js's
+ * docstring for the baseline model (`getLastSeen`/`markSeen`, localStorage,
  * namespaced by served root) this module reuses rather than re-derives.
+ *
+ * ---------------------------------------------------------------------
+ * 0.6.8: the ✓ badge is gone — owner: 「既読マーク(緑✓)いらない。
+ * チェックマーク毎回ついたらうざい」
+ * ---------------------------------------------------------------------
+ * This module now paints exactly ONE per-file status: the blue ● unread
+ * dot. A file that is not unread simply has NO badge — there is no
+ * "confirmed" visual state to show. The `_seenKnown` Set that existed
+ * ONLY to remember which paths deserved a ✓ is deleted along with every
+ * bit of bookkeeping that fed it; `_unreadEtag` (the ● source of truth)
+ * and everything downstream of it — folder count badges, the header chip,
+ * `⌥⇧↓`/next-unread cycling — are UNCHANGED.
  *
  * ---------------------------------------------------------------------
  * Design: event-driven, never poll-driven
@@ -15,17 +28,17 @@
  *     server's `files_changed` broadcast (src/watcher.js; see
  *     docs/ARCHITECTURE.md §2.2). Each item is compared against
  *     diffReview.js's `getLastSeen(path)` baseline to decide unread vs.
- *     already-known-seen — no request is made to learn this.
+ *     not — no request is made to learn this.
  *  2. diffReview.js's `onSeen(fn)` subscription — fired every time
- *     `markSeen()` runs anywhere (first-sight on tab open, 確認済み click,
- *     or this module's own `markFolderSeen()`), so opening/confirming a
- *     file flips it to ✓ without this module duplicating that logic.
+ *     `markSeen()` runs anywhere (first-sight on tab open, 確認 click, or
+ *     this module's own `markFolderSeen()`), so opening/confirming a file
+ *     clears its ● without this module duplicating that logic.
  *
  * Consequently a path this module has never heard about via one of the
  * two feeds above shows NO badge at all — first load must not "light up"
- * the whole tree (spec requirement). The session-only `_unreadEtag`
- * Map / `_seenKnown` Set below are deliberately not persisted: badge state
- * only reflects what happened while this tab has been open.
+ * the whole tree (spec requirement). The session-only `_unreadEtag` Map
+ * below is deliberately not persisted: badge state only reflects what
+ * happened while this tab has been open.
  *
  * ---------------------------------------------------------------------
  * Decoration seam (fileTree.js is untouched)
@@ -58,20 +71,17 @@ import { TabManager } from './tabs.js';
 import { DiffReviewManager, getLastSeen, markSeen, onSeen } from './diffReview.js';
 
 export const UnreadBadgesManager = {
-    // path -> etag|null. Presence = unread. `null` etag means "unread but
-    // we have no known-good hash for it" (an 'added' item, or a 'too
-    // large to hash' baseline) — markFolderSeen() treats that as the
-    // documented "can't confirm, just clear" case.
+    // path -> etag|null. Presence = unread (the ONLY per-file status this
+    // module paints — see this module's docstring's "0.6.8" section).
+    // `null` etag means "unread but we have no known-good hash for it" (an
+    // 'added' item, or a 'too large to hash' baseline) — markFolderSeen()
+    // treats that as the documented "can't confirm, just clear" case.
     _unreadEtag: new Map(),
-    // Paths POSITIVELY known seen-at-current-content this session (✓).
-    // Never inferred — only set from an onSeen() firing or a 'changed'
-    // item whose etag already matches the stored baseline.
-    _seenKnown: new Set(),
     _chipEl: null,
 
     init() {
         this._buildHeaderChip();
-        onSeen((path, hash) => this._handleSeen(path, hash));
+        onSeen((path) => this._handleSeen(path));
         document.addEventListener('keydown', (e) => this._handleShortcut(e));
     },
 
@@ -117,36 +127,31 @@ export const UnreadBadgesManager = {
                 // the header chip counts a ghost and 次の未読へ opens a
                 // dead path (codex round-1).
                 this._unreadEtag.delete(item.path);
-                this._seenKnown.delete(item.path);
                 continue;
             }
 
             if (item.kind === 'added' && !item.etag) {
                 // Etag-less add (oversized/unreadable at add time): the
-                // content CANNOT be compared to any baseline, so a stale ✓
-                // must not survive — unconditionally unread (codex
-                // round-4). Normal-size adds carry an etag and take the
-                // hash-compare branch below instead.
+                // content CANNOT be compared to any baseline —
+                // unconditionally unread (codex round-4). Normal-size adds
+                // carry an etag and take the hash-compare branch instead.
                 this._unreadEtag.set(item.path, null);
-                this._seenKnown.delete(item.path);
                 continue;
             }
 
             if (item.kind === 'added' || item.kind === 'changed') {
                 // 'added' now carries an etag too (codex rounds 2-3): the
                 // hash comparison resolves BOTH races — a late add after
-                // create+open matches the baseline (stays ✓), a recreated
-                // file with different content mismatches (goes unread).
+                // create+open matches the baseline (stays read), a
+                // recreated file with different content mismatches (goes
+                // unread).
                 const lastSeen = getLastSeen(item.path);
                 if (!lastSeen || lastSeen.hash !== item.etag) {
                     this._unreadEtag.set(item.path, item.etag || null);
-                    this._seenKnown.delete(item.path);
                 } else {
                     // The reported hash already matches what this client
-                    // last confirmed seeing — positive knowledge of ✓, not
-                    // just "no badge".
+                    // last confirmed seeing — not unread.
                     this._unreadEtag.delete(item.path);
-                    this._seenKnown.add(item.path);
                 }
             }
         }
@@ -155,17 +160,10 @@ export const UnreadBadgesManager = {
     },
 
     // onSeen() fires for every markSeen() call app-wide (first-sight tab
-    // open, 確認済み click, or our own markFolderSeen() below).
-    _handleSeen(path, hash) {
-        if (hash) {
-            this._seenKnown.add(path);
-            this._unreadEtag.delete(path);
-        } else {
-            // Baseline was cleared (e.g. file too large to hash) — no
-            // positive knowledge either way, so no badge at all.
-            this._seenKnown.delete(path);
-            this._unreadEtag.delete(path);
-        }
+    // open, 確認 click, or our own markFolderSeen() below) — regardless of
+    // hash, the path is no longer unread (0.6.8: there is no ✓ to set).
+    _handleSeen(path) {
+        this._unreadEtag.delete(path);
         this.decorate();
         this._updateHeaderChip();
     },
@@ -193,9 +191,9 @@ export const UnreadBadgesManager = {
         }
         this.decorate();
         this._updateHeaderChip();
-        // The bulk confirm may include the ACTIVE file — its diff bar must
-        // not keep claiming "changed" for a baseline this action just
-        // updated (codex round-5).
+        // The bulk confirm may include the ACTIVE file — its toolbar
+        // controls must not keep claiming "changed" for a baseline this
+        // action just updated (codex round-5).
         DiffReviewManager.refresh();
     },
 
@@ -238,10 +236,10 @@ export const UnreadBadgesManager = {
 
     /**
      * Paint every `[data-path]` row currently in the DOM from the current
-     * unread/seen state. Idempotent, no full-tree rebuild — only adds/
-     * updates/removes one small badge child per row. Safe (and cheap) to
-     * call redundantly; see this module's docstring for when app.js calls
-     * it.
+     * unread state (0.6.8: unread ● only, no ✓). Idempotent, no full-tree
+     * rebuild — only adds/updates/removes one small badge child per row.
+     * Safe (and cheap) to call redundantly; see this module's docstring
+     * for when app.js calls it.
      */
     decorate() {
         const treeEl = elements.fileTree;
@@ -259,17 +257,16 @@ export const UnreadBadgesManager = {
                 const count = unreadPaths.reduce((n, p) => n + (p.startsWith(prefix) ? 1 : 0), 0);
                 this._renderCountBadge(contentEl, count);
             } else {
-                const status = this._unreadEtag.has(path) ? 'unread'
-                    : this._seenKnown.has(path) ? 'seen'
-                        : null;
-                this._renderStatusBadge(contentEl, status);
+                this._renderStatusBadge(contentEl, this._unreadEtag.has(path));
             }
         });
     },
 
-    _renderStatusBadge(contentEl, status) {
+    _renderStatusBadge(contentEl, isUnread) {
         let el = contentEl.querySelector(':scope > .tree-badge-status');
-        if (!status) {
+        if (!isUnread) {
+            // 0.6.8: no ✓ replacement — a read file simply has no badge
+            // (owner: 「既読マーク(緑✓)いらない」).
             if (el) el.remove();
             return;
         }
@@ -278,10 +275,9 @@ export const UnreadBadgesManager = {
             el.className = 'tree-badge-status';
             contentEl.appendChild(el);
         }
-        el.classList.toggle('is-unread', status === 'unread');
-        el.classList.toggle('is-seen', status === 'seen');
-        el.textContent = status === 'unread' ? '●' : '✓';
-        el.setAttribute('aria-label', status === 'unread' ? '未読' : '確認済み');
+        el.classList.add('is-unread');
+        el.textContent = '●';
+        el.setAttribute('aria-label', '未読');
     },
 
     _renderCountBadge(contentEl, count) {

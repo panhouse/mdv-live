@@ -19,6 +19,8 @@ export const elements = {
     statusText: document.getElementById('statusText'),
     resizeHandle: document.getElementById('resizeHandle'),
     editToggle: document.getElementById('editToggle'),
+    diffToggleBtn: document.getElementById('diffToggleBtn'),
+    diffConfirmBtn: document.getElementById('diffConfirmBtn'),
     pdfStyleToggle: document.getElementById('pdfStyleToggle'),
     pdfStylePanel: document.getElementById('pdfStylePanel'),
     pdfStylePath: document.getElementById('pdfStylePath'),
