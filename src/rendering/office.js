@@ -286,7 +286,9 @@ function classifyFormatCode(code) {
   // custom "[h]:mm") must be recognized BEFORE bracket-stripping treats
   // them as literals — they mean "total elapsed", not clock-of-day, and
   // must neither wrap at 24h nor fall through to date/month classification.
-  const isElapsed = /\[(h+|m+|s+)\]/i.test(code);
+  const elapsedMatch = /\[(h+|m+|s+)\]/i.exec(code);
+  const isElapsed = elapsedMatch !== null;
+  const elapsedUnit = elapsedMatch ? elapsedMatch[1][0].toLowerCase() : null;
   const stripped = stripFormatLiterals(code);
   // 'm' is ambiguous (month vs minute): only y/d prove a DATE part; h/s
   // prove a TIME part. A time-only format (builtin 18-21 "h:mm", durations
@@ -300,6 +302,7 @@ function classifyFormatCode(code) {
     isDate: hasDatePart || monthOnly,
     isTimeOnly: hasTimePart && !hasDatePart && !monthOnly,
     isElapsed,
+    elapsedUnit,
     hasTime: hasTimePart,
     // Seconds token (outside literals) or an elapsed [ss] bracket — the
     // time formatter must not silently drop seconds (90s is 00:01:30,
@@ -322,7 +325,7 @@ function classifyByNumFmtId(numFmtId, customNumFmts) {
   }
   if (BUILTIN_CJK_TIME_NUMFMT_IDS.has(numFmtId)) {
     return {
-      isDate: false, isTimeOnly: true, isElapsed: false,
+      isDate: false, isTimeOnly: true, isElapsed: false, elapsedUnit: null,
       hasTime: true, hasSeconds: BUILTIN_CJK_TIME_NUMFMT_IDS.get(numFmtId),
       isPercent: false, isThousands: false,
     };
@@ -483,7 +486,11 @@ function formatNumericCell(raw, fmt, date1904) {
   if (!fmt || raw === '' || raw.trim() === '') return raw;
   const num = Number(raw);
   if (!Number.isFinite(num)) return raw;
-  if (fmt.isTimeOnly) return formatExcelTime(num, fmt.isElapsed, fmt.hasSeconds);
+  if (fmt.isTimeOnly) {
+    return fmt.isElapsed
+      ? formatElapsed(num, fmt.elapsedUnit, fmt.hasSeconds)
+      : formatExcelTime(num, false, fmt.hasSeconds);
+  }
   if (fmt.isDate) return formatExcelDate(num, fmt.hasTime, date1904, fmt.hasSeconds);
   if (fmt.isPercent) return formatPercent(num);
   if (fmt.isThousands) return formatThousands(num);
@@ -499,20 +506,8 @@ function formatNumericCell(raw, fmt, date1904) {
  *   TOTAL hours without wrapping at 24 (1.5 days -> 36:00)
  * @returns {string}
  */
-function formatExcelTime(serial, isElapsed, hasSeconds) {
+function formatExcelTime(serial, _isElapsed, hasSeconds) {
   const pad = (n) => String(n).padStart(2, '0');
-
-  if (isElapsed) {
-    if (hasSeconds) {
-      const totalSeconds = Math.round(serial * 86400);
-      const hh = Math.floor(totalSeconds / 3600);
-      const mm = Math.floor((totalSeconds % 3600) / 60);
-      return `${hh}:${pad(mm)}:${pad(totalSeconds % 60)}`;
-    }
-    const totalMinutes = Math.round(serial * 1440);
-    return `${Math.floor(totalMinutes / 60)}:${pad(totalMinutes % 60)}`;
-  }
-
   const fraction = serial - Math.floor(serial);
   if (hasSeconds) {
     const totalSeconds = Math.round(fraction * 86400);
@@ -523,6 +518,31 @@ function formatExcelTime(serial, isElapsed, hasSeconds) {
   const totalMinutes = Math.round(fraction * 1440);
   const hh = Math.floor(totalMinutes / 60) % 24;
   return `${pad(hh)}:${pad(totalMinutes % 60)}`;
+}
+
+/**
+ * Format an elapsed-time value in the unit its bracket token declares:
+ * [h]:mm -> total hours, [mm]:ss -> total minutes, [ss] -> total seconds
+ * (1.5 days: 36:00 / 2160:00 / 129600 respectively — Excel semantics).
+ * @param {number} serial - Excel serial value (days)
+ * @param {string|null} unit - 'h' | 'm' | 's' from the bracket token
+ * @param {boolean} hasSeconds - Whether the format carries a seconds part
+ * @returns {string}
+ */
+function formatElapsed(serial, unit, hasSeconds) {
+  const pad = (n) => String(n).padStart(2, '0');
+  const totalSeconds = Math.round(serial * 86400);
+  if (unit === 's') return String(totalSeconds);
+  if (unit === 'm') {
+    const mm = Math.floor(totalSeconds / 60);
+    return hasSeconds ? `${mm}:${pad(totalSeconds % 60)}` : String(mm);
+  }
+  const hh = Math.floor(totalSeconds / 3600);
+  if (hasSeconds) {
+    return `${hh}:${pad(Math.floor((totalSeconds % 3600) / 60))}:${pad(totalSeconds % 60)}`;
+  }
+  const totalMinutes = Math.round(serial * 1440);
+  return `${Math.floor(totalMinutes / 60)}:${pad(totalMinutes % 60)}`;
 }
 
 /**
@@ -599,7 +619,10 @@ function parseSheetRows(xml, sharedStrings, { maxRows, styleFormats = null, date
         // fallback below would never run.
         const fMatchEarly = /<(?:[\w.-]+:)?f\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?f>/.exec(content);
         const vMatchEarly = /<(?:[\w.-]+:)?v\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?v>/.exec(content);
-        if (fMatchEarly && (!vMatchEarly || vMatchEarly[1].trim() === '')) {
+        // A present-but-empty <v></v> is a CACHED BLANK result (e.g. =""),
+        // which Excel displays as blank — only a missing <v> means "never
+        // computed", where showing the formula beats an empty column.
+        if (fMatchEarly && !vMatchEarly) {
           formula = true;
           text = `=${decodeXmlEntities(fMatchEarly[1].trim())}`;
         } else if (type === 's') {

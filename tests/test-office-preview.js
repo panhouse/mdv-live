@@ -987,3 +987,40 @@ describe('renderXlsxPreview — codex round-7 fix (namespace-prefixed OOXML)', (
     assert.ok(html.includes('前置きシート') === false || true); // sheet name list only when >1 sheet
   });
 });
+
+describe('renderXlsxPreview — codex round-8 fixes (elapsed units, blank cached formulas)', () => {
+  it('[mm]:ss elapsed renders total minutes (1.5 days -> 2160:00)', () => {
+    const stylesXml = buildStylesXml({
+      numFmts: [{ id: 168, code: '[mm]:ss' }],
+      cellXfsNumFmtIds: [0, 168],
+    });
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody: '<row r="1"><c r="A1" s="1"><v>1.5</v></c></row>',
+      stylesXml,
+    });
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(html.includes('2160:00'), 'total minutes, not 36:00:00');
+  });
+
+  it('formula with an EMPTY cached <v></v> renders blank (Excel shows blank for ="" )', () => {
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody:
+        '<row r="1"><c r="A1" t="inlineStr"><is><t>ラベル</t></is></c>' +
+        '<c r="B1" t="str"><f>IF(1=1,"","x")</f><v></v></c></row>',
+    });
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(!html.includes('=IF'), 'cached-blank formula must render blank, not the formula text');
+    assert.ok(html.includes('ラベル'));
+  });
+
+  it('formula with NO <v> tag still falls back to the formula text', () => {
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody: '<row r="1"><c r="A1"><f>SUM(B1:B9)</f></c></row>',
+    });
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(html.includes('=SUM(B1:B9)'));
+  });
+});
