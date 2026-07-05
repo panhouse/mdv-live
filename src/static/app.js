@@ -105,8 +105,11 @@ async function refreshCurrentTab() {
                 // Marp decks must repaint through the Marp renderer — the
                 // generic render() would replace the split/notes/navigation
                 // UI with plain HTML (codex round-9). Same call the WS
-                // file_update path uses.
+                // file_update path uses — including notifying an open
+                // presenter window, which otherwise kept the old slides
+                // when the change arrived via this path (codex round-14).
                 ContentRenderer.renderMarp(data.content, tab.css);
+                PresenterView.broadcastSlides();
             } else {
                 ContentRenderer.render(data.content, data.fileType || tab.fileType);
             }
