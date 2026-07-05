@@ -186,6 +186,11 @@ export const DiffReviewManager = {
     _reviewSeq: 0,
     _seededPaths: new Set(),
     _lastPath: null,
+    // app.js injects the bootstrap-level refreshCurrentTab() here so a
+    // stale pane (see refresh()) can be refetched before diffs apply.
+    _requestTabRefresh: null,
+    _staleRefetchKey: null,
+    setRequestTabRefresh(fn) { this._requestTabRefresh = fn; },
 
     init() {
         this._buildDom();
@@ -284,6 +289,23 @@ export const DiffReviewManager = {
             return;
         }
         if (mySeq !== this._reviewSeq) return; // a newer refresh() superseded this one
+
+        // Stale-pane guard (codex round-13): an inactive tab is not
+        // WS-watched, so its rendered DOM can lag the on-disk content the
+        // server just diffed. Applying highlights — or worse, letting
+        // 確認済み store data.currentHash — against a pane the user has
+        // not actually seen is wrong. Refetch the tab first; the refetch
+        // re-enters refresh() with a fresh pane (guard key prevents loops
+        // when the refetch cannot advance the pane).
+        const stalePane = data.currentHash && tab.etag && data.currentHash !== tab.etag;
+        if (stalePane && this._requestTabRefresh) {
+            const key = `${tab.path}::${data.currentHash}`;
+            if (this._staleRefetchKey !== key) {
+                this._staleRefetchKey = key;
+                this._requestTabRefresh();
+                return;
+            }
+        }
 
         // Re-resolve by path (not by object identity) in case the tab
         // list moved on during the await (closed/reopened at a new index).

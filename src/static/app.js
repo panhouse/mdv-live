@@ -147,6 +147,7 @@ async function init() {
     // after a live file_update actually repaints the content pane — see
     // modules/websocket.js's docstring.
     WebSocketManager.setOnFileRendered(() => DiffReviewManager.refresh());
+    DiffReviewManager.setRequestTabRefresh(() => refreshCurrentTab());
 
     // modules/diffReview.js needs to react to every tab activation (open/
     // switch/close-then-reselect) and to the theme/PDF-style re-renders
