@@ -1076,3 +1076,34 @@ describe('renderXlsxPreview — codex round-11 fix (all-blank overflow rows)', (
     assert.ok(html.includes('行数が多いため'));
   });
 });
+
+describe('renderXlsxPreview — codex round-12 fixes (decimal precision, formula tails)', () => {
+  it('thousands grouping preserves more than 3 decimal places', () => {
+    const stylesXml = buildStylesXml({
+      numFmts: [{ id: 169, code: '#,##0.000000' }],
+      cellXfsNumFmtIds: [0, 169],
+    });
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody: '<row r="1"><c r="A1" s="1"><v>1234.123456</v></c></row>',
+      stylesXml,
+    });
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(html.includes('1,234.123456'), 'full precision with grouping');
+  });
+
+  it('cached-blank formula tails beyond maxRows do not trigger the truncation notice', () => {
+    const dataRows = Array.from({ length: 10 }, (_, i) =>
+      `<row r="${i + 1}"><c r="A${i + 1}" t="inlineStr"><is><t>行${i + 1}</t></is></c></row>`).join('');
+    const formulaBlankRows = Array.from({ length: 45 }, (_, i) =>
+      `<row r="${i + 11}"><c r="A${i + 11}" t="str"><f>IF(1=1,"","x")</f><v/></c></row>`).join('');
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody: dataRows + formulaBlankRows,
+    });
+    const { html } = renderXlsxPreview(buffer, { maxRows: 50 });
+    assert.ok(!html.includes('行数が多いため'));
+    const rowCount = (html.match(/<tr>/g) || []).length;
+    assert.strictEqual(rowCount, 10);
+  });
+});

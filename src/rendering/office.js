@@ -469,7 +469,9 @@ function formatPercent(num) {
  * @returns {string}
  */
 function formatThousands(num) {
-  return num.toLocaleString('en-US');
+  // maximumFractionDigits: toLocaleString's default of 3 would silently
+  // round 1234.123456 to "1,234.123" — a data-accuracy bug, not styling.
+  return num.toLocaleString('en-US', { maximumFractionDigits: 20 });
 }
 
 /**
@@ -598,8 +600,13 @@ function parseSheetRows(xml, sharedStrings, { maxRows, styleFormats = null, date
       // real truncation — treating it as one would both suppress the
       // trailing-empty trim and show a misleading notice.
       if (!overflowHasContent && rowMatch[1]) {
+        // v/t text only: real Excel always caches formula results, so a
+        // cached-blank formula tail (<f>..</f><v/>) must not read as
+        // content. Trade-off: openpyxl-style uncomputed formulas past the
+        // window lose the notice — rarer and more harmless than a false
+        // truncation banner on every formula-filled blank tail.
         overflowHasContent =
-          /<(?:[\w.-]+:)?(?:v|f)\b[^>]*>[^<]/.test(rowMatch[1]) ||
+          /<(?:[\w.-]+:)?v\b[^>]*>[^<]/.test(rowMatch[1]) ||
           /<(?:[\w.-]+:)?t\b[^>]*>[^<]/.test(rowMatch[1]);
       }
       continue;
