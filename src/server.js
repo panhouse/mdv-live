@@ -8,6 +8,7 @@ import { createServer } from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+import { setupDiffRoutes } from './api/diff.js';
 import { setupFileRoutes } from './api/file.js';
 import { setupMarpNoteRoutes } from './api/marpNote.js';
 import { makeOriginGuard, buildAllowedHosts } from './api/middleware/originGuard.js';
@@ -16,6 +17,7 @@ import { setupSearchRoutes } from './api/search.js';
 import { setupTreeRoutes } from './api/tree.js';
 import { setupUploadRoutes } from './api/upload.js';
 import { DEFAULT_PORT, DEFAULT_DEPTH, JSON_BODY_LIMIT } from './config/constants.js';
+import { createChangeJournal } from './services/changeJournal.js';
 import { mkError, sendError } from './utils/errors.js';
 import { getVersion } from './utils/version.js';
 import { setupWatcher } from './watcher.js';
@@ -36,6 +38,7 @@ function setupApiRoutes(app, options) {
   setupUploadRoutes(app);
   setupPdfRoutes(app);
   setupSearchRoutes(app);
+  setupDiffRoutes(app);
   setupMarpNoteRoutes(app, { port: options.port });
 
   app.get('/api/info', (req, res) => {
@@ -74,6 +77,13 @@ export function createMdvServer(options) {
   // mdv.config.json の css/pdfOptions（rootDir 相対）。/api/info 経由で
   // Web UI の Style パネル初期値になる。
   app.locals.pdfStyleDefaults = pdfStyleDefaults || {};
+  // Change-tracking backend (0.6.3): one journal instance for the whole
+  // server. src/api/diff.js reads/records against it per-request;
+  // src/watcher.js records a snapshot on every filesystem change (wired
+  // below, once the instance exists). Must be set before setupApiRoutes()
+  // runs, since setupDiffRoutes(app) reads app.locals.changeJournal at
+  // route-setup time.
+  app.locals.changeJournal = createChangeJournal();
 
   // --- app.locals contract for Origin/Host guard consumers -----------------
   // Any mutation route that wants src/api/middleware/originGuard.js's
@@ -111,7 +121,7 @@ export function createMdvServer(options) {
   });
 
   const wss = setupWebSocket(server);
-  const watcher = setupWatcher(app.locals.rootDir, wss, { depth });
+  const watcher = setupWatcher(app.locals.rootDir, wss, { depth, journal: app.locals.changeJournal });
 
   app.locals.watcher = watcher;
   app.locals.wss = wss;

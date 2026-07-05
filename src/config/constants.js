@@ -99,3 +99,47 @@ export const SEARCH_MAX_FILES = 5000;
 
 /** Max accepted length (chars) of the `q` query-string param (GET /api/search). */
 export const SEARCH_QUERY_MAX_LENGTH = 256;
+
+/**
+ * Change tracking (0.6.3): src/utils/lineDiff.js (Myers line diff),
+ * src/services/changeJournal.js (in-memory snapshot store), src/api/diff.js
+ * (GET /api/diff route).
+ */
+
+/**
+ * Hard cap on lines-per-side for src/utils/lineDiff.js's diffLines(). The
+ * Myers algorithm is O(N*D) (D = edit distance, up to N+M); above this line
+ * count diffLines() bails out with `{ available: false }` instead of
+ * potentially doing an unbounded amount of work on the request thread.
+ */
+export const DIFF_MAX_LINES = 20000;
+
+// Myers トレースのメモリ予算（バイト）。1ステップあたり (2*(N+M)+1)*4 byte
+// を消費するため、編集距離が大きい（=ほぼ全行が違う）ペアはこの予算で
+// 打ち切り、too-large として返す（ハイライトの用をなさないため）。
+export const DIFF_TRACE_BUDGET_BYTES = 32 * 1024 * 1024;
+
+/**
+ * Total in-memory budget (bytes) for src/services/changeJournal.js's raw
+ * snapshot store, summed across every path/version it holds. LRU-evicted
+ * (oldest-touched first) once a new snapshot would push the total over this
+ * limit. 50MB.
+ */
+export const JOURNAL_MAX_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Per-file size cap (bytes) for a single changeJournal snapshot. A file
+ * larger than this is still tracked (its hash is remembered so
+ * latestHash()/listVersions() stay accurate) but its content is NOT stored
+ * — get() returns null for it, same as an evicted/unknown version. Also
+ * used by src/api/diff.js to cap how large a file it will read to compute
+ * a live diff. 1MB.
+ */
+export const JOURNAL_MAX_FILE_BYTES = 1 * 1024 * 1024;
+
+/**
+ * Max snapshot versions changeJournal.js keeps per path, independent of the
+ * global JOURNAL_MAX_BYTES byte budget — the oldest version for that path is
+ * dropped once a new one pushes the count over this cap.
+ */
+export const JOURNAL_MAX_VERSIONS_PER_FILE = 4;

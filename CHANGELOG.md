@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] - 2026-07-05
+
+### Internal — 変更検知バックエンド（0.6.4 の差分ハイライトの土台）
+
+- `src/utils/lineDiff.js`: 依存ゼロの行差分（Myers）。メモリ予算付きで
+  巨大・全面変更ペアは安全に打ち切り
+- `src/services/changeJournal.js`: パス毎のスナップショット台帳
+  （内容ハッシュキー、50MB LRU・1MB/版・4版/ファイル）
+- `GET /api/diff?path=&from=<hash>`: 追加/変更/削除位置のハンク応答。
+  ベースライン不明・大きすぎ等は 200 のデータとして返す
+- WS `file_update` が全テキストファイルで内容ハッシュ(etag)を持つように
+
+ユーザー可視の変更はなし（フロントは 0.6.4 で載る）。
+
 ## [0.6.2] - 2026-07-05
 
 ### Changed — Excel プレビューが「読める表」になった
