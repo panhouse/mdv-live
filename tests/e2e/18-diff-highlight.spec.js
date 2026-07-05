@@ -129,3 +129,40 @@ test('diff review: no bar on first open; a live edit shows the bar + highlights;
   await expect(page.locator('#content h1')).toHaveText('Review Doc');
   await expect(bar).toBeHidden();
 });
+
+test('diff bar disappears when the last tab is closed (welcome view)', async ({ page }) => {
+  const p = 'closeme.md';
+  await writeFile(path.join(fixtureDir, p), '# Close Me\n\n本文の段落。\n');
+  await page.goto(server.baseURL + '/');
+  await expect(page.locator(`.tree-item[data-path="${p}"] .name`)).toBeVisible();
+  await page.locator(`.tree-item[data-path="${p}"] [data-action="open"]`).click();
+  await expect(page.locator('#content h1')).toHaveText('Close Me');
+  await page.waitForTimeout(500); // first-sight baseline capture
+
+  await writeFile(path.join(fixtureDir, p), '# Close Me\n\n本文の段落。\n\n追記の段落。\n');
+  await expect(page.locator('#diffReviewBar')).toBeVisible({ timeout: 6000 });
+
+  // Close the last tab -> welcome view; the bar must not linger (codex).
+  await page.locator('#tabBar .tab .tab-close').click();
+  await expect(page.locator('#content .welcome')).toBeVisible();
+  await expect(page.locator('#diffReviewBar')).toBeHidden();
+});
+
+test('Marp decks get real change counts (baseline seeded on first sight, codex)', async ({ page }) => {
+  const p = 'seeded-deck.md';
+  const deck = '---\nmarp: true\n---\n\n# 一枚目\n\n<!-- note -->\n';
+  await writeFile(path.join(fixtureDir, p), deck);
+  await page.goto(server.baseURL + '/');
+  await expect(page.locator(`.tree-item[data-path="${p}"] .name`)).toBeVisible();
+  await page.locator(`.tree-item[data-path="${p}"] [data-action="open"]`).click();
+  await expect(page.locator('#marpSlideArea, .marpit').first()).toBeVisible();
+  await page.waitForTimeout(700); // first-sight: /api/diff must seed the journal
+
+  await writeFile(path.join(fixtureDir, p), deck + '\n---\n\n# 追加スライド\n');
+  const bar = page.locator('#diffReviewBar');
+  await expect(bar).toBeVisible({ timeout: 6000 });
+  // The regression showed 「差分は取得できませんでした」 here; a seeded
+  // baseline yields a real change count instead.
+  await expect(bar).toContainText('変更されました');
+  await expect(bar).not.toContainText('取得できませんでした');
+});

@@ -141,6 +141,14 @@ async function init() {
         originalRenderActive();
         DiffReviewManager.refresh();
     };
+    // Closing the LAST tab takes ContentRenderer.showWelcome() without
+    // ever calling renderActive(), which would leave a stale diff bar
+    // above the welcome view (codex) — wrap that exit path too.
+    const originalShowWelcome = ContentRenderer.showWelcome.bind(ContentRenderer);
+    ContentRenderer.showWelcome = function () {
+        originalShowWelcome();
+        DiffReviewManager.refresh();
+    };
 
     // Initialize all managers
     ThemeManager.init();

@@ -244,19 +244,20 @@ export const DiffReviewManager = {
 
     /**
      * Resolve the current content hash for `tab`, for the "no lastSeen
-     * yet" (first-sight) path. Prefers tab.etag (always correct when
-     * present); falls back to asking the server, since GET /api/file
-     * doesn't compute one for non-Marp tabs — see this module's docstring.
+     * yet" (first-sight) path. Always asks the server via /api/diff —
+     * NOT tab.etag, even when present (Marp): every /api/diff call also
+     * seeds the change journal with the current content, and skipping it
+     * on Marp first-sight left the stored baseline hash with no backend
+     * snapshot, so every later diff came back unknown-baseline (codex).
      */
     async _resolveCurrentHash(tab) {
-        if (tab.etag) return tab.etag;
         try {
             const res = await MDVApi.diff(tab.path, '');
             const data = await res.json();
-            return data.currentHash || null;
+            return data.currentHash || tab.etag || null;
         } catch (e) {
             console.error('diff review: could not resolve current hash:', e);
-            return null;
+            return tab.etag || null;
         }
     },
 
