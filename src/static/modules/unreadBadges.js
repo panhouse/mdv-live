@@ -122,7 +122,13 @@ export const UnreadBadgesManager = {
             }
 
             if (item.kind === 'added') {
-                // Newly-arrived file: unconditionally unread, per spec.
+                // Newly-arrived file: unread — UNLESS this client already
+                // confirmed a version of it. The debounced 'added' can land
+                // AFTER a create-via-API + open (markSeen) sequence, and
+                // flipping a just-seen file back to unread is wrong; real
+                // subsequent edits arrive as 'changed' items with an etag
+                // and are judged properly there (codex round-2).
+                if (getLastSeen(item.path)) continue;
                 this._unreadEtag.set(item.path, item.etag || null);
                 this._seenKnown.delete(item.path);
                 continue;
