@@ -3,6 +3,7 @@
  */
 
 import { WebSocketServer, WebSocket } from 'ws';
+import { WS_MAX_PAYLOAD, MAX_RELATIVE_PATH_LENGTH } from './config/constants.js';
 
 /**
  * Check if a WebSocket client is ready to receive messages
@@ -19,7 +20,7 @@ function isClientReady(client) {
  * @returns {WebSocketServer} WebSocket server instance
  */
 export function setupWebSocket(server) {
-  const wss = new WebSocketServer({ server, maxPayload: 64 * 1024 });
+  const wss = new WebSocketServer({ server, maxPayload: WS_MAX_PAYLOAD });
   const clientWatches = new Map();
 
   wss.on('connection', (ws) => {
@@ -30,7 +31,7 @@ export function setupWebSocket(server) {
         const message = JSON.parse(data.toString());
 
         if (message.type === 'watch') {
-          if (typeof message.path !== 'string' || message.path.length > 1024) return;
+          if (typeof message.path !== 'string' || message.path.length > MAX_RELATIVE_PATH_LENGTH) return;
           const watches = clientWatches.get(ws);
           watches.clear();
           watches.add(message.path);
@@ -75,6 +76,21 @@ export function setupWebSocket(server) {
   wss.clientWatches = clientWatches;
 
   return wss;
+}
+
+/**
+ * Broadcast a tree_update event to all connected clients.
+ *
+ * This is the ONLY place the `tree_update` payload should be constructed.
+ * (Today `src/watcher.js` and `src/api/file.js` still build their own copy
+ * of this payload inline — they are rewired to call this helper in a later
+ * phase of the refactor; see refactoring-2026-07-strategy.md Phase 2.)
+ *
+ * @param {WebSocketServer} wss - WebSocket server returned by setupWebSocket
+ * @returns {void}
+ */
+export function broadcastTreeUpdate(wss) {
+  wss.broadcast({ type: 'tree_update' });
 }
 
 export default setupWebSocket;

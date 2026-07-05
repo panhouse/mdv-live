@@ -85,7 +85,7 @@ describe('File Operations', () => {
 
       const response = await fetch(apiUrl('/api/file'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
         body: JSON.stringify({ path: 'README.md', content: newContent }),
       });
       assert.strictEqual(response.status, 200);
@@ -99,7 +99,7 @@ describe('File Operations', () => {
     it('should create new file', async () => {
       const response = await fetch(apiUrl('/api/file'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
         body: JSON.stringify({ path: 'new-file.md', content: '# New File' }),
       });
       assert.strictEqual(response.status, 200);
@@ -117,6 +117,7 @@ describe('File Operations', () => {
 
       const response = await fetch(apiUrl('/api/file?path=to_delete.md'), {
         method: 'DELETE',
+        headers: { 'Sec-Fetch-Site': 'same-origin' },
       });
       assert.strictEqual(response.status, 200);
 
@@ -130,6 +131,7 @@ describe('File Operations', () => {
 
       const response = await fetch(apiUrl('/api/file?path=to_delete_dir'), {
         method: 'DELETE',
+        headers: { 'Sec-Fetch-Site': 'same-origin' },
       });
       assert.strictEqual(response.status, 200);
 
@@ -140,6 +142,7 @@ describe('File Operations', () => {
     it('should return 404 for non-existent file', async () => {
       const response = await fetch(apiUrl('/api/file?path=nonexistent.md'), {
         method: 'DELETE',
+        headers: { 'Sec-Fetch-Site': 'same-origin' },
       });
       assert.strictEqual(response.status, 404);
     });
@@ -149,7 +152,7 @@ describe('File Operations', () => {
     it('should create directory', async () => {
       const response = await fetch(apiUrl('/api/mkdir'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
         body: JSON.stringify({ path: 'new_folder' }),
       });
       assert.strictEqual(response.status, 200);
@@ -163,7 +166,7 @@ describe('File Operations', () => {
     it('should create nested directories', async () => {
       const response = await fetch(apiUrl('/api/mkdir'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
         body: JSON.stringify({ path: 'deep/nested/folder' }),
       });
       assert.strictEqual(response.status, 200);
@@ -181,7 +184,7 @@ describe('File Operations', () => {
 
       const response = await fetch(apiUrl('/api/move'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
         body: JSON.stringify({ source: 'source.md', destination: 'moved.md' }),
       });
       assert.strictEqual(response.status, 200);

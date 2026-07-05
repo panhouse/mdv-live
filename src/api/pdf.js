@@ -2,7 +2,8 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { isMarp } from '../rendering/markdown.js';
-import { validatePath, validatePathReal } from '../utils/path.js';
+import { mkError, sendError } from '../utils/errors.js';
+import { validatePathReal } from '../utils/path.js';
 import { exportMarpPdf, exportMarkdownPdf } from '../services/pdf.js';
 
 /**
@@ -44,15 +45,13 @@ export function setupPdfRoutes(app) {
     const { filePath, stylePath, pdfOptionsPath } = req.body;
 
     if (!filePath) {
-      return res.status(400).json({ error: 'filePath is required' });
+      return sendError(res, mkError('PATH_REQUIRED', 'filePath is required'));
     }
 
-    if (!validatePath(filePath, rootDir)) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
-    // realpath check: symlink で root 外を指す source を拒否
+    // validatePathReal already runs validatePath's checks before the
+    // realpath (symlink) check, so a single call covers both.
     if (!await validatePathReal(filePath, rootDir)) {
-      return res.status(403).json({ error: 'Access denied' });
+      return sendError(res, mkError('ACCESS_DENIED', 'Access denied'));
     }
 
     const fullPath = path.join(rootDir, filePath);
@@ -64,11 +63,17 @@ export function setupPdfRoutes(app) {
       let stat;
       try {
         stat = await fs.stat(fullPath);
-      } catch {
-        return res.status(404).json({ error: 'File not found' });
+      } catch (err) {
+        // Narrow to "missing" only — any other fs.stat failure (permissions,
+        // I/O error, ...) is a real 500, not a 404 (matches file.js semantics;
+        // previously this bare catch mislabelled ALL fs.stat errors as 404).
+        if (err.code === 'ENOENT') {
+          return sendError(res, mkError('NOT_FOUND', 'File not found'));
+        }
+        throw err;
       }
       if (!stat.isFile()) {
-        return res.status(404).json({ error: 'File not found' });
+        return sendError(res, mkError('NOT_FOUND', 'File not found'));
       }
 
       const content = await fs.readFile(fullPath, 'utf-8');
@@ -95,11 +100,13 @@ export function setupPdfRoutes(app) {
       console.error('PDF export error:', err);
       try { await fs.unlink(outputPath); } catch { /* ignore */ }
       if (err.code === 'PDF_TOOL_UNAVAILABLE') {
-        return res.status(503).json({
-          error: `PDF tool unavailable: ${err.message} Run \`npm install --include=optional\` and retry.`,
-        });
+        return sendError(res, mkError(
+          'PDF_TOOL_UNAVAILABLE',
+          `PDF tool unavailable: ${err.message} Run \`npm install --include=optional\` and retry.`,
+          { cause: err }
+        ));
       }
-      res.status(500).json({ error: 'PDF export failed' });
+      sendError(res, mkError('PDF_EXPORT_FAILED', 'PDF export failed', { cause: err }));
     }
   });
 }

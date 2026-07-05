@@ -4,25 +4,26 @@
  */
 
 import express from 'express';
-import { readFileSync } from 'fs';
 import { createServer } from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 import { setupFileRoutes } from './api/file.js';
 import { setupMarpNoteRoutes } from './api/marpNote.js';
+import { makeOriginGuard, buildAllowedHosts } from './api/middleware/originGuard.js';
 import { setupPdfRoutes } from './api/pdf.js';
 import { setupTreeRoutes } from './api/tree.js';
 import { setupUploadRoutes } from './api/upload.js';
+import { DEFAULT_PORT, DEFAULT_DEPTH, JSON_BODY_LIMIT } from './config/constants.js';
+import { mkError, sendError } from './utils/errors.js';
+import { getVersion } from './utils/version.js';
 import { setupWatcher } from './watcher.js';
 import { setupWebSocket } from './websocket.js';
 import { sweepStaleTemps } from './utils/atomicWrite.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_DIR = path.join(__dirname, 'static');
-const { version: VERSION } = JSON.parse(
-  readFileSync(path.join(__dirname, '..', 'package.json'), 'utf-8')
-);
+const VERSION = getVersion();
 
 /**
  * Setup API routes for the Express app
@@ -42,7 +43,9 @@ function setupApiRoutes(app, options) {
     });
   });
 
-  app.post('/api/shutdown', (req, res) => {
+  // Shuts the process down — same Origin/Host guard as the marpNote
+  // mutation routes (see the app.locals contract note in createMdvServer).
+  app.post('/api/shutdown', makeOriginGuard(), (req, res) => {
     res.json({ success: true });
     setTimeout(() => process.exit(0), 100);
   });
@@ -52,20 +55,31 @@ function setupApiRoutes(app, options) {
  * Create and configure the MDV server
  * @param {Object} options - Server options
  * @param {string} options.rootDir - Root directory to serve
- * @param {number} [options.port=8080] - Port to listen on
+ * @param {number} [options.port=8642] - Port to listen on (DEFAULT_PORT)
  * @param {number} [options.depth=3] - Directory watch depth (prevents EMFILE errors)
  * @returns {{ app: express.Application, server: http.Server, watcher: FSWatcher, wss: WebSocketServer, port: number, start: () => Promise<{port: number}>, stop: () => Promise<void> }}
  */
 export function createMdvServer(options) {
-  const { rootDir, port = 8080, depth = 3 } = options;
+  const { rootDir, port = DEFAULT_PORT, depth = DEFAULT_DEPTH } = options;
 
   const app = express();
   const server = createServer(app);
 
   app.locals.rootDir = path.resolve(rootDir);
 
-  app.use(express.json({ limit: '128kb' }));
-  app.use(express.urlencoded({ extended: true, limit: '128kb' }));
+  // --- app.locals contract for Origin/Host guard consumers -----------------
+  // Any mutation route that wants src/api/middleware/originGuard.js's
+  // makeOriginGuard() (file.js POST/DELETE/mkdir/move, upload.js, the
+  // /api/shutdown route, ...) calls it with NO options; the middleware then
+  // reads `req.app.locals.allowedHosts` per request, so every route agrees
+  // on this one Origin/Host allow-list. Initialized from the requested
+  // `port` option here and REFRESHED with the actual bound port inside
+  // `start()` — so `port: 0` (OS-assigned ephemeral port) guards correctly.
+  app.locals.port = port;
+  app.locals.allowedHosts = buildAllowedHosts(port);
+
+  app.use(express.json({ limit: JSON_BODY_LIMIT }));
+  app.use(express.urlencoded({ extended: true, limit: JSON_BODY_LIMIT }));
   app.use('/static', express.static(STATIC_DIR));
 
   setupApiRoutes(app, { port });
@@ -74,18 +88,10 @@ export function createMdvServer(options) {
   // the routes so route-level errors fall through to the default handler.
   app.use((err, req, res, next) => {
     if (err && err.type === 'entity.too.large') {
-      return res.status(413).json({
-        ok: false,
-        code: 'PAYLOAD_TOO_LARGE',
-        error: 'request body exceeds limit'
-      });
+      return sendError(res, mkError('PAYLOAD_TOO_LARGE', 'request body exceeds limit'));
     }
     if (err && err.type === 'entity.parse.failed') {
-      return res.status(400).json({
-        ok: false,
-        code: 'INVALID_NOTE',
-        error: 'malformed JSON'
-      });
+      return sendError(res, mkError('INVALID_NOTE', 'malformed JSON'));
     }
     next(err);
   });
@@ -107,8 +113,17 @@ export function createMdvServer(options) {
     sweepStaleTemps(app.locals.rootDir).catch(() => {});
     return new Promise((resolve) => {
       server.listen(port, () => {
-        console.log(`MDV server running at http://localhost:${port}`);
-        resolve({ port });
+        // Resolve with the ACTUAL bound port (not the requested `port`
+        // option) so callers passing `port: 0` for an OS-assigned ephemeral
+        // port can discover what it was.
+        const boundPort = server.address().port;
+        // Refresh the Origin/Host allow-list with the real bound port (see
+        // the app.locals contract above) so ephemeral-port servers guard
+        // correctly. Guards read app.locals lazily per request.
+        app.locals.port = boundPort;
+        app.locals.allowedHosts = buildAllowedHosts(boundPort);
+        console.log(`MDV server running at http://localhost:${boundPort}`);
+        resolve({ port: boundPort });
       });
     });
   }

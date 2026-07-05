@@ -82,3 +82,22 @@ export async function validatePathReal(targetPath, rootDir) {
 export function getRelativePath(fullPath, rootDir) {
   return path.relative(rootDir, fullPath).split(path.sep).join('/');
 }
+
+/**
+ * Validate a relative path (via validatePathReal, symlink-aware) and resolve
+ * it to an absolute path within rootDir.
+ *
+ * SSOT replacement for the near-identical private `resolveAndValidate`
+ * helpers that used to be duplicated across src/api/*.js (see
+ * refactoring-2026-07-strategy.md Phase 2, item "resolveWithinRoot()").
+ *
+ * @param {string} relativePath - Relative path to validate
+ * @param {string} rootDir - Root directory
+ * @returns {Promise<{ valid: boolean, fullPath: string }>} Validation result with full path
+ */
+export async function resolveWithinRoot(relativePath, rootDir) {
+  if (!relativePath || !await validatePathReal(relativePath, rootDir)) {
+    return { valid: false, fullPath: '' };
+  }
+  return { valid: true, fullPath: path.join(rootDir, relativePath) };
+}

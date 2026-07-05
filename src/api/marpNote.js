@@ -7,6 +7,7 @@
  *   OPTIONS  ...                                     → CORS preflight (same-origin only)
  */
 
+import { DEFAULT_PORT } from '../config/constants.js';
 import { sendError } from '../utils/errors.js';
 import { buildAllowedHosts, checkHost, checkOrigin } from './marpNote/guards.js';
 import { makeGetHandler } from './marpNote/handleGet.js';
@@ -26,7 +27,7 @@ function makeOptionsHandler(allowedHosts) {
 }
 
 export function setupMarpNoteRoutes(app, options = {}) {
-  const port = options.port || 8080;
+  const port = options.port ?? DEFAULT_PORT;
   const allowedHosts = buildAllowedHosts(port);
   const rootDir = () => app.locals.rootDir;
 

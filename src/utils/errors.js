@@ -22,6 +22,17 @@ export const ERROR_STATUS = Object.freeze({
   NOT_PARSEABLE: 500,
   WRITE_FAILED: 500,
   READ_FAILED: 500,
+  // Added so src/api/file.js, tree.js, pdf.js, upload.js can migrate their
+  // hand-rolled res.status().json({error}) calls to sendError() without
+  // changing any HTTP status (see refactoring-2026-07-strategy.md Phase 2).
+  PATH_REQUIRED: 400, // "Path is required" / "filePath is required"
+  ACCESS_DENIED: 403, // "Access denied" (validatePath/validatePathReal failed)
+  NOT_A_FILE: 400, // "Not a file" (target exists but is a directory)
+  IS_DIRECTORY: 400, // "Cannot read directory" (GET /api/file on a dir)
+  SOURCE_DEST_REQUIRED: 400, // "Source and destination are required" (move)
+  NO_FILES_UPLOADED: 400, // "No files uploaded" (POST /api/upload)
+  PDF_TOOL_UNAVAILABLE: 503, // services/pdf.js throws err.code === this
+  PDF_EXPORT_FAILED: 500, // generic PDF export failure
   // client-only codes (do not produce HTTP responses)
   NETWORK_ERROR: 0,
   DEGRADED: 0

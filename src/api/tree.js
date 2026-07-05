@@ -4,16 +4,11 @@
 
 import fs from 'fs/promises';
 import path from 'path';
+import { MAX_CHILDREN_PER_DIR, MAX_INITIAL_DEPTH } from '../config/constants.js';
 import { getFileType } from '../utils/fileTypes.js';
+import { isIgnoredName } from '../utils/ignorePatterns.js';
+import { mkError, sendError } from '../utils/errors.js';
 import { getRelativePath, validatePathReal } from '../utils/path.js';
-
-const IGNORED_PATTERNS = new Set(['node_modules', '__pycache__', '.git']);
-const MAX_INITIAL_DEPTH = 1;
-// Cap how many children of a single directory are materialized at once. A
-// directory with tens of thousands of entries would otherwise render tens of
-// thousands of DOM nodes in one shot and freeze the browser tab. The remainder
-// is fetched on demand via /api/tree/page ("load more").
-const MAX_CHILDREN_PER_DIR = 500;
 
 /**
  * Build a "load more" sentinel node for a truncated directory listing.
@@ -33,18 +28,9 @@ function moreNode(dirRelativePath, offset, total) {
  */
 async function readVisibleEntries(dirPath) {
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
-  const visible = entries.filter((entry) => !shouldIgnore(entry.name));
+  const visible = entries.filter((entry) => !isIgnoredName(entry.name));
   visible.sort(sortEntries);
   return visible;
-}
-
-/**
- * Check if an entry should be ignored
- * @param {string} name - Entry name
- * @returns {boolean} True if should be ignored
- */
-function shouldIgnore(name) {
-  return IGNORED_PATTERNS.has(name);
 }
 
 /**
@@ -162,7 +148,7 @@ export function setupTreeRoutes(app) {
       const tree = await buildFileTree(app.locals.rootDir, app.locals.rootDir, MAX_INITIAL_DEPTH);
       res.json(tree);
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      sendError(res, mkError('READ_FAILED', err.message, { cause: err }));
     }
   });
 
@@ -171,12 +157,12 @@ export function setupTreeRoutes(app) {
     try {
       const { path: relativePath } = req.query;
       if (!relativePath) {
-        return res.status(400).json({ error: 'Path is required' });
+        return sendError(res, mkError('PATH_REQUIRED', 'Path is required'));
       }
 
       // Security: validate before resolving path (with symlink check)
       if (!await validatePathReal(relativePath, app.locals.rootDir)) {
-        return res.status(403).json({ error: 'Access denied' });
+        return sendError(res, mkError('ACCESS_DENIED', 'Access denied'));
       }
 
       const fullPath = path.join(app.locals.rootDir, relativePath);
@@ -187,7 +173,7 @@ export function setupTreeRoutes(app) {
       const children = await buildFileTree(fullPath, app.locals.rootDir, MAX_INITIAL_DEPTH);
       res.json(children);
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      sendError(res, mkError('READ_FAILED', err.message, { cause: err }));
     }
   });
 
@@ -201,7 +187,7 @@ export function setupTreeRoutes(app) {
 
       // '' = root (always inside rootDir); any other path must validate.
       if (relativePath && !await validatePathReal(relativePath, app.locals.rootDir)) {
-        return res.status(403).json({ error: 'Access denied' });
+        return sendError(res, mkError('ACCESS_DENIED', 'Access denied'));
       }
 
       const dirPath = relativePath
@@ -210,7 +196,7 @@ export function setupTreeRoutes(app) {
       const items = await readDirPage(dirPath, app.locals.rootDir, offset, limit);
       res.json(items);
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      sendError(res, mkError('READ_FAILED', err.message, { cause: err }));
     }
   });
 }

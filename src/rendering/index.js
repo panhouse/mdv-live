@@ -4,24 +4,11 @@
 
 import fs from 'fs/promises';
 import { getFileType } from '../utils/fileTypes.js';
+import { escapeHtml } from '../utils/html.js';
 import { renderMarkdown, isMarp } from './markdown.js';
 import { renderMarp } from './marp.js';
 import { analyseSource } from '../utils/lineMath.js';
 import { makeEtag } from '../utils/etag.js';
-
-/**
- * Escape HTML entities
- * @param {string} text - Text to escape
- * @returns {string} Escaped text
- */
-function escapeHtml(text) {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#x27;');
-}
 
 /**
  * Render code with syntax highlighting markup

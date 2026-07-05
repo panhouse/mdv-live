@@ -16,6 +16,7 @@ import path from 'node:path';
 import WebSocket from 'ws';
 
 import { buildFileTree, readDirPage } from '../src/api/tree.js';
+import { MAX_CHILDREN_PER_DIR } from '../src/config/constants.js';
 import { startTestServer } from './helpers/server.js';
 
 describe('buildFileTree depth control (expand = direct children only)', () => {
@@ -60,9 +61,42 @@ describe('buildFileTree depth control (expand = direct children only)', () => {
   });
 });
 
+// Regression (P1 fix, 2026-07 refactor): tree.js used to hide only
+// node_modules/__pycache__/.git — dist/, build/, .venv/ etc. rendered in the
+// tree but were NOT watched by chokidar (watcher.js already ignored 19
+// patterns), so external changes to those directories never refreshed the
+// UI. tree.js now shares src/utils/ignorePatterns.js (isIgnoredName) with the
+// watcher, so both sides agree on what is hidden.
+describe('tree hides names ignored by the watcher (isIgnoredName parity)', () => {
+  let tempDir;
+
+  before(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-ignore-'));
+    await fs.mkdir(path.join(tempDir, 'dist'));
+    await fs.mkdir(path.join(tempDir, 'build'));
+    await fs.mkdir(path.join(tempDir, '.venv'));
+    await fs.writeFile(path.join(tempDir, '.env'), 'SECRET=1');
+    await fs.writeFile(path.join(tempDir, 'visible.md'), '# visible');
+  });
+
+  after(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('buildFileTree omits dist/, build/, .venv/, and dotfiles', async () => {
+    const items = await buildFileTree(tempDir, tempDir, 0);
+    const names = items.map((i) => i.name);
+    assert.ok(!names.includes('dist'), 'dist/ should be hidden (was visible pre-fix)');
+    assert.ok(!names.includes('build'), 'build/ should be hidden (was visible pre-fix)');
+    assert.ok(!names.includes('.venv'), '.venv/ should be hidden (was visible pre-fix)');
+    assert.ok(!names.includes('.env'), 'dotfiles should be hidden');
+    assert.ok(names.includes('visible.md'), 'ordinary files remain visible');
+  });
+});
+
 describe('directory pagination (cap + load more)', () => {
   let tempDir;
-  const CAP = 500; // mirrors MAX_CHILDREN_PER_DIR in src/api/tree.js
+  const CAP = MAX_CHILDREN_PER_DIR;
   const TOTAL = 505;
 
   before(async () => {
@@ -169,9 +203,13 @@ describe('POST /api/file tree_update broadcast scope', () => {
   }
 
   async function savedThenSettle(body) {
+    // 'Sec-Fetch-Site: same-origin' is required as of the 2026-07 refactor's
+    // P1-1 fix: POST /api/file is now Origin/Host-guarded (CSRF defense,
+    // src/api/file.js), so a same-origin signal is needed since this plain
+    // fetch() sends no Origin header. See src/api/file.js notes.
     const res = await fetch(`${ctx.baseUrl}/api/file`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
       body: JSON.stringify(body),
     });
     assert.strictEqual(res.status, 200);

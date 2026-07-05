@@ -3,35 +3,21 @@
  *
  * Each function returns an Error (with `.code`) on rejection or `null` on
  * success. The caller then uses `sendError(res, err)` from utils/errors.js.
+ *
+ * `checkOrigin`/`checkHost`/`buildAllowedHosts` delegate to
+ * `src/api/middleware/originGuard.js` — the shared Origin/Host rule text
+ * now lives there once; this module just re-exports it under the names
+ * `handleGet.js`/`handlePut.js`/`marpNote.js` already import.
  */
 
 import { mkError } from '../../utils/errors.js';
 import { validateNoteText } from '../../rendering/marpNoteWriter.js';
+import { MAX_RELATIVE_PATH_LENGTH } from '../../config/constants.js';
+import { buildAllowedHosts, checkOrigin, checkHost } from '../middleware/originGuard.js';
 
 const MAX_SLIDE_INDEX = 1000;
 
-export function buildAllowedHosts(port) {
-  return [`localhost:${port}`, `127.0.0.1:${port}`];
-}
-
-/** Origin / Sec-Fetch-Site judgement (CSRF / DNS rebinding defence). */
-export function checkOrigin(req, allowedHosts) {
-  const origin = req.get('Origin');
-  if (origin) {
-    for (const host of allowedHosts) {
-      if (origin === `http://${host}`) return null;
-    }
-    return mkError('ORIGIN_REJECTED', 'origin not allowed');
-  }
-  if (req.get('Sec-Fetch-Site') === 'same-origin') return null;
-  return mkError('ORIGIN_REJECTED', 'origin not allowed');
-}
-
-export function checkHost(req, allowedHosts) {
-  const host = req.get('Host');
-  if (host && allowedHosts.includes(host)) return null;
-  return mkError('ORIGIN_REJECTED', 'host header not allowed');
-}
+export { buildAllowedHosts, checkOrigin, checkHost };
 
 export function checkJsonContent(req) {
   const ct = (req.get('Content-Type') || '').split(';')[0].trim().toLowerCase();
@@ -55,7 +41,7 @@ export function parseSlideIndex(req) {
 export function sanitiseRelativePath(decoded) {
   // Express already decoded :encodedPath route param; do not decode again.
   if (typeof decoded !== 'string') return null;
-  if (decoded.length === 0 || decoded.length > 1024) return null;
+  if (decoded.length === 0 || decoded.length > MAX_RELATIVE_PATH_LENGTH) return null;
   if (decoded.includes('\0')) return null;
   return decoded;
 }

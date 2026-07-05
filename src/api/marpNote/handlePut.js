@@ -99,7 +99,7 @@ async function performNoteUpdate({ res, rootDir, rel, slideIndex, note, ifMatch,
 
   const currentEtag = makeEtag(deck.rawSource);
   if (ifMatch !== currentEtag) {
-    return res.status(412).json({ ok: false, code: 'STALE', currentEtag });
+    return sendError(res, mkError('STALE', 'stale', { currentEtag }));
   }
 
   let parsed;

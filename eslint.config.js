@@ -40,6 +40,8 @@ export default [
         TextDecoder: 'readonly',
         AbortController: 'readonly',
         fetch: 'readonly',
+        FormData: 'readonly',
+        Blob: 'readonly',
         globalThis: 'readonly',
         structuredClone: 'readonly',
       },
