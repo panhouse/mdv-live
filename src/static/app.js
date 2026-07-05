@@ -84,7 +84,13 @@ async function refreshCurrentTab() {
     try {
         const response = await MDVApi.fetchFile(tab.path);
         const data = await response.json();
-        if (data.content && data.content !== tab.content) {
+        // Compare by content hash, not rendered HTML: a source-only change
+        // (equivalent markdown, whitespace) can render identically while
+        // the raw text — and therefore the review baseline — moved
+        // (codex round-8). etag is universal on text envelopes as of 0.6.4.
+        const changed = data.content
+            && (data.etag !== tab.etag || data.content !== tab.content);
+        if (changed) {
             // Full rendered-file contract via the SSOT helper — hand-copying
             // only content/raw left tab.etag stale, which tricked
             // DiffReviewManager's fast path into hiding a real change

@@ -184,6 +184,7 @@ export const DiffReviewManager = {
     _highlightsOn: true,
     _jumpIndex: -1,
     _reviewSeq: 0,
+    _seededPaths: new Set(),
 
     init() {
         this._buildDom();
@@ -247,9 +248,16 @@ export const DiffReviewManager = {
         }
 
         // Fast path: no network call needed when we already know the
-        // current hash (Marp tabs always; non-Marp tabs once a live
-        // file_update has populated tab.etag) and it matches the baseline.
+        // current hash and it matches the baseline. One catch: after a
+        // server restart the in-memory journal is empty even though
+        // localStorage remembers this hash — seed it (fire-and-forget,
+        // once per path per page load) so the NEXT edit produces real
+        // counts instead of unknown-baseline (codex round-8).
         if (tab.etag && tab.etag === lastSeen.hash) {
+            if (!this._seededPaths.has(tab.path)) {
+                this._seededPaths.add(tab.path);
+                MDVApi.diff(tab.path, '').catch(() => {});
+            }
             this._hide();
             return;
         }
