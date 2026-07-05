@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.7] - 2026-07-06
+
+### Fixed
+
+- macOS で Ctrl+K が検索に横取りされ、エディタ標準の「カーソル以降を
+  削除」が使えなかった問題を修正。ショートカット修飾キーをOS別に分離
+  （macOS=⌘のみ・Windows/Linux=Ctrl）。Ctrl+E/P/B 等の編集キーも解放
+
 ## [0.6.6] - 2026-07-06
 
 ### Improved
