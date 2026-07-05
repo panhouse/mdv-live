@@ -235,7 +235,10 @@ describe('watcher.js — records a change-journal snapshot on every filesystem c
     });
   }
 
-  function waitForNextFileUpdate(messages, fromIndex, timeoutMs = 3000) {
+  // 10s, not 3s: chokidar's awaitWriteFinish stability window plus a slow
+  // CI runner exceeded 3s once (2026-07-06, Ubuntu runner — the suite's
+  // only red in 35+ runs). A generous budget costs nothing when green.
+  function waitForNextFileUpdate(messages, fromIndex, timeoutMs = 10000) {
     return new Promise((resolve, reject) => {
       const deadline = Date.now() + timeoutMs;
       const check = () => {
