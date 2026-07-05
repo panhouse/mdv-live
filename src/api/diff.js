@@ -107,7 +107,9 @@ export function setupDiffRoutes(app) {
       if (err.code === 'ENOENT') {
         return sendError(res, mkError('NOT_FOUND', 'File not found'));
       }
-      return sendError(res, mkError('READ_FAILED', err.message, { cause: err }));
+      // Fixed message — raw fs errors can leak absolute paths/OS details
+      // (same contract as the other read routes).
+      return sendError(res, mkError('READ_FAILED', 'read failed', { cause: err }));
     }
   });
 }
