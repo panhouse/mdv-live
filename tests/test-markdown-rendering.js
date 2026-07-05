@@ -57,7 +57,11 @@ describe('Markdown Rendering', () => {
     it('should render lists', async () => {
       const data = await createAndFetch('lists.md', '- Item 1\n- Item 2\n\n1. First\n2. Second');
       assert.ok(data.content.includes('<ul>'));
-      assert.ok(data.content.includes('<li>'));
+      // <li> now carries data-source-line (0.6.6 list-item mapping, see
+      // tests/test-source-line-mapping.js) — this was a bare `<li>`
+      // substring check before that change; updated deliberately rather
+      // than worked around, since the tag itself changed on purpose.
+      assert.ok(data.content.includes('<li data-source-line='));
       assert.ok(data.content.includes('<ol>'));
     });
 

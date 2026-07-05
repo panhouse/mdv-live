@@ -1,6 +1,10 @@
 /**
  * Tests for src/rendering/markdown.js's `data-source-line` mapping — the
- * shared foundation for search-jump (0.6.1) and diff-highlight (0.6.3).
+ * shared foundation for search-jump (0.6.1) and diff-highlight (0.6.3),
+ * extended in 0.6.6 to also tag every `<li>` (see the "List items" describe
+ * block below) — the single most user-visible mapping gap, since a changed
+ * 議事録 decision bullet used to highlight/jump to the nearest PRECEDING
+ * tagged block (often a heading) instead of the bullet itself.
  *
  * renderMarkdown() is a pure function (string in, HTML string out), so these
  * are direct unit tests with no server needed (see tests/test-save-queue.js
@@ -11,19 +15,22 @@
  *   - Attributed with the 1-based ORIGINAL RAW FILE line the block starts
  *     at: headings (h1-h6), paragraphs, fenced/indented code blocks (the
  *     attribute lands on the inner <code>, not <pre> — a markdown-it
- *     default-renderer quirk, see below), <hr>, and table row-level
- *     elements (<thead>/<tbody>/<tr> — NOT <table> itself, see below).
+ *     default-renderer quirk, see below), <hr>, table row-level elements
+ *     (<thead>/<tbody>/<tr> — NOT <table> itself, see below), and (0.6.6)
+ *     every <li> — tight or loose, nested or not, bullet/ordered/task-list.
  *   - Mermaid blocks (which bypass markdown-it's tokenizer entirely via a
  *     placeholder-swap guard) get data-source-line baked directly onto the
  *     restored <pre> wrapper, pointing at the ```mermaid fence's line.
- *   - Deliberately NOT attributed: <ul>/<ol>/<li>/<blockquote>/<table>
- *     (their opening tags). Attributing any of these would break
- *     pre-existing exact-string assertions in test-markdown-rendering.js
- *     (`.includes('<table>')` etc.) that must keep passing unmodified.
- *     Blockquotes/loose-list items still surface a line via their inner
- *     (non-hidden) <p>; tight list items (the common case) get no
- *     data-source-line anywhere inside them at all — a known, deliberate
- *     gap, not an oversight.
+ *   - Deliberately NOT attributed: <ul>/<ol>/<blockquote>/<table> — their
+ *     OWN opening tags (the wrapper, not the items/rows inside them).
+ *     Attributing any of these would break pre-existing exact-string
+ *     assertions in test-markdown-rendering.js (`.includes('<table>')` etc.)
+ *     that must keep passing unmodified. Blockquotes still surface a line
+ *     via their inner (non-hidden) <p>; list items now surface their OWN
+ *     line directly instead of relying on that inner-paragraph trick (a
+ *     tight list's inner paragraph is `hidden` and renders no tag at all —
+ *     that's exactly the gap 0.6.6 closes by tagging `list_item_open`
+ *     itself rather than depending on what's inside it).
  *   - YAML frontmatter (converted to a synthetic ```yaml fence) and each
  *     ```mermaid block correctly shift the line count of the content
  *     markdown-it actually parses; data-source-line always reports the
@@ -98,8 +105,12 @@ describe('Source-line mapping (data-source-line)', () => {
       assert.ok(html.includes('<tr data-source-line="17">'));
     });
 
-    it('does NOT attribute <ul>/<li>/<blockquote>/<table> themselves (existing bare-tag tests)', () => {
-      assert.ok(html.includes('<ul>\n<li>item a</li>\n<li>item b</li>\n</ul>'));
+    it('attributes each <li> with its own line (0.6.6), but NOT the <ul>/<blockquote>/<table> wrapper tags themselves', () => {
+      // Updated deliberately from the pre-0.6.6 bare-<li> assertion (see
+      // this file's top docstring + markdown.js's SOURCE_LINE_EXCLUDED_TYPES
+      // comment for why <li> moved out of the excluded set: 0.6.6 list-item
+      // mapping) — item a/b are raw lines 6/7 in this fixture.
+      assert.ok(html.includes('<ul>\n<li data-source-line="6">item a</li>\n<li data-source-line="7">item b</li>\n</ul>'));
       assert.ok(html.includes('<blockquote>\n<p data-source-line="9">a quote</p>\n</blockquote>'));
       assert.ok(html.includes('<table>\n'));
     });
@@ -226,11 +237,57 @@ describe('Source-line mapping (data-source-line)', () => {
       assert.strictEqual(matches.length, 2);
     });
 
-    it('still renders headings/lists/blockquotes/tables as bare tags where previously bare', () => {
+    it('still renders <ul>/<ol> as bare wrapper tags; <li> now carries data-source-line (0.6.6 — updated deliberately, was asserting a bare <li> before this change)', () => {
       const html = renderMarkdown('- Item 1\n- Item 2\n\n1. First\n2. Second');
       assert.ok(html.includes('<ul>'));
-      assert.ok(html.includes('<li>'));
+      assert.ok(html.includes('<li data-source-line="1">Item 1</li>'));
+      assert.ok(html.includes('<li data-source-line="2">Item 2</li>'));
       assert.ok(html.includes('<ol>'));
+      assert.ok(html.includes('<li data-source-line="4">First</li>'));
+      assert.ok(html.includes('<li data-source-line="5">Second</li>'));
+    });
+  });
+
+  describe('List items (0.6.6 — closes the biggest review-surface mapping gap)', () => {
+    it('tags each top-level tight-list <li> with its own line, not just the list wrapper', () => {
+      const html = renderMarkdown('- item a\n- item b');
+      assert.ok(html.includes('<li data-source-line="1">item a</li>'));
+      assert.ok(html.includes('<li data-source-line="2">item b</li>'));
+      // The <ul> wrapper itself stays bare (still in SOURCE_LINE_EXCLUDED_TYPES).
+      assert.ok(html.startsWith('<ul>\n<li'));
+    });
+
+    it('tags nested list items independently of their parent item\'s line', () => {
+      const src = [
+        '- Outer 1',   // 1
+        '  - Inner 1a', // 2
+        '  - Inner 1b', // 3
+        '- Outer 2'    // 4
+      ].join('\n');
+      const html = renderMarkdown(src);
+      assert.ok(html.includes('<li data-source-line="1">Outer 1'));
+      assert.ok(html.includes('<li data-source-line="2">Inner 1a</li>'));
+      assert.ok(html.includes('<li data-source-line="3">Inner 1b</li>'));
+      assert.ok(html.includes('<li data-source-line="4">Outer 2</li>'));
+    });
+
+    it('tags ordered-list items the same way', () => {
+      const html = renderMarkdown('1. First\n2. Second');
+      assert.ok(html.includes('<li data-source-line="1">First</li>'));
+      assert.ok(html.includes('<li data-source-line="2">Second</li>'));
+    });
+
+    it('tags a loose list\'s items too (on both the <li> and its inner <p>, matching the blockquote convention)', () => {
+      const html = renderMarkdown('- item a\n\n- item b');
+      assert.ok(html.includes('<li data-source-line="1">\n<p data-source-line="1">item a</p>\n</li>'));
+      assert.ok(html.includes('<li data-source-line="3">\n<p data-source-line="3">item b</p>\n</li>'));
+    });
+
+    it('coexists with markdown-it-task-lists\' class="task-list-item" attribute on the same <li>', () => {
+      const html = renderMarkdown('- [ ] todo\n- [x] done');
+      assert.ok(html.includes('<li class="task-list-item" data-source-line="1">'));
+      assert.ok(html.includes('<li class="task-list-item" data-source-line="2">'));
+      assert.ok(html.includes('checked=""'), 'the checked item still renders correctly');
     });
   });
 });

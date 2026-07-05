@@ -370,10 +370,12 @@ export const SearchPalette = {
             }
         });
         // Some block types deliberately carry no data-source-line at all
-        // (tight list items, bare <ul>/<table> wrappers — see
-        // markdown.js's SOURCE_LINE_EXCLUDED_TYPES). If the hit line falls
-        // inside one of those with nothing tagged at/before it, fall back
-        // to the first tagged block so we still scroll somewhere.
+        // — the bare <ul>/<ol>/<blockquote>/<table> wrapper tags themselves
+        // (see markdown.js's SOURCE_LINE_EXCLUDED_TYPES; their <li>/row
+        // contents DO carry it, including tight-list <li>s since 0.6.6). If
+        // the hit line falls inside one of those wrappers with nothing
+        // tagged at/before it, fall back to the first tagged block so we
+        // still scroll somewhere.
         if (!best && candidates.length) best = candidates[0];
         if (best) this._flashElement(best);
     },
