@@ -28,6 +28,20 @@ jobs:
         # 同じライブラリ群を必要とするため、npm test より先に実行する。
         run: npx playwright install --with-deps chromium
 
+      - name: Relax AppArmor userns restriction for Chrome sandbox
+        # ubuntu-24.04 は非特権ユーザー名前空間を AppArmor で制限しており、
+        # puppeteer (md-to-pdf) の Chrome がサンドボックス作成に失敗して
+        # 起動できない。Playwright は自前で回避するが puppeteer は不可。
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Debug PDF tooling (temporary)
+        run: |
+          node -e "console.log('puppeteer', require('puppeteer/package.json').version)" || true
+          ls ~/.cache/puppeteer 2>/dev/null || echo "no puppeteer cache"
+          echo '# debug' > /tmp/dbg.md
+          node node_modules/md-to-pdf/dist/cli.js /tmp/dbg.md 2>&1 | tail -20 || true
+          ls -la /tmp/dbg.pdf 2>/dev/null || echo "no pdf produced"
+
       - name: Unit / API tests
         run: npm test
 
