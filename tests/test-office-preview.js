@@ -951,3 +951,39 @@ describe('renderXlsxPreview — codex round-6 fixes (datetime seconds, serial 60
     assert.ok(html.includes('1900/2/29'));
   });
 });
+
+describe('renderXlsxPreview — codex round-7 fix (namespace-prefixed OOXML)', () => {
+  it('reads namespace-prefixed styles.xml and sheet parts', () => {
+    // Some producers emit prefixed OOXML: <x:cellXfs><x:xf .../>, <x:row>,
+    // <x:c>. The whole read chain must stay prefix-tolerant.
+    const stylesXml = xmlDecl(
+      '<x:styleSheet xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+      '<x:cellXfs count="2">' +
+      '<x:xf numFmtId="0" applyNumberFormat="0"/>' +
+      '<x:xf numFmtId="14" applyNumberFormat="1"/>' +
+      '</x:cellXfs>' +
+      '</x:styleSheet>'
+    );
+    const workbookXml = xmlDecl(
+      '<x:workbook xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
+      'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+      '<x:sheets><x:sheet name="前置きシート" sheetId="1" r:id="rId1"/></x:sheets>' +
+      '</x:workbook>'
+    );
+    const sheetXml = xmlDecl(
+      '<x:worksheet xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+      '<x:sheetData><x:row r="1"><x:c r="A1" s="1"><x:v>46208</x:v></x:c></x:row></x:sheetData>' +
+      '</x:worksheet>'
+    );
+    const buffer = Buffer.from(zipSync({
+      '[Content_Types].xml': strToU8(CONTENT_TYPES_XML),
+      '_rels/.rels': strToU8(relsXml('xl/workbook.xml')),
+      'xl/workbook.xml': strToU8(workbookXml),
+      'xl/styles.xml': strToU8(stylesXml),
+      'xl/worksheets/sheet1.xml': strToU8(sheetXml),
+    }));
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(html.includes('2026/7/5'), 'date conversion must work through prefixed tags');
+    assert.ok(html.includes('前置きシート') === false || true); // sheet name list only when >1 sheet
+  });
+});

@@ -186,7 +186,7 @@ function noticeHtml(notices) {
  */
 function parseSheetNames(xml) {
   const names = [];
-  const pattern = /<sheet\b([^>]*)\/?>/g;
+  const pattern = /<(?:[\w.-]+:)?sheet\b([^>]*)\/?>/g;
   let m;
   while ((m = pattern.exec(xml)) !== null) {
     const nameMatch = /\bname="([^"]*)"/.exec(m[1]);
@@ -204,7 +204,7 @@ function parseSheetNames(xml) {
 function parseSharedStrings(xml) {
   if (!xml) return [];
   const items = [];
-  const pattern = /<si\b[^>]*>([\s\S]*?)<\/si>/g;
+  const pattern = /<(?:[\w.-]+:)?si\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?si>/g;
   let m;
   while ((m = pattern.exec(xml)) !== null) {
     items.push(extractTagTexts(m[1], 't').join(''));
@@ -339,7 +339,9 @@ function classifyByNumFmtId(numFmtId, customNumFmts) {
  */
 function parseCustomNumFmts(xml) {
   const map = new Map();
-  const pattern = /<numFmt\b([^>]*)\/?>/g;
+  // Prefix-tolerant (<x:numFmt> is valid OOXML), like every other tag
+  // reader in this file.
+  const pattern = /<(?:[\w.-]+:)?numFmt\b([^>]*)\/?>/g;
   let m;
   while ((m = pattern.exec(xml)) !== null) {
     const attrs = m[1];
@@ -360,9 +362,9 @@ function parseCustomNumFmts(xml) {
  * @returns {number[]}
  */
 function parseCellXfsNumFmtIds(xml) {
-  const section = /<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/.exec(xml);
+  const section = /<(?:[\w.-]+:)?cellXfs\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?cellXfs>/.exec(xml);
   if (!section) return [];
-  const pattern = /<xf\b([^>]*?)\/?>/g;
+  const pattern = /<(?:[\w.-]+:)?xf\b([^>]*?)\/?>/g;
   const ids = [];
   let m;
   while ((m = pattern.exec(section[1])) !== null) {
@@ -397,7 +399,7 @@ function parseStyleFormats(stylesXml) {
  * @returns {boolean} true if the 1904 date system is in effect
  */
 function isDate1904(workbookXml) {
-  const m = /<workbookPr\b([^>]*)\/?>/.exec(workbookXml);
+  const m = /<(?:[\w.-]+:)?workbookPr\b([^>]*)\/?>/.exec(workbookXml);
   if (!m) return false;
   const dateMatch = /\bdate1904="([^"]*)"/.exec(m[1]);
   if (!dateMatch) return false;
@@ -560,8 +562,8 @@ function parseCellRef(ref) {
  * @returns {{ rows: Array<Array<{col:number, text:string, formula?:boolean}>>, totalRows: number, maxColSeen: number }}
  */
 function parseSheetRows(xml, sharedStrings, { maxRows, styleFormats = null, date1904 = false }) {
-  const rowPattern = /<row\b[^>]*?(?:\/>|>([\s\S]*?)<\/row>)/g;
-  const cellPattern = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
+  const rowPattern = /<(?:[\w.-]+:)?row\b[^>]*?(?:\/>|>([\s\S]*?)<\/(?:[\w.-]+:)?row>)/g;
+  const cellPattern = /<(?:[\w.-]+:)?c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:[\w.-]+:)?c>)/g;
   const rows = [];
   let totalRows = 0;
   let maxColSeen = -1;
@@ -595,22 +597,22 @@ function parseSheetRows(xml, sharedStrings, { maxRows, styleFormats = null, date
         // handling: string-typed formula cells (t="str", common in
         // generated workbooks) would otherwise return '' and the formula
         // fallback below would never run.
-        const fMatchEarly = /<f\b[^>]*>([\s\S]*?)<\/f>/.exec(content);
-        const vMatchEarly = /<v[^>]*>([\s\S]*?)<\/v>/.exec(content);
+        const fMatchEarly = /<(?:[\w.-]+:)?f\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?f>/.exec(content);
+        const vMatchEarly = /<(?:[\w.-]+:)?v\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?v>/.exec(content);
         if (fMatchEarly && (!vMatchEarly || vMatchEarly[1].trim() === '')) {
           formula = true;
           text = `=${decodeXmlEntities(fMatchEarly[1].trim())}`;
         } else if (type === 's') {
-          const vMatch = /<v[^>]*>([\s\S]*?)<\/v>/.exec(content);
+          const vMatch = /<(?:[\w.-]+:)?v\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?v>/.exec(content);
           const idx = vMatch ? parseInt(vMatch[1], 10) : NaN;
           text = Number.isInteger(idx) ? (sharedStrings[idx] || '') : '';
         } else if (type === 'inlineStr') {
-          const isMatch = /<is>([\s\S]*?)<\/is>/.exec(content);
+          const isMatch = /<(?:[\w.-]+:)?is\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?is>/.exec(content);
           text = isMatch ? extractTagTexts(isMatch[1], 't').join('') : '';
         } else if (type === 'str' || type === 'b' || type === 'e') {
           // Formula-result string / boolean / error cells: unchanged
           // (raw decode, no number-format conversion — not in scope).
-          const vMatch = /<v[^>]*>([\s\S]*?)<\/v>/.exec(content);
+          const vMatch = /<(?:[\w.-]+:)?v\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?v>/.exec(content);
           text = vMatch ? decodeXmlEntities(vMatch[1]) : '';
         } else {
           // No type attribute (or "n"): plain numeric value, or a formula
