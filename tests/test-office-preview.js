@@ -888,3 +888,39 @@ describe('renderXlsxPreview — codex round-4 fixes (elapsed time, t="str" formu
     assert.ok(html.includes('office-preview-formula'));
   });
 });
+
+describe('renderXlsxPreview — codex round-5 fixes (seconds, CJK time builtins)', () => {
+  it('builtin 45 mm:ss keeps seconds: 90s renders 00:01:30', () => {
+    const stylesXml = buildStylesXml({ cellXfsNumFmtIds: [0, 45] });
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody: `<row r="1"><c r="A1" s="1"><v>${90 / 86400}</v></c></row>`,
+      stylesXml,
+    });
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(html.includes('00:01:30'), `expected 00:01:30 in: ${html.slice(html.indexOf('<tbody'), html.indexOf('</tbody')) }`);
+  });
+
+  it('CJK builtin 32 (h"時"mm"分") is time, not an 1899 date', () => {
+    const stylesXml = buildStylesXml({ cellXfsNumFmtIds: [0, 32] });
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody: '<row r="1"><c r="A1" s="1"><v>0.5</v></c></row>',
+      stylesXml,
+    });
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(html.includes('12:00'));
+    assert.ok(!html.includes('1899'));
+  });
+
+  it('CJK builtin 27 stays a date', () => {
+    const stylesXml = buildStylesXml({ cellXfsNumFmtIds: [0, 27] });
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody: '<row r="1"><c r="A1" s="1"><v>46208</v></c></row>',
+      stylesXml,
+    });
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(html.includes('2026/7/5'));
+  });
+});

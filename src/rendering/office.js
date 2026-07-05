@@ -249,7 +249,10 @@ const BUILTIN_FORMAT_CODES = {
 // builtins. Their exact format text varies by Excel locale and isn't
 // standardized the way 0-49 are, but the ids themselves are always
 // date-ish — so they're classified directly rather than via a code lookup.
-const BUILTIN_CJK_DATE_NUMFMT_IDS = new Set([27, 28, 29, 30, 31, 32, 33, 34, 35, 36]);
+// 27-31/34-36 = CJK date builtins (era dates etc.). 32/33 are TIME
+// (h"時"mm"分" / h"時"mm"分"ss"秒") and live in their own set below.
+const BUILTIN_CJK_DATE_NUMFMT_IDS = new Set([27, 28, 29, 30, 31, 34, 35, 36]);
+const BUILTIN_CJK_TIME_NUMFMT_IDS = new Map([[32, false], [33, true]]); // id -> hasSeconds
 
 const NO_FORMAT = { isDate: false, hasTime: false, isPercent: false, isThousands: false };
 
@@ -298,6 +301,10 @@ function classifyFormatCode(code) {
     isTimeOnly: hasTimePart && !hasDatePart && !monthOnly,
     isElapsed,
     hasTime: hasTimePart,
+    // Seconds token (outside literals) or an elapsed [ss] bracket — the
+    // time formatter must not silently drop seconds (90s is 00:01:30,
+    // not "00:02").
+    hasSeconds: /s/i.test(stripped) || /\[s+\]/i.test(code),
     isPercent: /%/.test(stripped),
     isThousands: /[#0],[#0]/.test(stripped),
   };
@@ -312,6 +319,13 @@ function classifyFormatCode(code) {
 function classifyByNumFmtId(numFmtId, customNumFmts) {
   if (BUILTIN_CJK_DATE_NUMFMT_IDS.has(numFmtId)) {
     return { isDate: true, hasTime: false, isPercent: false, isThousands: false };
+  }
+  if (BUILTIN_CJK_TIME_NUMFMT_IDS.has(numFmtId)) {
+    return {
+      isDate: false, isTimeOnly: true, isElapsed: false,
+      hasTime: true, hasSeconds: BUILTIN_CJK_TIME_NUMFMT_IDS.get(numFmtId),
+      isPercent: false, isThousands: false,
+    };
   }
   const code = customNumFmts.get(numFmtId) ?? BUILTIN_FORMAT_CODES[numFmtId];
   return code === undefined ? NO_FORMAT : classifyFormatCode(code);
@@ -459,7 +473,7 @@ function formatNumericCell(raw, fmt, date1904) {
   if (!fmt || raw === '' || raw.trim() === '') return raw;
   const num = Number(raw);
   if (!Number.isFinite(num)) return raw;
-  if (fmt.isTimeOnly) return formatExcelTime(num, fmt.isElapsed);
+  if (fmt.isTimeOnly) return formatExcelTime(num, fmt.isElapsed, fmt.hasSeconds);
   if (fmt.isDate) return formatExcelDate(num, fmt.hasTime, date1904);
   if (fmt.isPercent) return formatPercent(num);
   if (fmt.isThousands) return formatThousands(num);
@@ -475,18 +489,30 @@ function formatNumericCell(raw, fmt, date1904) {
  *   TOTAL hours without wrapping at 24 (1.5 days -> 36:00)
  * @returns {string}
  */
-function formatExcelTime(serial, isElapsed) {
+function formatExcelTime(serial, isElapsed, hasSeconds) {
+  const pad = (n) => String(n).padStart(2, '0');
+
   if (isElapsed) {
-    const totalMinutes = Math.round(serial * 24 * 60);
-    const hh = Math.floor(totalMinutes / 60);
-    const mm = totalMinutes % 60;
-    return `${hh}:${String(mm).padStart(2, '0')}`;
+    if (hasSeconds) {
+      const totalSeconds = Math.round(serial * 86400);
+      const hh = Math.floor(totalSeconds / 3600);
+      const mm = Math.floor((totalSeconds % 3600) / 60);
+      return `${hh}:${pad(mm)}:${pad(totalSeconds % 60)}`;
+    }
+    const totalMinutes = Math.round(serial * 1440);
+    return `${Math.floor(totalMinutes / 60)}:${pad(totalMinutes % 60)}`;
   }
+
   const fraction = serial - Math.floor(serial);
-  const totalMinutes = Math.round(fraction * 24 * 60);
+  if (hasSeconds) {
+    const totalSeconds = Math.round(fraction * 86400);
+    const hh = Math.floor(totalSeconds / 3600) % 24;
+    const mm = Math.floor((totalSeconds % 3600) / 60);
+    return `${pad(hh)}:${pad(mm)}:${pad(totalSeconds % 60)}`;
+  }
+  const totalMinutes = Math.round(fraction * 1440);
   const hh = Math.floor(totalMinutes / 60) % 24;
-  const mm = totalMinutes % 60;
-  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+  return `${pad(hh)}:${pad(totalMinutes % 60)}`;
 }
 
 /**
