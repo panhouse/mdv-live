@@ -10,6 +10,7 @@ import {
   TREE_UPDATE_DEBOUNCE_MS
 } from './config/constants.js';
 import { renderFile } from './rendering/index.js';
+import { makeEtag } from './utils/etag.js';
 import { CHOKIDAR_IGNORED } from './utils/ignorePatterns.js';
 import { broadcastTreeUpdate as sendTreeUpdate } from './websocket.js';
 
@@ -21,10 +22,15 @@ const TREE_CHANGE_EVENTS = ['add', 'unlink', 'addDir', 'unlinkDir'];
  * @param {WebSocketServer} wss - WebSocket server for broadcasting
  * @param {Object} [options] - Watcher options
  * @param {number} [options.depth=3] - Directory depth to watch (prevents EMFILE errors)
+ * @param {{ record: (path: string, content: string) => string }} [options.journal] -
+ *   Change journal (src/services/changeJournal.js) to record a snapshot of
+ *   every changed file into, BEFORE broadcasting file_update. Optional so
+ *   callers that don't need change tracking (e.g. tests exercising the
+ *   watcher in isolation) can omit it.
  * @returns {FSWatcher} Chokidar watcher instance
  */
 export function setupWatcher(rootDir, wss, options = {}) {
-  const { depth = 3 } = options;
+  const { depth = 3, journal } = options;
 
   const watcher = chokidar.watch(rootDir, {
     ignored: CHOKIDAR_IGNORED,
@@ -60,10 +66,22 @@ export function setupWatcher(rootDir, wss, options = {}) {
 
     try {
       const rendered = await renderFile(filePath, relativeDir === '.' ? '' : relativeDir);
+
+      // Change tracking (0.6.3): journal the raw source BEFORE broadcasting,
+      // so a diff request racing this WS message can already use this
+      // version as a `from` baseline. `etag` is set AFTER spreading
+      // `...rendered` so every text-renderable file gets a content-hash
+      // etag on file_update — Marp decks already computed one (identical
+      // value, since it's also makeEtag() of the same raw source); this
+      // just makes it universal instead of Marp-only.
+      if (journal) journal.record(relativePath, rendered.raw);
+      const etag = makeEtag(rendered.raw);
+
       wss.broadcastFileUpdate(relativePath, {
         type: 'file_update',
         path: relativePath,
-        ...rendered
+        ...rendered,
+        etag
       });
     } catch (err) {
       console.error(`Error rendering ${relativePath}:`, err);

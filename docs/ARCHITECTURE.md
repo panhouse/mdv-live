@@ -37,6 +37,7 @@ For refactor history/rationale (why things are split the way they are), see
 | `src/api/file.js` | `GET /raw/*`, `GET/POST/DELETE /api/file`, `POST /api/mkdir`, `POST /api/move`, `GET /api/download` | File CRUD. Mutating routes are Origin-guarded and per-path locked; save goes through `atomicWrite`. Download supports HTTP Range for video/audio streaming. |
 | `src/api/tree.js` | `GET /api/tree`, `GET /api/tree/expand`, `GET /api/tree/page` | File tree listing. Eagerly loads only one level deep (`MAX_INITIAL_DEPTH`); directories beyond `MAX_CHILDREN_PER_DIR` children are paginated via `/api/tree/page`. |
 | `src/api/upload.js` | `POST /api/upload` | multer disk-storage upload. Destination directory is realpath-validated before multer touches disk; Origin-guarded. |
+| `src/api/diff.js` | `GET /api/diff` | Change-tracking line diff. Reads the current file, records it into `app.locals.changeJournal`, and diffs it (`src/utils/lineDiff.js`) against a client-supplied baseline hash (`from`), if the journal still has that version's content. Read-only, no Origin guard. |
 | `src/api/pdf.js` | `POST /api/pdf/export` | Delegates to `src/services/pdf.js`; Marp files → `marp-cli`, plain markdown → `md-to-pdf`. Writes to `os.tmpdir()`, streams the download, then deletes the temp file. |
 | `src/api/marpNote.js` | `GET/OPTIONS /api/marp/decks/:path`, `PUT/OPTIONS .../slides/:N/note` | Orchestration only — wires `handleGet`/`handlePut` and the shared CORS-preflight/Origin check. |
 | `src/api/marpNote/guards.js` | — | Content-Type / If-Match / slide-index-range / note-text validation. Re-exports `checkHost`/`checkOrigin`/`buildAllowedHosts` from `middleware/originGuard.js`. |
@@ -60,6 +61,8 @@ For refactor history/rationale (why things are split the way they are), see
 | Module | Role |
 |---|---|
 | `src/services/pdf.js` | Actual PDF generation (spawns `marp-cli` / `md-to-pdf`). Shared by `src/api/pdf.js` (HTTP) and `src/cli/convert.js` (CLI) so both paths get the same bug fixes/security checks. Throws `PDF_TOOL_UNAVAILABLE` when an optional dependency is missing. |
+| `src/services/changeJournal.js` | `createChangeJournal()`: pure in-memory store of recent raw-content snapshots per path, keyed by content hash (reuses `makeEtag`). One instance lives at `app.locals.changeJournal` (`src/server.js`); `src/watcher.js` records into it on every filesystem change, `src/api/diff.js` records into it (lazily) and reads from it on every request. Global byte-budget LRU eviction (`JOURNAL_MAX_BYTES`) + a per-file version cap (`JOURNAL_MAX_VERSIONS_PER_FILE`), both from `src/config/constants.js`. |
+| `src/utils/lineDiff.js` | `diffLines(oldText, newText)`: dependency-free line-level diff (Myers O(ND)), pure function. Returns `{ added, changed, removedAt }` (1-based NEW-text line numbers) or `{ available: false }` above `DIFF_MAX_LINES`. Backs `src/api/diff.js`. |
 | `src/styles/index.js` | PDF style presets (`PRESETS`) + `resolveStyle()`/`resolvePdfOptions()` for the `-s`/`--pdf-options` CLI flags and the Web UI Style panel. |
 | `src/concurrency/pathLock.js` | `withLock(key, fn)` — promise-chain mutex. FIFO per key; replaces a naive Map-based lock that had a thundering-herd race. |
 | `src/utils/errors.js` | `ERROR_STATUS` map, `mkError()`, `sendError()`. The **only** way a route should produce an error response. |
@@ -143,6 +146,7 @@ records what's vendored; `scripts/sync-vendor.js` re-populates it and
 | GET | `/api/tree/expand` | no | — | `api/tree.js` |
 | GET | `/api/tree/page` | no | — | `api/tree.js` |
 | GET | `/api/search` | no | — | `api/search.js` → `services/search.js` |
+| GET | `/api/diff` | no | — | `api/diff.js` → `utils/lineDiff.js` / `services/changeJournal.js` |
 | POST | `/api/upload` | yes | Origin | `api/upload.js` |
 | POST | `/api/pdf/export` | writes to `os.tmpdir()`, not rootDir | Origin | `api/pdf.js` |
 | GET | `/api/info` | no | — | `server.js` |
@@ -169,12 +173,20 @@ Produced by the server (`src/websocket.js`, `src/watcher.js`), consumed by
   storm). Client reaction: `FileTreeManager` re-fetches and diff-reconciles
   the tree (not a full rebuild — preserves scroll/expand/selection state).
 - **`file_update`** — `{ type: 'file_update', path, content, raw, fileType,
-  isMarp?, css?, notes?, notesMultiplicity?, etag?, lineEnding?, hasBom? }`.
+  isMarp?, css?, notes?, notesMultiplicity?, etag, lineEnding?, hasBom? }`.
   Sent only to clients that are watching `path` (client sends
   `{ type: 'watch', path }` over the socket first). Fired by the watcher on
   a real filesystem `change` event. Client reaction: whichever module owns
   the active tab re-renders (`ContentRenderer`, or the tab's editor state
   via `renderedFile.js`'s `applyRenderedFile`).
+  Since 0.6.3, **`etag` is always present** (`makeEtag()` of the raw source)
+  for every text-renderable file, not just Marp decks — `src/watcher.js` also
+  records this raw content into `app.locals.changeJournal` (see §1 Services)
+  BEFORE broadcasting, so a hash a client observed here is usable as the
+  `from` param of a later `GET /api/diff` call. `src/static/modules/
+  renderedFile.js`'s field-presence doc comment predates this and still
+  describes `etag` as Marp-only — out of date as of 0.6.3, pending a 0.6.4
+  frontend update.
 
 Client → server: only `{ type: 'watch', path }` (replaces, not adds to, that
 client's single watched path — see `clientWatches` in `src/websocket.js`).
