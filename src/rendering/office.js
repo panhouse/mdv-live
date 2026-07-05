@@ -279,18 +279,24 @@ function stripFormatLiterals(code) {
  * @returns {{ isDate: boolean, isTimeOnly: boolean, hasTime: boolean, isPercent: boolean, isThousands: boolean }}
  */
 function classifyFormatCode(code) {
+  // Elapsed-time bracket tokens ([h]/[mm]/[ss], builtin 46 "[h]:mm:ss",
+  // custom "[h]:mm") must be recognized BEFORE bracket-stripping treats
+  // them as literals — they mean "total elapsed", not clock-of-day, and
+  // must neither wrap at 24h nor fall through to date/month classification.
+  const isElapsed = /\[(h+|m+|s+)\]/i.test(code);
   const stripped = stripFormatLiterals(code);
   // 'm' is ambiguous (month vs minute): only y/d prove a DATE part; h/s
   // prove a TIME part. A time-only format (builtin 18-21 "h:mm", durations
   // 45-47 "mm:ss") must NOT get a bogus 1899/12/31 date prefix — it is
   // classified isTimeOnly and rendered as clock time instead.
-  const hasDatePart = /[yd]/i.test(stripped);
-  const hasTimePart = /[hs]/i.test(stripped);
+  const hasDatePart = !isElapsed && /[yd]/i.test(stripped);
+  const hasTimePart = isElapsed || /[hs]/i.test(stripped);
   // Month-only codes (e.g. "mmm") with no time markers still read as dates.
   const monthOnly = !hasDatePart && !hasTimePart && /m/i.test(stripped);
   return {
     isDate: hasDatePart || monthOnly,
     isTimeOnly: hasTimePart && !hasDatePart && !monthOnly,
+    isElapsed,
     hasTime: hasTimePart,
     isPercent: /%/.test(stripped),
     isThousands: /[#0],[#0]/.test(stripped),
@@ -453,7 +459,7 @@ function formatNumericCell(raw, fmt, date1904) {
   if (!fmt || raw === '' || raw.trim() === '') return raw;
   const num = Number(raw);
   if (!Number.isFinite(num)) return raw;
-  if (fmt.isTimeOnly) return formatExcelTime(num);
+  if (fmt.isTimeOnly) return formatExcelTime(num, fmt.isElapsed);
   if (fmt.isDate) return formatExcelDate(num, fmt.hasTime, date1904);
   if (fmt.isPercent) return formatPercent(num);
   if (fmt.isThousands) return formatThousands(num);
@@ -461,13 +467,21 @@ function formatNumericCell(raw, fmt, date1904) {
 }
 
 /**
- * Format the fractional (time-of-day) part of an Excel serial as HH:MM —
- * used for time-only formats (h:mm etc.) where a calendar date would be
- * meaningless (serial 0.5 = 12:00, not "1899/12/31 12:00").
+ * Format an Excel serial as time — used for time-only formats where a
+ * calendar date would be meaningless (serial 0.5 = 12:00, not
+ * "1899/12/31 12:00").
  * @param {number} serial - Excel serial value
+ * @param {boolean} [isElapsed] - Elapsed-time format ([h]:mm etc.): render
+ *   TOTAL hours without wrapping at 24 (1.5 days -> 36:00)
  * @returns {string}
  */
-function formatExcelTime(serial) {
+function formatExcelTime(serial, isElapsed) {
+  if (isElapsed) {
+    const totalMinutes = Math.round(serial * 24 * 60);
+    const hh = Math.floor(totalMinutes / 60);
+    const mm = totalMinutes % 60;
+    return `${hh}:${String(mm).padStart(2, '0')}`;
+  }
   const fraction = serial - Math.floor(serial);
   const totalMinutes = Math.round(fraction * 24 * 60);
   const hh = Math.floor(totalMinutes / 60) % 24;
@@ -543,7 +557,16 @@ function parseSheetRows(xml, sharedStrings, { maxRows, styleFormats = null, date
         let text;
         let formula = false;
 
-        if (type === 's') {
+        // Formula with no cached <v> — checked BEFORE type-specific
+        // handling: string-typed formula cells (t="str", common in
+        // generated workbooks) would otherwise return '' and the formula
+        // fallback below would never run.
+        const fMatchEarly = /<f\b[^>]*>([\s\S]*?)<\/f>/.exec(content);
+        const vMatchEarly = /<v[^>]*>([\s\S]*?)<\/v>/.exec(content);
+        if (fMatchEarly && (!vMatchEarly || vMatchEarly[1].trim() === '')) {
+          formula = true;
+          text = `=${decodeXmlEntities(fMatchEarly[1].trim())}`;
+        } else if (type === 's') {
           const vMatch = /<v[^>]*>([\s\S]*?)<\/v>/.exec(content);
           const idx = vMatch ? parseInt(vMatch[1], 10) : NaN;
           text = Number.isInteger(idx) ? (sharedStrings[idx] || '') : '';
@@ -557,19 +580,11 @@ function parseSheetRows(xml, sharedStrings, { maxRows, styleFormats = null, date
           text = vMatch ? decodeXmlEntities(vMatch[1]) : '';
         } else {
           // No type attribute (or "n"): plain numeric value, or a formula
-          // cell (<f> present, with or without a cached <v>).
-          const fMatch = /<f\b[^>]*>([\s\S]*?)<\/f>/.exec(content);
-          const vMatch = /<v[^>]*>([\s\S]*?)<\/v>/.exec(content);
-          const cachedIsEmpty = !vMatch || vMatch[1].trim() === '';
-
-          if (fMatch && cachedIsEmpty) {
-            // No cached value (e.g. openpyxl-generated files): show the
-            // formula text itself so the column doesn't render blank.
-            formula = true;
-            text = `=${decodeXmlEntities(fMatch[1].trim())}`;
-          } else if (vMatch) {
-            const raw = decodeXmlEntities(vMatch[1]);
-            if (fMatch) {
+          // cell with a cached <v> (the no-cached-value case was handled
+          // by the early formula fallback above).
+          if (vMatchEarly) {
+            const raw = decodeXmlEntities(vMatchEarly[1]);
+            if (fMatchEarly) {
               // Formula WITH a cached value: keep showing the value as
               // today — no date/percent/thousands conversion.
               text = raw;

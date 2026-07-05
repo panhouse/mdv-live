@@ -850,3 +850,41 @@ describe('renderXlsxPreview — codex round-3 fixes (escaped literals, trim vs t
     assert.ok(!html.includes('r5'));
   });
 });
+
+describe('renderXlsxPreview — codex round-4 fixes (elapsed time, t="str" formulas)', () => {
+  it('renders builtin 46 [h]:mm:ss as total elapsed hours without 24h wrap', () => {
+    const stylesXml = buildStylesXml({ cellXfsNumFmtIds: [0, 46] });
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody: '<row r="1"><c r="A1" s="1"><v>1.5</v></c></row>',
+      stylesXml,
+    });
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(html.includes('36:00'), '1.5 days elapsed = 36:00, not a wrapped 12:00');
+    assert.ok(!html.includes('1899') && !html.includes('1900'));
+  });
+
+  it('custom [h]:mm is elapsed time, not a month-only date', () => {
+    const stylesXml = buildStylesXml({
+      numFmts: [{ id: 166, code: '[h]:mm' }],
+      cellXfsNumFmtIds: [0, 166],
+    });
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody: '<row r="1"><c r="A1" s="1"><v>2.25</v></c></row>',
+      stylesXml,
+    });
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(html.includes('54:00'));
+  });
+
+  it('t="str" formula cells with no cached value fall back to the formula text', () => {
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody: '<row r="1"><c r="A1" t="str"><f>CONCAT(B1,"x")</f></c></row>',
+    });
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(html.includes('=CONCAT(B1,'), 'formula fallback must run for t="str" cells too');
+    assert.ok(html.includes('office-preview-formula'));
+  });
+});
