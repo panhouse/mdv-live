@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.6] - 2026-07-06
+
+### Improved
+
+- 変更ハイライトが**箇条書きの行そのもの**に付くように（従来は直前の
+  見出し等に付いていた）。議事録の決定事項・宿題が主戦場のため効果大
+- README に「AIエージェント時代の検収ビュー」節を追加（0.6.1〜0.6.5 の
+  検索・Excelプレビュー・変更ハイライト・未読バッジを整理）
+
 ## [0.6.5] - 2026-07-06
 
 ### Added — 未読●/✓バッジ（検収ビュー第2弾）
