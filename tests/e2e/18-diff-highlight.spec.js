@@ -13,6 +13,20 @@ import { makeFixtureDir, seedFiles, startServer, removeFixtureDir } from './help
 
 let fixtureDir;
 let server;
+
+/**
+ * Baseline capture is async (first-sight /api/diff round trip) — poll the
+ * namespaced localStorage entry instead of sleeping a fixed interval
+ * (fixed sleeps race on slow CI; codex round-12).
+ */
+async function waitForBaseline(page, p) {
+  await expect.poll(() => page.evaluate((rel) => {
+    const store = JSON.parse(localStorage.getItem('mdv-last-seen') || '{}');
+    const key = Object.keys(store).find((k) => k.endsWith('\u0000' + rel));
+    return !!key && typeof store[key].hash === 'string';
+  }, p), { timeout: 5000 }).toBe(true);
+}
+
 const FILE = 'review.md';
 
 const ORIGINAL = [
@@ -140,7 +154,7 @@ test('diff bar disappears when the last tab is closed (welcome view)', async ({ 
   await expect(page.locator(`.tree-item[data-path="${p}"] .name`)).toBeVisible();
   await page.locator(`.tree-item[data-path="${p}"] [data-action="open"]`).click();
   await expect(page.locator('#content h1')).toHaveText('Close Me');
-  await page.waitForTimeout(500); // first-sight baseline capture
+  await waitForBaseline(page, p);
 
   await writeFile(path.join(fixtureDir, p), '# Close Me\n\n本文の段落。\n\n追記の段落。\n');
   await expect(page.locator('#diffReviewBar')).toBeVisible({ timeout: 6000 });
@@ -159,7 +173,7 @@ test('Marp decks get real change counts (baseline seeded on first sight, codex)'
   await expect(page.locator(`.tree-item[data-path="${p}"] .name`)).toBeVisible();
   await page.locator(`.tree-item[data-path="${p}"] [data-action="open"]`).click();
   await expect(page.locator('#marpSlideArea, .marpit').first()).toBeVisible();
-  await page.waitForTimeout(700); // first-sight: /api/diff must seed the journal
+  await waitForBaseline(page, p);
 
   await writeFile(path.join(fixtureDir, p), deck + '\n---\n\n# 追加スライド\n');
   const bar = page.locator('#diffReviewBar');
@@ -187,7 +201,7 @@ test('baselines are namespaced by served root (no cross-project bleed)', async (
   await page.goto(base + '/');
   await page.locator('.tree-item[data-path="shared.md"] [data-action="open"]').click();
   await expect(page.locator('#content h1')).toHaveText('Project A');
-  await page.waitForTimeout(500); // baseline for root A
+  await waitForBaseline(page, 'shared.md');
   await page.goto('about:blank');
   await serverA.stop();
 
