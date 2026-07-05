@@ -297,7 +297,14 @@ export function setupFileRoutes(app, options = {}) {
         }
 
         await atomicWrite(targetPath, content, originalStat);
-        if (isNewFile) notifyTreeUpdate(app);
+        if (isNewFile) {
+          // atomicWrite's temp file is created 0600 and rename carries that
+          // over; a brand-new file should get the same umask-based default
+          // fs.writeFile produced (typically 0644), so shared directories
+          // and downstream tools keep group/world read access.
+          await fs.chmod(targetPath, 0o666 & ~process.umask());
+          notifyTreeUpdate(app);
+        }
         res.json({ success: true });
       } catch (err) {
         sendError(res, toWriteError(err));

@@ -107,6 +107,11 @@ describe('File Operations', () => {
       const exists = await pathExists(tempPath('new-file.md'));
       assert.ok(exists);
 
+      // New files must get umask-based default permissions (as fs.writeFile
+      // did), not atomicWrite's restrictive 0600 temp-file mode.
+      const stat = await fs.stat(tempPath('new-file.md'));
+      assert.strictEqual(stat.mode & 0o777, 0o666 & ~process.umask());
+
       await fs.unlink(tempPath('new-file.md'));
     });
 
