@@ -4,6 +4,14 @@
 
 set -e
 
+# package.json のバージョンを実行時に取得（ハードコードすると 0.5.22 稼働中に
+# 0.3.1 表示のような乖離が起きる。スクリプト自身の場所からリポジトリルートを
+# 特定するので、どのディレクトリから呼んでも(npm run setup-macos 経由でも
+# bash scripts/setup-macos-app.sh 直接でも)壊れない）
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+MDV_VERSION="$(node -p "require('$REPO_ROOT/package.json').version")"
+
 echo "=== MDV macOS App Setup ==="
 echo ""
 
@@ -43,7 +51,7 @@ Usage:
 - Double-click any .md file
 - Drag & drop .md files onto this app
 
-Version: 0.3.1 (Node.js)" buttons {"OK"} default button "OK" with title "MDV"
+Version: $MDV_VERSION (Node.js)" buttons {"OK"} default button "OK" with title "MDV"
 end run
 EOF
 
@@ -94,8 +102,9 @@ LAUNCHSCRIPT
 sed -i '' "s|MDV_PATH_HERE|$MDV_PATH|g" "$TEMP_DIR/$APP_NAME/Contents/Resources/launch.sh"
 chmod +x "$TEMP_DIR/$APP_NAME/Contents/Resources/launch.sh"
 
-# Info.plist設定
-cat << 'EOF' > "$TEMP_DIR/$APP_NAME/Contents/Info.plist"
+# Info.plist設定（unquoted heredoc: $MDV_VERSION を展開するため。中身に
+# $/`/\ を含む行はないので、通常のシェル展開の副作用は無い）
+cat << EOF > "$TEMP_DIR/$APP_NAME/Contents/Info.plist"
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -129,9 +138,9 @@ cat << 'EOF' > "$TEMP_DIR/$APP_NAME/Contents/Info.plist"
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.3.1</string>
+	<string>$MDV_VERSION</string>
 	<key>CFBundleVersion</key>
-	<string>0.3.1</string>
+	<string>$MDV_VERSION</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>10.13</string>
 </dict>

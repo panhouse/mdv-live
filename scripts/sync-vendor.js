@@ -6,7 +6,7 @@
 //
 // Source map files are skipped to keep the npm tarball small.
 
-import { cp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +15,15 @@ import https from 'node:https';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
 const vendorDir = resolve(repoRoot, 'src/static/vendor');
+
+// Packages copied FROM node_modules (as opposed to tailwind.min.js, which is
+// downloaded from CDN and pinned separately via TAILWIND_VERSION below —
+// it's not an installed devDependency, so there's nothing in node_modules
+// to check it against). tests/test-vendor-versions.js asserts each of these
+// still matches node_modules/<pkg>/package.json, catching the case where a
+// devDependency was bumped in package.json but sync-vendor.js was never
+// re-run (drift between "the version we think we vendored" and reality).
+const NODE_MODULES_SOURCED_PACKAGES = ['@highlightjs/cdn-assets', 'mermaid', 'html2pdf.js'];
 
 const TAILWIND_VERSION = '3.4.17';
 const TAILWIND_URL = `https://cdn.tailwindcss.com/${TAILWIND_VERSION}`;
@@ -29,6 +38,35 @@ async function copyFromNodeModules(relSource, relDest) {
   await mkdir(dirname(dest), { recursive: true });
   await cp(src, dest);
   console.log(`copied  ${relSource} -> vendor/${relDest}`);
+}
+
+/**
+ * Read the resolved version of an installed package from its own
+ * node_modules/<pkg>/package.json (not package.json's semver range).
+ */
+async function readInstalledVersion(pkgName) {
+  const pkgJsonPath = resolve(repoRoot, 'node_modules', pkgName, 'package.json');
+  if (!existsSync(pkgJsonPath)) {
+    throw new Error(`Missing ${pkgJsonPath} (did you run npm install?)`);
+  }
+  const pkg = JSON.parse(await readFile(pkgJsonPath, 'utf8'));
+  return pkg.version;
+}
+
+/**
+ * Record which version of each node_modules-sourced package was just
+ * vendored, so a version drift (devDependency bumped, sync-vendor.js not
+ * re-run) fails a test (tests/test-vendor-versions.js) instead of silently
+ * shipping a stale vendored file.
+ */
+async function writeVendorVersions() {
+  const versions = {};
+  for (const pkgName of NODE_MODULES_SOURCED_PACKAGES) {
+    versions[pkgName] = await readInstalledVersion(pkgName);
+  }
+  const dest = resolve(vendorDir, 'versions.json');
+  await writeFile(dest, JSON.stringify(versions, null, 2) + '\n');
+  console.log(`wrote   vendor/versions.json (${JSON.stringify(versions)})`);
 }
 
 function downloadToString(url) {
@@ -108,9 +146,16 @@ Sources and licenses (full text in vendor/licenses/):
 - html2pdf.bundle.min.js — html2pdf.js (MIT); see also
   html2pdf.bundle.min.js.LICENSE.txt for embedded notices
 - tailwind.min.js — Tailwind CSS Play CDN ${TAILWIND_VERSION} (MIT)
+
+versions.json records which resolved version of each node_modules-sourced
+package (i.e. everything above except tailwind.min.js, which is pinned via
+TAILWIND_VERSION in this script) was copied in — checked against the
+installed devDependency by tests/test-vendor-versions.js.
 `;
   await writeFile(resolve(vendorDir, 'README.md'), readme);
   console.log('wrote   vendor/README.md');
+
+  await writeVendorVersions();
 }
 
 main().catch((err) => {
