@@ -5,27 +5,21 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
-import { createMdvServer } from '../src/server.js';
 
-const TEST_PORT = 19996;
+import { startTestServer } from './helpers/server.js';
 
 describe('Markdown Rendering', () => {
-  let server;
-  let tempDir;
+  let ctx;
 
   before(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-render-test-'));
-    server = createMdvServer({ rootDir: tempDir, port: TEST_PORT });
-    await server.start();
+    ctx = await startTestServer();
   });
 
   after(async () => {
-    if (server) {
-      await server.stop();
+    if (ctx) {
+      await ctx.stop();
     }
-    await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   /**
@@ -35,8 +29,8 @@ describe('Markdown Rendering', () => {
    * @returns {Promise<object>} Parsed JSON response from API
    */
   async function createAndFetch(filename, content) {
-    await fs.writeFile(path.join(tempDir, filename), content);
-    const response = await fetch(`http://localhost:${TEST_PORT}/api/file?path=${filename}`);
+    await fs.writeFile(path.join(ctx.rootDir, filename), content);
+    const response = await fetch(`${ctx.baseUrl}/api/file?path=${filename}`);
     return response.json();
   }
 
@@ -289,7 +283,7 @@ describe('Markdown Rendering', () => {
     });
 
     it('should resolve a relative ![bg] path against the file directory', async () => {
-      await fs.mkdir(path.join(tempDir, 'decks'), { recursive: true });
+      await fs.mkdir(path.join(ctx.rootDir, 'decks'), { recursive: true });
       const content = [
         '---',
         'marp: true',

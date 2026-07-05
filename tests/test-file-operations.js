@@ -5,10 +5,9 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 
-import { createMdvServer } from '../src/server.js';
+import { startTestServer } from './helpers/server.js';
 
 /**
  * Check if a file or directory exists at the given path.
@@ -18,37 +17,30 @@ async function pathExists(filePath) {
 }
 
 describe('File Operations', () => {
-  let server;
-  let tempDir;
-  const PORT = 19997;
+  let ctx;
 
   function apiUrl(endpoint) {
-    return `http://localhost:${PORT}${endpoint}`;
+    return `${ctx.baseUrl}${endpoint}`;
   }
 
   function tempPath(...segments) {
-    return path.join(tempDir, ...segments);
+    return path.join(ctx.rootDir, ...segments);
   }
 
   before(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-test-'));
-
-    await Promise.all([
-      fs.writeFile(tempPath('README.md'), '# Hello\n\nThis is a test.'),
-      fs.writeFile(tempPath('test.py'), "print('hello')"),
-      fs.mkdir(tempPath('subdir')),
-    ]);
-    await fs.writeFile(tempPath('subdir', 'nested.md'), '# Nested');
-
-    server = createMdvServer({ rootDir: tempDir, port: PORT });
-    await server.start();
+    ctx = await startTestServer({
+      files: {
+        'README.md': '# Hello\n\nThis is a test.',
+        'test.py': "print('hello')",
+        'subdir/nested.md': '# Nested',
+      },
+    });
   });
 
   after(async () => {
-    if (server) {
-      await server.stop();
+    if (ctx) {
+      await ctx.stop();
     }
-    await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   describe('GET /api/file', () => {

@@ -72,7 +72,7 @@ describe('SaveQueue — coalesce + serialization', () => {
     const calls = [];
     const { createSaveQueue } = loadQueue();
     const q = createSaveQueue({
-      saveFn: async (p, idx) => {
+      saveFn: async (p, _idx) => {
         calls.push(p);
         await new Promise((r) => setTimeout(r, 10));
       }

@@ -10,6 +10,8 @@
     "start": "node bin/mdv.js",
     "dev": "node bin/mdv.js --dev",
     "test": "node --test tests/*.js",
+    "test:e2e": "playwright test",
+    "lint": "eslint .",
     "setup-macos": "bash scripts/setup-macos-app.sh"
   },
   "keywords": [
@@ -61,7 +63,10 @@
     "md-to-pdf": "^5.2.5"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@highlightjs/cdn-assets": "^11.11.1",
+    "@playwright/test": "^1.61.1",
+    "eslint": "^10.6.0",
     "html2pdf.js": "^0.14.0",
     "mermaid": "^11.15.0"
   }

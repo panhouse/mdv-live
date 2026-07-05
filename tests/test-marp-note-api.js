@@ -5,15 +5,11 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import * as fs from 'node:fs/promises';
-import * as os from 'node:os';
 import * as path from 'node:path';
-import { createMdvServer } from '../src/server.js';
 
-const PORT = 18764;
-const ORIGIN = `http://localhost:${PORT}`;
+import { startTestServer } from './helpers/server.js';
 
-let server;
-let tmpRoot;
+let ctx;
 
 const SAMPLE = `---
 marp: true
@@ -30,32 +26,36 @@ marp: true
 `;
 
 before(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-api-'));
-  await fs.writeFile(path.join(tmpRoot, 'deck.md'), SAMPLE, 'utf-8');
-  await fs.writeFile(path.join(tmpRoot, 'plain.md'), '# not marp\n', 'utf-8');
-  server = createMdvServer({ rootDir: tmpRoot, port: PORT });
-  await server.start();
+  ctx = await startTestServer({
+    files: {
+      'deck.md': SAMPLE,
+      'plain.md': '# not marp\n',
+    },
+  });
 });
 
 after(async () => {
-  if (server) await server.stop();
-  await fs.rm(tmpRoot, { recursive: true, force: true });
+  if (ctx) await ctx.stop();
 });
 
+function deckPath(...segments) {
+  return path.join(ctx.rootDir, ...segments);
+}
+
 async function getDeck(name) {
-  const res = await fetch(`${ORIGIN}/api/marp/decks/${encodeURIComponent(name)}`, {
-    headers: { Host: `localhost:${PORT}` }
+  const res = await fetch(`${ctx.baseUrl}/api/marp/decks/${encodeURIComponent(name)}`, {
+    headers: { Host: `localhost:${ctx.port}` }
   });
   const data = await res.json();
   return { res, data };
 }
 
 async function putNote(name, slideIndex, note, opts = {}) {
-  const url = `${ORIGIN}/api/marp/decks/${encodeURIComponent(name)}/slides/${slideIndex}/note`;
+  const url = `${ctx.baseUrl}/api/marp/decks/${encodeURIComponent(name)}/slides/${slideIndex}/note`;
   const headers = {
     'Content-Type': 'application/json',
-    Origin: opts.origin || ORIGIN,
-    Host: `localhost:${PORT}`,
+    Origin: opts.origin || ctx.baseUrl,
+    Host: `localhost:${ctx.port}`,
     ...(opts.ifMatch !== undefined ? { 'If-Match': opts.ifMatch } : {}),
     ...(opts.contentType ? { 'Content-Type': opts.contentType } : {}),
     ...(opts.headers || {})
@@ -106,7 +106,7 @@ describe('GET /api/marp/decks/:path', () => {
 describe('PUT /api/marp/decks/:path/slides/:n/note', () => {
   it('rewrites the target slide note when ETag matches', async () => {
     // reset content
-    await fs.writeFile(path.join(tmpRoot, 'deck.md'), SAMPLE, 'utf-8');
+    await fs.writeFile(deckPath('deck.md'), SAMPLE, 'utf-8');
     const before = await getDeck('deck.md');
     const etag = before.data.etag;
 
@@ -128,7 +128,7 @@ describe('PUT /api/marp/decks/:path/slides/:n/note', () => {
   });
 
   it('returns 412 STALE with currentEtag when If-Match is stale', async () => {
-    await fs.writeFile(path.join(tmpRoot, 'deck.md'), SAMPLE, 'utf-8');
+    await fs.writeFile(deckPath('deck.md'), SAMPLE, 'utf-8');
     const { res, data } = await putNote('deck.md', 0, 'x', {
       ifMatch: 'sha256:' + 'd'.repeat(64)
     });
@@ -138,7 +138,7 @@ describe('PUT /api/marp/decks/:path/slides/:n/note', () => {
   });
 
   it('returns 400 INVALID_NOTE when note contains "-->"', async () => {
-    await fs.writeFile(path.join(tmpRoot, 'deck.md'), SAMPLE, 'utf-8');
+    await fs.writeFile(deckPath('deck.md'), SAMPLE, 'utf-8');
     const before = await getDeck('deck.md');
     const { res, data } = await putNote('deck.md', 0, 'a --> b', { ifMatch: before.data.etag });
     assert.strictEqual(res.status, 400);
@@ -146,7 +146,7 @@ describe('PUT /api/marp/decks/:path/slides/:n/note', () => {
   });
 
   it('returns 400 OUT_OF_RANGE for slideIndex >= slideCount', async () => {
-    await fs.writeFile(path.join(tmpRoot, 'deck.md'), SAMPLE, 'utf-8');
+    await fs.writeFile(deckPath('deck.md'), SAMPLE, 'utf-8');
     const before = await getDeck('deck.md');
     const { res, data } = await putNote('deck.md', 99, 'x', { ifMatch: before.data.etag });
     assert.strictEqual(res.status, 400);
@@ -154,7 +154,7 @@ describe('PUT /api/marp/decks/:path/slides/:n/note', () => {
   });
 
   it('returns 403 ORIGIN_REJECTED for cross-origin Origin', async () => {
-    await fs.writeFile(path.join(tmpRoot, 'deck.md'), SAMPLE, 'utf-8');
+    await fs.writeFile(deckPath('deck.md'), SAMPLE, 'utf-8');
     const before = await getDeck('deck.md');
     const { res, data } = await putNote('deck.md', 0, 'x', {
       ifMatch: before.data.etag,
@@ -165,7 +165,7 @@ describe('PUT /api/marp/decks/:path/slides/:n/note', () => {
   });
 
   it('returns 415 UNSUPPORTED_MEDIA_TYPE for non-JSON Content-Type', async () => {
-    await fs.writeFile(path.join(tmpRoot, 'deck.md'), SAMPLE, 'utf-8');
+    await fs.writeFile(deckPath('deck.md'), SAMPLE, 'utf-8');
     const before = await getDeck('deck.md');
     const { res, data } = await putNote('deck.md', 0, 'x', {
       ifMatch: before.data.etag,
@@ -176,7 +176,7 @@ describe('PUT /api/marp/decks/:path/slides/:n/note', () => {
   });
 
   it('returns 413 PAYLOAD_TOO_LARGE for body > 128KB', async () => {
-    await fs.writeFile(path.join(tmpRoot, 'deck.md'), SAMPLE, 'utf-8');
+    await fs.writeFile(deckPath('deck.md'), SAMPLE, 'utf-8');
     const before = await getDeck('deck.md');
     const big = 'x'.repeat(140 * 1024);
     const body = JSON.stringify({ note: big });
@@ -189,7 +189,7 @@ describe('PUT /api/marp/decks/:path/slides/:n/note', () => {
   });
 
   it('removes the note when body.note is empty', async () => {
-    await fs.writeFile(path.join(tmpRoot, 'deck.md'), SAMPLE, 'utf-8');
+    await fs.writeFile(deckPath('deck.md'), SAMPLE, 'utf-8');
     const before = await getDeck('deck.md');
     const { res, data } = await putNote('deck.md', 0, '', { ifMatch: before.data.etag });
     assert.strictEqual(res.status, 200);
@@ -200,7 +200,7 @@ describe('PUT /api/marp/decks/:path/slides/:n/note', () => {
 
   it('returns 409 MULTI_NOTE_READONLY for slides with multiple notes', async () => {
     const multi = `---\nmarp: true\n---\n# A\n\n<!-- n1 -->\n<!-- n2 -->\n`;
-    await fs.writeFile(path.join(tmpRoot, 'multi.md'), multi, 'utf-8');
+    await fs.writeFile(deckPath('multi.md'), multi, 'utf-8');
     const { data: before } = await getDeck('multi.md');
     const { res, data } = await putNote('multi.md', 0, 'merged', { ifMatch: before.etag });
     assert.strictEqual(res.status, 409);
@@ -214,19 +214,19 @@ describe('TOCTOU guard (regression: handlePut compares deck.realPath, not earlyD
     // another file, forcing realpath to differ between pre-lock and check.
     // We can only verify the *positive* case here (no swap happens), so
     // assert the saved file is still the expected one.
-    await fs.writeFile(path.join(tmpRoot, 'deck.md'), SAMPLE, 'utf-8');
+    await fs.writeFile(deckPath('deck.md'), SAMPLE, 'utf-8');
     const { data: before } = await getDeck('deck.md');
     const { res, data } = await putNote('deck.md', 0, 'toctou-fix-check', { ifMatch: before.etag });
     assert.strictEqual(res.status, 200);
     assert.ok(data.ok);
-    const written = await fs.readFile(path.join(tmpRoot, 'deck.md'), 'utf-8');
+    const written = await fs.readFile(deckPath('deck.md'), 'utf-8');
     assert.match(written, /<!-- toctou-fix-check -->/);
   });
 });
 
 describe('PUT mutex / parallel requests', () => {
   it('serializes two concurrent PUTs with the same If-Match (no lost write)', async () => {
-    await fs.writeFile(path.join(tmpRoot, 'deck.md'), SAMPLE, 'utf-8');
+    await fs.writeFile(deckPath('deck.md'), SAMPLE, 'utf-8');
     const { data: before } = await getDeck('deck.md');
     const etag = before.etag;
     // Both requests use the same If-Match. Without a per-path mutex, both
@@ -245,14 +245,14 @@ describe('PUT mutex / parallel requests', () => {
 
 describe('Origin handling — Sec-Fetch-Site fallback', () => {
   it('accepts a request with no Origin header but Sec-Fetch-Site=same-origin', async () => {
-    await fs.writeFile(path.join(tmpRoot, 'deck.md'), SAMPLE, 'utf-8');
+    await fs.writeFile(deckPath('deck.md'), SAMPLE, 'utf-8');
     const { data: before } = await getDeck('deck.md');
-    const url = `${ORIGIN}/api/marp/decks/${encodeURIComponent('deck.md')}/slides/0/note`;
+    const url = `${ctx.baseUrl}/api/marp/decks/${encodeURIComponent('deck.md')}/slides/0/note`;
     const res = await fetch(url, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
-        Host: `localhost:${PORT}`,
+        Host: `localhost:${ctx.port}`,
         'Sec-Fetch-Site': 'same-origin',
         'If-Match': before.etag
       },
@@ -262,14 +262,14 @@ describe('Origin handling — Sec-Fetch-Site fallback', () => {
   });
 
   it('rejects a request with no Origin and no Sec-Fetch-Site (or cross-site)', async () => {
-    await fs.writeFile(path.join(tmpRoot, 'deck.md'), SAMPLE, 'utf-8');
+    await fs.writeFile(deckPath('deck.md'), SAMPLE, 'utf-8');
     const { data: before } = await getDeck('deck.md');
-    const url = `${ORIGIN}/api/marp/decks/${encodeURIComponent('deck.md')}/slides/0/note`;
+    const url = `${ctx.baseUrl}/api/marp/decks/${encodeURIComponent('deck.md')}/slides/0/note`;
     const res = await fetch(url, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
-        Host: `localhost:${PORT}`,
+        Host: `localhost:${ctx.port}`,
         'Sec-Fetch-Site': 'cross-site',
         'If-Match': before.etag
       },
@@ -281,9 +281,9 @@ describe('Origin handling — Sec-Fetch-Site fallback', () => {
 
 describe('OPTIONS preflight', () => {
   it('responds 204 for same-origin preflight', async () => {
-    const res = await fetch(`${ORIGIN}/api/marp/decks/deck.md/slides/0/note`, {
+    const res = await fetch(`${ctx.baseUrl}/api/marp/decks/deck.md/slides/0/note`, {
       method: 'OPTIONS',
-      headers: { Origin: ORIGIN, Host: `localhost:${PORT}` }
+      headers: { Origin: ctx.baseUrl, Host: `localhost:${ctx.port}` }
     });
     assert.strictEqual(res.status, 204);
     assert.strictEqual(
@@ -295,9 +295,9 @@ describe('OPTIONS preflight', () => {
   });
 
   it('rejects cross-origin preflight', async () => {
-    const res = await fetch(`${ORIGIN}/api/marp/decks/deck.md/slides/0/note`, {
+    const res = await fetch(`${ctx.baseUrl}/api/marp/decks/deck.md/slides/0/note`, {
       method: 'OPTIONS',
-      headers: { Origin: 'http://evil.com', Host: `localhost:${PORT}` }
+      headers: { Origin: 'http://evil.com', Host: `localhost:${ctx.port}` }
     });
     assert.strictEqual(res.status, 403);
   });

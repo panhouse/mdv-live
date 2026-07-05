@@ -7,7 +7,7 @@ import path from 'path';
 import { renderFile } from './rendering/index.js';
 
 const IGNORED_PATTERNS = [
-  /(^|[\/\\])\../,  // Dotfiles
+  /(^|[/\\])\../,  // Dotfiles
   /node_modules/,
   /\.git/,
   /__pycache__/,

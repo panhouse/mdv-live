@@ -16,7 +16,7 @@ import path from 'node:path';
 import WebSocket from 'ws';
 
 import { buildFileTree, readDirPage } from '../src/api/tree.js';
-import { createMdvServer } from '../src/server.js';
+import { startTestServer } from './helpers/server.js';
 
 describe('buildFileTree depth control (expand = direct children only)', () => {
   let tempDir;
@@ -104,31 +104,24 @@ describe('directory pagination (cap + load more)', () => {
 });
 
 describe('GET /api/tree/page endpoint', () => {
-  let server;
-  let tempDir;
-  const PORT = 19969;
+  let ctx;
 
   before(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-pageapi-'));
-    await Promise.all(
-      Array.from({ length: 12 }, (_, i) =>
-        fs.writeFile(path.join(tempDir, `g${String(i).padStart(2, '0')}.md`), 'x')
-      )
-    );
+    const files = {};
+    for (let i = 0; i < 12; i++) {
+      files[`g${String(i).padStart(2, '0')}.md`] = 'x';
+    }
     // A subdirectory with a child, to assert the initial tree does NOT preload.
-    await fs.mkdir(path.join(tempDir, 'sub'));
-    await fs.writeFile(path.join(tempDir, 'sub', 'inside.md'), 'x');
-    server = createMdvServer({ rootDir: tempDir, port: PORT });
-    await server.start();
+    files['sub/inside.md'] = 'x';
+    ctx = await startTestServer({ files });
   });
 
   after(async () => {
-    if (server) await server.stop();
-    await fs.rm(tempDir, { recursive: true, force: true });
+    if (ctx) await ctx.stop();
   });
 
   it('paginates the root directory', async () => {
-    const res = await fetch(`http://localhost:${PORT}/api/tree/page?path=&offset=0&limit=5`);
+    const res = await fetch(`${ctx.baseUrl}/api/tree/page?path=&offset=0&limit=5`);
     assert.strictEqual(res.status, 200);
     const items = await res.json();
     assert.strictEqual(items.length, 6, '5 items + sentinel');
@@ -139,13 +132,13 @@ describe('GET /api/tree/page endpoint', () => {
 
   it('rejects path traversal', async () => {
     const res = await fetch(
-      `http://localhost:${PORT}/api/tree/page?path=${encodeURIComponent('../../etc')}&offset=0&limit=5`
+      `${ctx.baseUrl}/api/tree/page?path=${encodeURIComponent('../../etc')}&offset=0&limit=5`
     );
     assert.strictEqual(res.status, 403);
   });
 
   it('GET /api/tree returns subdirectories unloaded (no eager lookahead)', async () => {
-    const res = await fetch(`http://localhost:${PORT}/api/tree`);
+    const res = await fetch(`${ctx.baseUrl}/api/tree`);
     assert.strictEqual(res.status, 200);
     const tree = await res.json();
     const sub = tree.find((n) => n.name === 'sub');
@@ -157,12 +150,10 @@ describe('GET /api/tree/page endpoint', () => {
 });
 
 describe('POST /api/file tree_update broadcast scope', () => {
-  let server;
-  let tempDir;
-  const PORT = 19970;
+  let ctx;
 
   function openClient() {
-    const ws = new WebSocket(`ws://localhost:${PORT}`);
+    const ws = new WebSocket(ctx.baseUrl.replace(/^http/, 'ws'));
     const received = [];
     ws.on('message', (data) => {
       try {
@@ -178,7 +169,7 @@ describe('POST /api/file tree_update broadcast scope', () => {
   }
 
   async function savedThenSettle(body) {
-    const res = await fetch(`http://localhost:${PORT}/api/file`, {
+    const res = await fetch(`${ctx.baseUrl}/api/file`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -188,15 +179,13 @@ describe('POST /api/file tree_update broadcast scope', () => {
   }
 
   before(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-bcast-'));
-    await fs.writeFile(path.join(tempDir, 'existing.md'), '# existing');
-    server = createMdvServer({ rootDir: tempDir, port: PORT });
-    await server.start();
+    ctx = await startTestServer({
+      files: { 'existing.md': '# existing' },
+    });
   });
 
   after(async () => {
-    if (server) await server.stop();
-    await fs.rm(tempDir, { recursive: true, force: true });
+    if (ctx) await ctx.stop();
   });
 
   it('editing an existing file does NOT broadcast tree_update', async () => {

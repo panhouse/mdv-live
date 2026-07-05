@@ -81,7 +81,7 @@ describe('WebSocket', () => {
 
   it('should accept connections and track in clientWatches', async () => {
     const before = wss.clientWatches.size;
-    const ws = await connect();
+    await connect();
     await waitForClientCount(before + 1);
   });
 
@@ -124,7 +124,6 @@ describe('WebSocket', () => {
 
     // Wait for ws1 to receive, then verify ws2 did not
     await new Promise(resolve => {
-      const orig = ws1.on;
       const check = setInterval(() => {
         if (received1.length > 0) { clearInterval(check); resolve(); }
       }, 10);

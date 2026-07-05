@@ -3191,7 +3191,7 @@
             document.title = originalTitle;
         },
 
-        printHtmlPreview(fileName) {
+        printHtmlPreview(_fileName) {
             const iframe = elements.content.querySelector('.html-preview iframe');
             if (iframe && iframe.contentWindow) {
                 iframe.contentWindow.print();
@@ -3373,7 +3373,7 @@
             });
         },
 
-        async renameItem(path, isDirectory) {
+        async renameItem(path, _isDirectory) {
             const oldName = path.split('/').pop();
             const parentPath = path.substring(0, path.lastIndexOf('/'));
             DialogManager.show('名前を変更', {
@@ -3486,7 +3486,6 @@
                 return `<div class="context-menu-item ${item.danger ? 'danger' : ''}" data-action="${item.action}">${item.label}</div>`;
             }).join('');
 
-            const menuRect = elements.contextMenu.getBoundingClientRect();
             const maxX = window.innerWidth - 170;
             const maxY = window.innerHeight - (items.length * 36);
             elements.contextMenu.style.left = Math.min(x, maxX) + 'px';
@@ -3913,7 +3912,7 @@
             const decoded = decodeURIComponent(urlPath);
 
             // 相対パスを現在のファイルパスから解決
-            let targetPath = decoded;
+            let targetPath;
             if (!decoded.startsWith('/')) {
                 const currentTab = state.tabs[state.activeTabIndex];
                 const currentDir = currentTab ? currentTab.path.replace(/[^/]*$/, '') : '';

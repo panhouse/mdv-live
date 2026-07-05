@@ -3,7 +3,6 @@
  */
 
 import fs from 'fs/promises';
-import path from 'path';
 import { getFileType } from '../utils/fileTypes.js';
 import { renderMarkdown, isMarp } from './markdown.js';
 import { renderMarp } from './marp.js';

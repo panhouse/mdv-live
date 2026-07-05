@@ -74,7 +74,7 @@ export function makePutHandler({ rootDir, allowedHosts }) {
   };
 }
 
-async function performNoteUpdate({ req, res, rootDir, rel, slideIndex, note, ifMatch, earlyDeck }) {
+async function performNoteUpdate({ res, rootDir, rel, slideIndex, note, ifMatch, earlyDeck }) {
   // Re-read inside the lock so the etag check sees writes by predecessors.
   let deck;
   try {
