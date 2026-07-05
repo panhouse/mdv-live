@@ -42,18 +42,57 @@ function mkOfficeError(message, cause) {
   return err;
 }
 
+// Zip-bomb guard: the 20MB cap in api/file.js limits the COMPRESSED size,
+// but a crafted archive can inflate a few KB into gigabytes and block the
+// event loop / exhaust memory inside unzipSync. Only the XML parts the
+// renderers actually read are inflated, each entry and the running total
+// are capped, and the caps are re-checked against the ACTUAL inflated
+// lengths afterwards (central-directory size fields can be forged).
+const MAX_ENTRY_INFLATED_BYTES = 50 * 1024 * 1024;
+const MAX_TOTAL_INFLATED_BYTES = 100 * 1024 * 1024;
+const PREVIEW_ENTRY_PATTERN = /\.(?:xml|rels)$/i;
+
 /**
- * Unzip an OOXML buffer. Never throws an uncoded error.
+ * Unzip an OOXML buffer (XML/rels parts only, size-capped). Never throws
+ * an uncoded error.
  * @param {Buffer|Uint8Array} buffer - Raw file bytes
  * @returns {Record<string, Uint8Array>} Zip entries keyed by path
  */
 function unzip(buffer) {
   const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  let declaredTotal = 0;
+  let files;
   try {
-    return unzipSync(bytes);
+    files = unzipSync(bytes, {
+      filter(entry) {
+        if (!PREVIEW_ENTRY_PATTERN.test(entry.name)) return false;
+        if (entry.originalSize > MAX_ENTRY_INFLATED_BYTES) {
+          throw mkOfficeError('Office document part too large to preview');
+        }
+        declaredTotal += entry.originalSize;
+        if (declaredTotal > MAX_TOTAL_INFLATED_BYTES) {
+          throw mkOfficeError('Office document too large to preview');
+        }
+        return true;
+      }
+    });
   } catch (err) {
+    if (err && err.code === 'OFFICE_PREVIEW_FAILED') throw err;
     throw mkOfficeError('Failed to read office document (corrupt or unsupported zip)', err);
   }
+
+  let actualTotal = 0;
+  for (const name of Object.keys(files)) {
+    const size = files[name].length;
+    if (size > MAX_ENTRY_INFLATED_BYTES) {
+      throw mkOfficeError('Office document part too large to preview');
+    }
+    actualTotal += size;
+    if (actualTotal > MAX_TOTAL_INFLATED_BYTES) {
+      throw mkOfficeError('Office document too large to preview');
+    }
+  }
+  return files;
 }
 
 /**

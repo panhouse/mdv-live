@@ -302,3 +302,44 @@ describe('OPTIONS preflight', () => {
     assert.strictEqual(res.status, 403);
   });
 });
+
+describe('ephemeral port (port: 0) — guards use the BOUND port', () => {
+  // Regression guard: setup-time capture of buildAllowedHosts(0) produced a
+  // stale "localhost:0" allow-list, rejecting every request on ephemeral-
+  // port servers even though start() resolves the real port. All guards
+  // (marpNote included) must read the allow-list lazily per request.
+  let server;
+  let boundPort;
+  let dir;
+
+  before(async () => {
+    const os = await import('node:os');
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-port0-'));
+    await fs.writeFile(path.join(dir, 'deck.md'), SAMPLE);
+    const { createMdvServer } = await import('../src/server.js');
+    server = createMdvServer({ rootDir: dir, port: 0 });
+    ({ port: boundPort } = await server.start());
+    assert.ok(boundPort > 0, 'start() must report the OS-assigned port');
+  });
+
+  after(async () => {
+    if (server) await server.stop();
+    if (dir) await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it('GET /api/marp/decks accepts the real bound host', async () => {
+    const res = await fetch(`http://localhost:${boundPort}/api/marp/decks/${encodeURIComponent('deck.md')}`);
+    assert.strictEqual(res.status, 200);
+    const data = await res.json();
+    assert.strictEqual(data.ok, true);
+  });
+
+  it('POST /api/file (originGuard route) also accepts the real bound host', async () => {
+    const res = await fetch(`http://localhost:${boundPort}/api/file`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
+      body: JSON.stringify({ path: 'port0.md', content: 'ok' }),
+    });
+    assert.strictEqual(res.status, 200);
+  });
+});

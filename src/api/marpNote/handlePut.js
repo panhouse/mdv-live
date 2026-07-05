@@ -22,10 +22,13 @@ import {
 import { readDeckSafely } from './readDeck.js';
 
 export function makePutHandler({ rootDir, allowedHosts }) {
+  // rootDir and allowedHosts are both thunks, resolved per request (the
+  // allow-list is refreshed by start() once the real port is bound).
   return async function handlePut(req, res) {
+    const hosts = allowedHosts();
     const guards = [
-      checkHost(req, allowedHosts),
-      checkOrigin(req, allowedHosts),
+      checkHost(req, hosts),
+      checkOrigin(req, hosts),
       checkJsonContent(req),
       checkIfMatch(req)
     ];

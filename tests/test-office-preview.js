@@ -492,3 +492,39 @@ describe('renderXlsxPreview — first-sheet resolution via workbook rels', () =>
     assert.ok(html.includes('FallbackCell'));
   });
 });
+
+describe('renderXlsxPreview — zip-bomb resistance', () => {
+  it('rejects an entry whose inflated size exceeds the cap', () => {
+    // 60MB of zeros compresses to ~60KB — under the API's 20MB compressed
+    // cap, but far over the 50MB per-entry inflated cap.
+    const huge = new Uint8Array(60 * 1024 * 1024);
+    const buffer = Buffer.from(zipSync({
+      '[Content_Types].xml': strToU8(CONTENT_TYPES_XML),
+      'xl/workbook.xml': huge,
+    }));
+    assert.throws(() => renderXlsxPreview(buffer), (err) => err.code === 'OFFICE_PREVIEW_FAILED');
+  });
+
+  it('ignores large non-XML entries (media) instead of inflating them', () => {
+    const workbookXml = xmlDecl(
+      '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
+      'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+      '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>'
+    );
+    const sheetXml = xmlDecl(
+      '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+      '<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>StillWorks</t></is></c></row></sheetData>' +
+      '</worksheet>'
+    );
+    const media = new Uint8Array(60 * 1024 * 1024); // filtered out by name
+    const buffer = Buffer.from(zipSync({
+      '[Content_Types].xml': strToU8(CONTENT_TYPES_XML),
+      '_rels/.rels': strToU8(relsXml('xl/workbook.xml')),
+      'xl/workbook.xml': strToU8(workbookXml),
+      'xl/worksheets/sheet1.xml': strToU8(sheetXml),
+      'xl/media/huge.bin': media,
+    }));
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(html.includes('StillWorks'));
+  });
+});
