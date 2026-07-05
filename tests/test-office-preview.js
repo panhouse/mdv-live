@@ -814,3 +814,39 @@ describe('renderXlsxPreview — codex round-2 fixes (time-only formats, ghost co
     assert.ok(!html.includes('列数が多いため'), 'no false column-truncation notice');
   });
 });
+
+describe('renderXlsxPreview — codex round-3 fixes (escaped literals, trim vs truncation)', () => {
+  it('does not misread backslash-escaped literals as date tokens', () => {
+    const stylesXml = buildStylesXml({
+      numFmts: [{ id: 165, code: '0\\ "days"' }],
+      cellXfsNumFmtIds: [0, 165],
+    });
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody: '<row r="1"><c r="A1" s="1"><v>5</v></c></row>',
+      stylesXml,
+    });
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(html.includes('>5<'), 'plain numeric value must survive');
+    assert.ok(!html.includes('1900'), 'escaped literals must not trigger date conversion');
+  });
+
+  it('keeps blank boundary rows when maxRows truncates the sheet', () => {
+    // 5 rows: row4 is blank, row5 has data. With maxRows=4 the window is
+    // rows 1-4; row4 is blank AT THE CUT but not a true trailing row (row5
+    // follows in the workbook) — it must be kept, and the truncation
+    // notice must fire.
+    const body =
+      '<row r="1"><c r="A1" t="inlineStr"><is><t>r1</t></is></c></row>' +
+      '<row r="2"><c r="A2" t="inlineStr"><is><t>r2</t></is></c></row>' +
+      '<row r="3"><c r="A3" t="inlineStr"><is><t>r3</t></is></c></row>' +
+      '<row r="4"></row>' +
+      '<row r="5"><c r="A5" t="inlineStr"><is><t>r5</t></is></c></row>';
+    const buffer = buildXlsxBuffer({ sheetNames: ['Sheet1'], sheetXmlBody: body });
+    const { html } = renderXlsxPreview(buffer, { maxRows: 4 });
+    const rowCount = (html.match(/<tr>/g) || []).length;
+    assert.strictEqual(rowCount, 4, 'all 4 rows of the window render, including the blank boundary row');
+    assert.ok(html.includes('行数が多いため'));
+    assert.ok(!html.includes('r5'));
+  });
+});

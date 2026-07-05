@@ -263,7 +263,12 @@ const NO_FORMAT = { isDate: false, hasTime: false, isPercent: false, isThousands
  * @returns {string}
  */
 function stripFormatLiterals(code) {
-  return code.replace(/"[^"]*"/g, '').replace(/\[[^\]]*\]/g, '');
+  return code
+    .replace(/"[^"]*"/g, '')
+    .replace(/\[[^\]]*\]/g, '')
+    // Backslash-escaped literal characters (e.g. `0\ days` renders " days"
+    // verbatim) — the escaped d/y/h/s must not read as date/time tokens.
+    .replace(/\\./g, '');
 }
 
 /**
@@ -712,9 +717,12 @@ export function renderXlsxPreview(buffer, { maxRows = 50, maxCols = 20 } = {}) {
 
   // Whether maxRows actually truncated the sheet — computed before trailing
   // all-empty rows are trimmed, so trimming never triggers a false
-  // "too many rows" notice.
+  // "too many rows" notice. When the sheet IS truncated, blank rows at the
+  // cut boundary are not true trailing rows (real rows follow them in the
+  // workbook), so the trim is skipped to keep the advertised first-maxRows
+  // window intact.
   const wasRowTruncated = totalRows > parsedRows.length;
-  const rows = trimTrailingEmptyRows(parsedRows);
+  const rows = wasRowTruncated ? parsedRows : trimTrailingEmptyRows(parsedRows);
 
   // Column extent from the rows we actually RENDER: trimmed trailing rows
   // (or style-only far-right cells living solely in them) must not leave
