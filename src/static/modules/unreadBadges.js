@@ -73,10 +73,6 @@ export const UnreadBadgesManager = {
         this._buildHeaderChip();
         onSeen((path, hash) => this._handleSeen(path, hash));
         document.addEventListener('keydown', (e) => this._handleShortcut(e));
-        // The bulk confirm may include the ACTIVE file — its diff bar
-        // must not keep claiming "changed" for a baseline this action just
-        // updated (codex round-5).
-        DiffReviewManager.refresh();
     },
 
     _buildHeaderChip() {
@@ -197,6 +193,10 @@ export const UnreadBadgesManager = {
         }
         this.decorate();
         this._updateHeaderChip();
+        // The bulk confirm may include the ACTIVE file — its diff bar must
+        // not keep claiming "changed" for a baseline this action just
+        // updated (codex round-5).
+        DiffReviewManager.refresh();
     },
 
     /**

@@ -221,6 +221,33 @@ describe('watcher.js — files_changed broadcast', () => {
     assert.ok(!hasImageInFilesChanged, 'binary add must not appear in files_changed');
   });
 
+  it('a rapid rewrite-then-delete settles to removed, never a stale changed (codex round-6)', async () => {
+    const { ws, messages } = await connectClient(ctx);
+    await fs.writeFile(`${ctx.rootDir}/flash.md`, 'v1\n', 'utf-8');
+    await pollUntil(() =>
+      messages.find((m) => m.type === 'files_changed' && m.items.some((it) => it.path === 'flash.md' && it.kind === 'added'))
+    );
+    const from = messages.length;
+    // Rewrite then delete back-to-back: the change handler's async hashing
+    // must not outlive the unlink and resurrect the path.
+    await fs.writeFile(`${ctx.rootDir}/flash.md`, 'v2 rewritten\n', 'utf-8');
+    await fs.unlink(`${ctx.rootDir}/flash.md`);
+    await pollUntil(() =>
+      messages.slice(from).find((m) => m.type === 'files_changed' && m.items.some((it) => it.path === 'flash.md' && it.kind === 'removed'))
+    );
+    // Settle past one more debounce window, then assert nothing about
+    // flash.md arrives AFTER its removal.
+    await new Promise((r) => setTimeout(r, 600));
+    ws.close();
+    const flashKinds = messages.slice(from)
+      .filter((m) => m.type === 'files_changed')
+      .flatMap((m) => m.items)
+      .filter((it) => it.path === 'flash.md')
+      .map((it) => it.kind);
+    assert.strictEqual(flashKinds[flashKinds.length - 1], 'removed',
+      `last event for the path must be removed, got sequence: ${flashKinds.join(',')}`);
+  });
+
   it('files_changed broadcasts to ALL clients regardless of watch (unlike file_update)', async () => {
     const { ws: ws1, messages: m1 } = await connectClient(ctx);
     const { ws: ws2, messages: m2 } = await connectClient(ctx);

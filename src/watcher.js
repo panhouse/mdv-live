@@ -78,7 +78,26 @@ export function setupWatcher(rootDir, wss, options = {}) {
   let filesChangedItems = new Map();
   let filesChangedTimer = null;
 
-  function scheduleFilesChanged(item) {
+  // Per-path monotonic event sequence (codex 0.6.5 round-6): the async
+  // add/change handlers hash file contents, so a slow handler for an OLD
+  // event can finish after a newer event's handler (rapid rewrite then
+  // delete, large-to-small rewrite) and would otherwise overwrite the
+  // newer item in the coalescing Map. Each handler claims a sequence
+  // number SYNCHRONOUSLY at event time; by schedule time, only the
+  // holder of the path's newest sequence may write.
+  let fsEventCounter = 0;
+  const pathEventSeq = new Map();
+
+  function claimEventSeq(relativePath) {
+    const seq = ++fsEventCounter;
+    pathEventSeq.set(relativePath, seq);
+    return seq;
+  }
+
+  function scheduleFilesChanged(item, seq) {
+    if (seq !== undefined && pathEventSeq.get(item.path) !== seq) {
+      return; // a newer fs event for this path superseded this work
+    }
     filesChangedItems.set(item.path, item);
     if (filesChangedTimer) return; // a broadcast is already scheduled for this burst
     filesChangedTimer = setTimeout(() => {
@@ -101,6 +120,7 @@ export function setupWatcher(rootDir, wss, options = {}) {
 
   watcher.on('change', async (filePath) => {
     const relativePath = toRelativePath(filePath);
+    const seq = claimEventSeq(relativePath);
     const relativeDir = path.dirname(relativePath);
 
     try {
@@ -121,7 +141,7 @@ export function setupWatcher(rootDir, wss, options = {}) {
       // match the one diffReview.js's baseline comparison sees. Only
       // trackable types — see isTrackable below (codex 0.6.5 round-1).
       if (isTrackable(relativePath)) {
-        scheduleFilesChanged({ path: relativePath, etag, kind: 'changed' });
+        scheduleFilesChanged({ path: relativePath, etag, kind: 'changed' }, seq);
       }
 
       wss.broadcastFileUpdate(relativePath, {
@@ -145,6 +165,7 @@ export function setupWatcher(rootDir, wss, options = {}) {
   watcher.on('add', async (filePath) => {
     const relativePath = toRelativePath(filePath);
     if (!isTrackable(relativePath)) return;
+    const seq = claimEventSeq(relativePath);
     let etag;
     try {
       const stat = await fs.stat(filePath);
@@ -160,7 +181,8 @@ export function setupWatcher(rootDir, wss, options = {}) {
     scheduleFilesChanged(
       etag
         ? { path: relativePath, etag, kind: 'added' }
-        : { path: relativePath, kind: 'added' }
+        : { path: relativePath, kind: 'added' },
+      seq
     );
   });
 
@@ -171,7 +193,8 @@ export function setupWatcher(rootDir, wss, options = {}) {
   watcher.on('unlink', (filePath) => {
     const relativePath = toRelativePath(filePath);
     if (isTrackable(relativePath)) {
-      scheduleFilesChanged({ path: relativePath, kind: 'removed' });
+      const seq = claimEventSeq(relativePath);
+      scheduleFilesChanged({ path: relativePath, kind: 'removed' }, seq);
     }
   });
 
