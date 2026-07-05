@@ -245,22 +245,39 @@ export const DiffReviewManager = {
 
         const lastSeen = getLastSeen(tab.path);
 
+        // Path switches hide the PREVIOUS tab's bar synchronously, before
+        // any await: a slow/failed request otherwise leaves the old tab's
+        // 確認済み button mounted over the new content, confirming the
+        // wrong file (codex round-15).
+        const pathChanged = tab.path !== this._lastPath;
+        this._lastPath = tab.path;
+        if (pathChanged) this._hide();
+
         if (!lastSeen) {
             const currentHash = await this._resolveCurrentHash(tab);
             if (mySeq !== this._reviewSeq) return; // superseded
+            // First-sight race (codex round-15): the file may have changed
+            // between the /api/file render and this /api/diff call — the
+            // resolved hash would then be NEWER than the pane the user is
+            // looking at, and storing it as seen would swallow that change
+            // forever. Same stale-pane rule as the baseline path: refetch
+            // first, then this branch re-runs against a fresh pane.
+            if (currentHash && tab.etag && currentHash !== tab.etag && this._requestTabRefresh) {
+                const key = `${tab.path}::${currentHash}`;
+                if (this._staleRefetchKey !== key) {
+                    this._staleRefetchKey = key;
+                    this._requestTabRefresh();
+                    return;
+                }
+            }
             if (currentHash) markSeen(tab.path, currentHash);
             this._hide();
             return;
         }
 
-        // The fast path below is only sound while this tab has been the
-        // WS-watched active path — an INACTIVE tab's file can change with
-        // no event reaching us, leaving tab.etag stale. So the first
-        // refresh after switching paths always asks the server
-        // (codex round-11); same-path re-renders (theme toggle, PDF style)
-        // may use the cached hash.
-        const pathChanged = tab.path !== this._lastPath;
-        this._lastPath = tab.path;
+        // (pathChanged computed above — codex round-11: the fast path below
+        // is only sound for the already-watched active path, so the first
+        // refresh after a path switch always asks the server.)
 
         // Fast path: no network call needed when we already know the
         // current hash and it matches the baseline. One catch: after a
