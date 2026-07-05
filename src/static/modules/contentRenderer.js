@@ -430,6 +430,34 @@ export const ContentRenderer = {
                     <div class="media-info">${safeName}</div>
                 </div>
             `;
+
+            // Real-world report: MPEG-4 Part 2 / HEVC mp4s pass every server
+            // check (they ARE valid mp4 files) but the browser can't decode
+            // them, so <video> just shows a dead black player with no
+            // indication anything is wrong. Both the <source> and the
+            // <video> element fire a genuine 'error' event when that
+            // happens (no timeouts/heuristics — only real decode/network
+            // failures land here; a normally-playable video never fires
+            // 'error').
+            const container = elements.content.querySelector('.video-preview');
+            const video = elements.content.querySelector('.video-preview video');
+            const source = elements.content.querySelector('.video-preview source');
+
+            const showFallback = () => {
+                if (!container) return;
+                container.innerHTML = `
+                    <div class="binary-preview video-fallback">
+                        <div class="video-fallback-message">
+                            この動画はブラウザで再生できない形式です（例: MPEG-4 Part 2, HEVC）。
+                            ダウンロードして QuickTime 等でご覧ください。
+                        </div>
+                        <a class="preview-download-btn" href="${mediaUrl}" download="${safeName}">ダウンロード</a>
+                    </div>
+                `;
+            };
+
+            if (source) source.addEventListener('error', showFallback);
+            if (video) video.addEventListener('error', showFallback);
         },
 
         renderAudio(mediaUrl, name) {
@@ -452,6 +480,22 @@ export const ContentRenderer = {
                 <div class="binary-preview">
                     <div class="binary-icon">${iconSvg}</div>
                     <div class="binary-info">${safeName}</div>
+                </div>
+            `;
+        },
+
+        // fileType 'office' (docx/xlsx/pptx "vibe preview"). `content` is
+        // server-rendered HTML (src/rendering/office.js) — already escaped
+        // there via utils/html.js escapeHtml, same trust posture as the
+        // markdown/code render() path above, so it's injected as-is.
+        renderOffice(content, name, downloadUrl) {
+            const safeName = escapeHtml(name);
+            elements.content.innerHTML = `
+                <div class="office-preview-pane">
+                    ${content}
+                    <div class="office-preview-actions">
+                        <a class="preview-download-btn" href="${downloadUrl}" download="${safeName}">${safeName} をダウンロード</a>
+                    </div>
                 </div>
             `;
         },

@@ -67,3 +67,12 @@ export const AWAIT_WRITE_FINISH_POLL_MS = 50;
 
 /** Max slide index accepted by the marpNote PUT route (marpNote/guards.js). */
 export const MAX_SLIDE_INDEX = 1000;
+
+/**
+ * Max file size (bytes) eligible for the office "vibe preview" (docx/xlsx/
+ * pptx quick preview, src/rendering/office.js, wired in src/api/file.js).
+ * Larger files fall back to the plain binary download card — unzipping and
+ * regex-scanning a huge OOXML package synchronously on the request thread
+ * would block the event loop for too long. 20MB.
+ */
+export const OFFICE_PREVIEW_MAX_BYTES = 20 * 1024 * 1024;

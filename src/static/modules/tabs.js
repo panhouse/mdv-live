@@ -290,6 +290,12 @@ export const TabManager = {
             ContentRenderer.renderVideo(tab.mediaUrl, tab.name);
         } else if (fileType === 'audio') {
             ContentRenderer.renderAudio(tab.mediaUrl, tab.name);
+        } else if (fileType === 'office' && typeof tab.content === 'string') {
+            // docx/xlsx/pptx small enough for a server-rendered vibe preview
+            // (src/api/file.js) carry `content`; oversized/legacy office
+            // files (still fileType 'office') fall through to the plain
+            // binary card below exactly as before.
+            ContentRenderer.renderOffice(tab.content, tab.name, tab.downloadUrl);
         } else if (binaryTypes.includes(fileType)) {
             ContentRenderer.renderBinary(tab.name, fileType);
         } else {

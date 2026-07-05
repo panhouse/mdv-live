@@ -16,6 +16,7 @@ import path from 'path';
 import mime from 'mime-types';
 import { getFileType } from '../utils/fileTypes.js';
 import { renderFile } from '../rendering/index.js';
+import { renderXlsxPreview, renderPptxPreview, renderDocxPreview } from '../rendering/office.js';
 import { resolveWithinRoot } from '../utils/path.js';
 import { escapeHtml } from '../utils/html.js';
 import { mkError, sendError, ERROR_STATUS } from '../utils/errors.js';
@@ -23,6 +24,17 @@ import { atomicWrite } from '../utils/atomicWrite.js';
 import { withLock } from '../concurrency/pathLock.js';
 import { makeOriginGuard } from './middleware/originGuard.js';
 import { broadcastTreeUpdate } from '../websocket.js';
+import { OFFICE_PREVIEW_MAX_BYTES } from '../config/constants.js';
+
+// Maps a lowercase extension to the office.js renderer that understands it.
+// Kept next to fileTypes.js's officePreview flag (which decides *whether* to
+// attempt a preview at all) but separate, since the flag is a filename-level
+// concept while this is purely "which parser".
+const OFFICE_RENDERERS = {
+  xlsx: renderXlsxPreview,
+  pptx: renderPptxPreview,
+  docx: renderDocxPreview,
+};
 
 /**
  * Check whether a file or directory exists at the given path.
@@ -110,6 +122,37 @@ function buildBinaryFileResponse(name, fileType, downloadUrl) {
 }
 
 /**
+ * Attempt to build an office "vibe preview" response for a docx/xlsx/pptx
+ * file. Returns null (never throws) whenever a preview isn't possible —
+ * oversized file, unrecognized extension, corrupt/unsupported document,
+ * read failure — so the caller can fall back to the plain binary-file
+ * response exactly as it would have without this feature.
+ * @param {string} fullPath - Absolute path to the file (already validated)
+ * @param {string} name - Basename (used both for the extension lookup and
+ *   the response's `name` field)
+ * @param {string} icon - fileType.icon to echo back unchanged
+ * @param {string} downloadUrl - Pre-built /api/download URL
+ * @param {number} size - File size in bytes (from a stat already taken by
+ *   the caller, so this never stats the file a second time)
+ * @returns {Promise<object|null>}
+ */
+async function tryBuildOfficePreviewResponse(fullPath, name, icon, downloadUrl, size) {
+  if (size > OFFICE_PREVIEW_MAX_BYTES) return null;
+
+  const ext = path.extname(name).slice(1).toLowerCase();
+  const renderer = OFFICE_RENDERERS[ext];
+  if (!renderer) return null;
+
+  try {
+    const buffer = await fs.readFile(fullPath);
+    const { html } = renderer(buffer);
+    return { name, fileType: 'office', icon, content: html, downloadUrl };
+  } catch (_err) {
+    return null;
+  }
+}
+
+/**
  * Setup file routes
  * @param {Express} app - Express app instance
  * @param {{ port?: number, allowedHosts?: string[] }} [options] - Optional
@@ -171,6 +214,14 @@ export function setupFileRoutes(app, options = {}) {
 
       if (fileType.binary) {
         const downloadUrl = buildDownloadUrl(relativePath);
+
+        if (fileType.officePreview) {
+          const preview = await tryBuildOfficePreviewResponse(
+            fullPath, name, fileType.icon, downloadUrl, stats.size
+          );
+          if (preview) return res.json(preview);
+        }
+
         return res.json(buildBinaryFileResponse(name, fileType, downloadUrl));
       }
 

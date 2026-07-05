@@ -11,6 +11,16 @@ function binary(type, icon = type) {
   return { type, icon, lang: null, binary: true };
 }
 
+// docx/xlsx/pptx get a quick "vibe" preview (src/rendering/office.js) instead
+// of the plain binary download card, when the file is small enough (see
+// src/api/file.js OFFICE_PREVIEW_MAX_BYTES). This flag lets the API branch
+// on that without changing icon/type/binary — legacy .doc/.xls/.ppt stay
+// download-only (no reliable-enough regex shape to target; those are the
+// old binary OLE2 formats, not zip/XML).
+function officeBinary(type, icon = type) {
+  return { ...binary(type, icon), officePreview: true };
+}
+
 const FILE_TYPES = {
   // Markdown
   md: { type: 'markdown', icon: 'markdown', lang: null, binary: false },
@@ -105,13 +115,13 @@ const FILE_TYPES = {
   rar: binary('archive'),
   '7z': binary('archive'),
 
-  // Office
+  // Office (docx/xlsx/pptx get the vibe preview; legacy doc/xls/ppt don't)
   doc: binary('office'),
-  docx: binary('office'),
+  docx: officeBinary('office'),
   xls: binary('office'),
-  xlsx: binary('office'),
+  xlsx: officeBinary('office'),
   ppt: binary('office'),
-  pptx: binary('office'),
+  pptx: officeBinary('office'),
 
   // Executables
   exe: binary('executable'),
@@ -152,6 +162,16 @@ export function getFileType(filename) {
 
   const ext = basename.slice(lastDotIndex + 1).toLowerCase();
   return FILE_TYPES[ext] || DEFAULT_FILE_TYPE;
+}
+
+/**
+ * Whether `filename` is a docx/xlsx/pptx eligible for the office "vibe
+ * preview" (as opposed to a plain binary download card).
+ * @param {string} filename - File name or path
+ * @returns {boolean}
+ */
+export function isOfficePreviewable(filename) {
+  return !!getFileType(filename).officePreview;
 }
 
 export { FILE_TYPES };
