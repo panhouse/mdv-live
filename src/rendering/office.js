@@ -267,16 +267,26 @@ function stripFormatLiterals(code) {
 }
 
 /**
- * Classify a number-format code as date-ish / time-bearing / percent /
- * thousands-grouped, scanning only outside quoted and bracketed sections.
- * @param {string} code - Format code (e.g. "yyyy/m/d", "0.00%", "#,##0")
- * @returns {{ isDate: boolean, hasTime: boolean, isPercent: boolean, isThousands: boolean }}
+ * Classify a number-format code as date-ish / time-only / time-bearing /
+ * percent / thousands-grouped, scanning only outside quoted and bracketed
+ * sections.
+ * @param {string} code - Format code (e.g. "yyyy/m/d", "h:mm", "0.00%")
+ * @returns {{ isDate: boolean, isTimeOnly: boolean, hasTime: boolean, isPercent: boolean, isThousands: boolean }}
  */
 function classifyFormatCode(code) {
   const stripped = stripFormatLiterals(code);
+  // 'm' is ambiguous (month vs minute): only y/d prove a DATE part; h/s
+  // prove a TIME part. A time-only format (builtin 18-21 "h:mm", durations
+  // 45-47 "mm:ss") must NOT get a bogus 1899/12/31 date prefix — it is
+  // classified isTimeOnly and rendered as clock time instead.
+  const hasDatePart = /[yd]/i.test(stripped);
+  const hasTimePart = /[hs]/i.test(stripped);
+  // Month-only codes (e.g. "mmm") with no time markers still read as dates.
+  const monthOnly = !hasDatePart && !hasTimePart && /m/i.test(stripped);
   return {
-    isDate: /[ymdh]/i.test(stripped),
-    hasTime: /h/i.test(stripped) && /m/i.test(stripped),
+    isDate: hasDatePart || monthOnly,
+    isTimeOnly: hasTimePart && !hasDatePart && !monthOnly,
+    hasTime: hasTimePart,
     isPercent: /%/.test(stripped),
     isThousands: /[#0],[#0]/.test(stripped),
   };
@@ -438,10 +448,26 @@ function formatNumericCell(raw, fmt, date1904) {
   if (!fmt || raw === '' || raw.trim() === '') return raw;
   const num = Number(raw);
   if (!Number.isFinite(num)) return raw;
+  if (fmt.isTimeOnly) return formatExcelTime(num);
   if (fmt.isDate) return formatExcelDate(num, fmt.hasTime, date1904);
   if (fmt.isPercent) return formatPercent(num);
   if (fmt.isThousands) return formatThousands(num);
   return raw;
+}
+
+/**
+ * Format the fractional (time-of-day) part of an Excel serial as HH:MM —
+ * used for time-only formats (h:mm etc.) where a calendar date would be
+ * meaningless (serial 0.5 = 12:00, not "1899/12/31 12:00").
+ * @param {number} serial - Excel serial value
+ * @returns {string}
+ */
+function formatExcelTime(serial) {
+  const fraction = serial - Math.floor(serial);
+  const totalMinutes = Math.round(fraction * 24 * 60);
+  const hh = Math.floor(totalMinutes / 60) % 24;
+  const mm = totalMinutes % 60;
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
 }
 
 /**
@@ -678,7 +704,7 @@ export function renderXlsxPreview(buffer, { maxRows = 50, maxCols = 20 } = {}) {
 
   const sharedStrings = parseSharedStrings(readEntry(files, 'xl/sharedStrings.xml'));
   const styleFormats = parseStyleFormats(readEntry(files, 'xl/styles.xml'));
-  const { rows: parsedRows, totalRows, maxColSeen } = parseSheetRows(sheetXml, sharedStrings, {
+  const { rows: parsedRows, totalRows } = parseSheetRows(sheetXml, sharedStrings, {
     maxRows,
     styleFormats,
     date1904,
@@ -690,7 +716,15 @@ export function renderXlsxPreview(buffer, { maxRows = 50, maxCols = 20 } = {}) {
   const wasRowTruncated = totalRows > parsedRows.length;
   const rows = trimTrailingEmptyRows(parsedRows);
 
-  const colCount = maxColSeen < 0 ? 0 : Math.min(maxColSeen + 1, maxCols);
+  // Column extent from the rows we actually RENDER: trimmed trailing rows
+  // (or style-only far-right cells living solely in them) must not leave
+  // ghost blank columns or a false column-truncation notice behind.
+  const effectiveMaxCol = rows.reduce(
+    (max, cells) => cells.reduce((m, cell) => Math.max(m, cell.col), max),
+    -1
+  );
+
+  const colCount = effectiveMaxCol < 0 ? 0 : Math.min(effectiveMaxCol + 1, maxCols);
   const table = colCount === 0
     ? '<p class="office-preview-empty">(空のシートです)</p>'
     : buildTableHtml(rows, colCount);
@@ -699,7 +733,7 @@ export function renderXlsxPreview(buffer, { maxRows = 50, maxCols = 20 } = {}) {
   if (wasRowTruncated) {
     notices.push(`行数が多いため最初の${maxRows}行のみ表示しています（全${totalRows}行）`);
   }
-  if (maxColSeen + 1 > colCount) {
+  if (effectiveMaxCol + 1 > colCount) {
     notices.push(`列数が多いため最初の${maxCols}列のみ表示しています`);
   }
 

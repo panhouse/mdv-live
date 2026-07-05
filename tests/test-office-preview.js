@@ -768,3 +768,49 @@ describe('renderXlsxPreview — no styles.xml (backward compatibility)', () => {
     assert.ok(html.includes('46208'), 'without styles.xml the serial must stay raw, exactly as before');
   });
 });
+
+describe('renderXlsxPreview — codex round-2 fixes (time-only formats, ghost columns)', () => {
+  it('renders time-only formats (builtin 20 h:mm) as HH:MM without a bogus date', () => {
+    const stylesXml = buildStylesXml({ cellXfsNumFmtIds: [0, 20] });
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody: '<row r="1"><c r="A1" s="1"><v>0.5</v></c></row>',
+      stylesXml,
+    });
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(html.includes('12:00'), 'serial 0.5 with h:mm should render 12:00');
+    assert.ok(!html.includes('1899'), 'no 1899 epoch date prefix for time-only cells');
+  });
+
+  it('renders custom time-only "h:mm" the same way', () => {
+    const stylesXml = buildStylesXml({
+      numFmts: [{ id: 164, code: 'h:mm' }],
+      cellXfsNumFmtIds: [0, 164],
+    });
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody: '<row r="1"><c r="A1" s="1"><v>0.75</v></c></row>',
+      stylesXml,
+    });
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(html.includes('18:00'));
+    assert.ok(!html.includes('1899'));
+  });
+
+  it('does not leave ghost columns from cells that lived only in trimmed trailing rows', () => {
+    // Row 1 has real data in A only; row 2 is all-empty but contains a
+    // style-only cell far to the right (Z2). Row 2 gets trimmed — the
+    // preview must be 1 column wide with NO column-truncation notice.
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody:
+        '<row r="1"><c r="A1" t="inlineStr"><is><t>OnlyCell</t></is></c></row>' +
+        '<row r="2"><c r="Z2" s="1" t="n"></c></row>',
+    });
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(html.includes('OnlyCell'));
+    const cellCount = (html.match(/<t[hd]\b/g) || []).length;
+    assert.strictEqual(cellCount, 1, `expected exactly 1 rendered cell, got ${cellCount}`);
+    assert.ok(!html.includes('列数が多いため'), 'no false column-truncation notice');
+  });
+});
