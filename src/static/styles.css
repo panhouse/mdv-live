@@ -1213,10 +1213,13 @@ body {
        printed/PDF'd page must not carry the green/yellow diff tints. */
     .diff-added, .diff-changed, .diff-removed-after {
         background: transparent !important;
-        border-left-color: transparent !important;
+        border-left: none !important;
         border-top: none !important;
         box-shadow: none !important;
+        padding-left: 0 !important;
+        margin-left: 0 !important;
     }
+    .diff-removed-after::before { display: none !important; content: none !important; }
 
     body {
         height: auto !important;

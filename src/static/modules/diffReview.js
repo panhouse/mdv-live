@@ -282,6 +282,16 @@ export const DiffReviewManager = {
         const removedAt = data.removedAt || [];
         const canHighlight = tab.fileType === 'markdown' && !tab.isMarp;
 
+        const count = added.length + changed.length + removedAt.length;
+        if (count === 0) {
+            // identical:false but zero hunks: a CRLF/trailing-newline-only
+            // change that diffLines() normalizes away. No visible line
+            // difference to review — silently adopt the new hash instead
+            // of showing a 「0箇所」 bar (codex round-3).
+            markSeen(tab.path, data.currentHash);
+            this._hide();
+            return;
+        }
         this._current = {
             path: tab.path,
             kind: canHighlight ? 'full' : 'bar-only',
@@ -289,7 +299,7 @@ export const DiffReviewManager = {
             added,
             changed,
             removedAt,
-            count: added.length + changed.length + removedAt.length,
+            count,
             lastSeenTs: lastSeen.ts
         };
         this._highlightsOn = true; // default ON each time a new diff is shown
