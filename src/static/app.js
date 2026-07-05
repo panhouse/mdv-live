@@ -91,6 +91,10 @@ async function refreshCurrentTab() {
             const currentScroll = saveScrollPosition(elements.content);
             ContentRenderer.render(data.content, data.fileType || tab.fileType);
             restoreScrollPosition(elements.content, currentScroll);
+            // This render path bypasses the renderActive() wrapper and the
+            // WS onFileRendered seam — refresh the diff bar here too or a
+            // focus/reconnect repaint leaves it stale (codex round-2).
+            DiffReviewManager.refresh();
         }
     } catch (e) {
         console.error('Failed to refresh tab:', e);

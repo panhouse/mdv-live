@@ -1206,7 +1206,17 @@ body {
         padding: 0 !important;
     }
 
-    .sidebar, .resize-handle, .toolbar, .tab-bar, .pdf-style-panel { display: none !important; }
+    .sidebar, .resize-handle, .toolbar, .tab-bar, .pdf-style-panel,
+    #diffReviewBar { display: none !important; }
+
+    /* Review highlights are screen chrome, not document content — a
+       printed/PDF'd page must not carry the green/yellow diff tints. */
+    .diff-added, .diff-changed, .diff-removed-after {
+        background: transparent !important;
+        border-left-color: transparent !important;
+        border-top: none !important;
+        box-shadow: none !important;
+    }
 
     body {
         height: auto !important;
@@ -1399,7 +1409,8 @@ body.marp-fullscreen {
 body.marp-fullscreen .sidebar,
 body.marp-fullscreen .resize-handle,
 body.marp-fullscreen .toolbar,
-body.marp-fullscreen .tab-bar {
+body.marp-fullscreen .tab-bar,
+body.marp-fullscreen #diffReviewBar {
     display: none !important;
 }
 
