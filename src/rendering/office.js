@@ -619,10 +619,17 @@ function parseSheetRows(xml, sharedStrings, { maxRows, styleFormats = null, date
         // fallback below would never run.
         const fMatchEarly = /<(?:[\w.-]+:)?f\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?f>/.exec(content);
         const vMatchEarly = /<(?:[\w.-]+:)?v\b[^>]*?(?:\/>|>([\s\S]*?)<\/(?:[\w.-]+:)?v>)/.exec(content);
-        // A present-but-empty <v></v> is a CACHED BLANK result (e.g. =""),
-        // which Excel displays as blank — only a missing <v> means "never
-        // computed", where showing the formula beats an empty column.
-        if (fMatchEarly && !vMatchEarly) {
+        // Formula cells with an empty/missing cached value need real-world
+        // disambiguation (visual inspection of actual files, 2026-07-05):
+        //  - Excel caches an empty-STRING result (="", IF(..,"",..)) as
+        //    t="str" with an empty <v/> -> display BLANK, like Excel does.
+        //  - openpyxl writes never-computed formulas as <f>..</f><v></v>
+        //    with NO t attribute -> the whole value column would vanish;
+        //    display the formula text instead.
+        //  - t="str" with NO <v> at all is still never-computed -> formula.
+        const vMissing = !vMatchEarly;
+        const vEmpty = vMatchEarly && (vMatchEarly[1] ?? '').trim() === '';
+        if (fMatchEarly && (vMissing || (vEmpty && type !== 'str'))) {
           formula = true;
           text = `=${decodeXmlEntities(fMatchEarly[1].trim())}`;
         } else if (type === 's') {

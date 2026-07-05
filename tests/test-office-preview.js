@@ -1038,3 +1038,16 @@ describe('renderXlsxPreview — codex round-9 fix (self-closing <v/>)', () => {
     assert.ok(html.includes('ラベル'));
   });
 });
+
+describe('renderXlsxPreview — real-world disambiguation of empty cached formulas', () => {
+  it('openpyxl-style <f>...</f><v></v> WITHOUT t attribute shows the formula (real ROI-calculator case)', () => {
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody:
+        '<row r="1"><c r="A1" t="inlineStr"><is><t>ライン停止コスト</t></is></c>' +
+        '<c r="B1"><f>B7*B8</f><v></v></c></row>',
+    });
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(html.includes('=B7*B8'), 'openpyxl uncomputed formula must show, not vanish');
+  });
+});
