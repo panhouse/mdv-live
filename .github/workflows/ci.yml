@@ -22,11 +22,14 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Install Playwright browser
+        # --with-deps はここで Chromium 用のシステムライブラリも入れる。
+        # unit テストの PDF 生成系（md-to-pdf が内部起動する Chromium）が
+        # 同じライブラリ群を必要とするため、npm test より先に実行する。
+        run: npx playwright install --with-deps chromium
+
       - name: Unit / API tests
         run: npm test
-
-      - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
 
       - name: E2E smoke tests
         run: npm run test:e2e
