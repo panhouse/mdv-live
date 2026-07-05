@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.4] - 2026-07-05
+
+### Added — 変更ハイライト（AIエージェント時代の検収ビュー第1弾）
+
+開いているファイルが「前回確認した時点」から変わると、タブ下に
+「前回確認 HH:MM から N箇所変更されました」バーが出て、追加行は緑・
+変更行は黄・削除位置はマーカーでハイライトされる（Markdown）。
+⌥↑↓ で変更箇所ジャンプ、トグルでON/OFF、「最新を確認済みにする」で
+基準を更新。基準はブラウザに保存され、プロジェクト（配信ルート）毎に分離。
+Marp/コード/テキストはバーのみ（v1）。印刷・フルスクリーンには混入しない。
+
+### Removed — プレビュー下のダウンロードボタン
+
+Officeプレビュー・再生不可動画カードのダウンロードボタンを撤去
+（サイドバー右クリック → ダウンロード に一本化。岡本判断）。
+
+### Internal
+
+GET /api/file が全テキストで内容ハッシュ(etag)を返すように。
+GPT-5.5 クロスレビュー17周（22指摘修正: 状態×非同期×再描画経路の
+組合せ — タブ切替・WS再接続・サーバー再起動・編集モード・presenter窓）。
+
 ## [0.6.3] - 2026-07-05
 
 ### Internal — 変更検知バックエンド（0.6.4 の差分ハイライトの土台）
