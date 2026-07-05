@@ -1024,3 +1024,17 @@ describe('renderXlsxPreview — codex round-8 fixes (elapsed units, blank cached
     assert.ok(html.includes('=SUM(B1:B9)'));
   });
 });
+
+describe('renderXlsxPreview — codex round-9 fix (self-closing <v/>)', () => {
+  it('a self-closing cached <v/> counts as a cached blank, not a missing value', () => {
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody:
+        '<row r="1"><c r="A1" t="inlineStr"><is><t>ラベル</t></is></c>' +
+        '<c r="B1" t="str"><f>IF(1=1,"","x")</f><v/></c></row>',
+    });
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(!html.includes('=IF'), 'self-closing cached blank must render blank');
+    assert.ok(html.includes('ラベル'));
+  });
+});

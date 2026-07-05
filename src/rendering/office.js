@@ -618,7 +618,7 @@ function parseSheetRows(xml, sharedStrings, { maxRows, styleFormats = null, date
         // generated workbooks) would otherwise return '' and the formula
         // fallback below would never run.
         const fMatchEarly = /<(?:[\w.-]+:)?f\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?f>/.exec(content);
-        const vMatchEarly = /<(?:[\w.-]+:)?v\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?v>/.exec(content);
+        const vMatchEarly = /<(?:[\w.-]+:)?v\b[^>]*?(?:\/>|>([\s\S]*?)<\/(?:[\w.-]+:)?v>)/.exec(content);
         // A present-but-empty <v></v> is a CACHED BLANK result (e.g. =""),
         // which Excel displays as blank — only a missing <v> means "never
         // computed", where showing the formula beats an empty column.
@@ -626,8 +626,8 @@ function parseSheetRows(xml, sharedStrings, { maxRows, styleFormats = null, date
           formula = true;
           text = `=${decodeXmlEntities(fMatchEarly[1].trim())}`;
         } else if (type === 's') {
-          const vMatch = /<(?:[\w.-]+:)?v\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?v>/.exec(content);
-          const idx = vMatch ? parseInt(vMatch[1], 10) : NaN;
+          const vMatch = /<(?:[\w.-]+:)?v\b[^>]*?(?:\/>|>([\s\S]*?)<\/(?:[\w.-]+:)?v>)/.exec(content);
+          const idx = vMatch ? parseInt(vMatch[1] ?? '', 10) : NaN;
           text = Number.isInteger(idx) ? (sharedStrings[idx] || '') : '';
         } else if (type === 'inlineStr') {
           const isMatch = /<(?:[\w.-]+:)?is\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?is>/.exec(content);
@@ -635,14 +635,14 @@ function parseSheetRows(xml, sharedStrings, { maxRows, styleFormats = null, date
         } else if (type === 'str' || type === 'b' || type === 'e') {
           // Formula-result string / boolean / error cells: unchanged
           // (raw decode, no number-format conversion — not in scope).
-          const vMatch = /<(?:[\w.-]+:)?v\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?v>/.exec(content);
-          text = vMatch ? decodeXmlEntities(vMatch[1]) : '';
+          const vMatch = /<(?:[\w.-]+:)?v\b[^>]*?(?:\/>|>([\s\S]*?)<\/(?:[\w.-]+:)?v>)/.exec(content);
+          text = vMatch ? decodeXmlEntities(vMatch[1] ?? '') : '';
         } else {
           // No type attribute (or "n"): plain numeric value, or a formula
           // cell with a cached <v> (the no-cached-value case was handled
           // by the early formula fallback above).
           if (vMatchEarly) {
-            const raw = decodeXmlEntities(vMatchEarly[1]);
+            const raw = decodeXmlEntities(vMatchEarly[1] ?? '');
             if (fMatchEarly) {
               // Formula WITH a cached value: keep showing the value as
               // today — no date/percent/thousands conversion.
