@@ -71,8 +71,17 @@ export async function loadConfig(rootDir) {
   if (typeof parsed.port === 'number') config.port = parsed.port;
   if (typeof parsed.depth === 'number') config.depth = parsed.depth;
   if (typeof parsed.open === 'boolean') config.open = parsed.open;
-  if (typeof parsed.css === 'string') config.css = path.resolve(rootDir, parsed.css);
-  if (typeof parsed.pdfOptions === 'string') config.pdfOptions = path.resolve(rootDir, parsed.pdfOptions);
+  if (typeof parsed.css === 'string') {
+    config.css = path.resolve(rootDir, parsed.css);
+    // Raw (rootDir-relative) form, for consumers that speak relative
+    // paths — the viewer's PDF style panel sends rootDir-relative paths
+    // to /api/pdf/export, so it needs the value as written.
+    config.cssRaw = parsed.css;
+  }
+  if (typeof parsed.pdfOptions === 'string') {
+    config.pdfOptions = path.resolve(rootDir, parsed.pdfOptions);
+    config.pdfOptionsRaw = parsed.pdfOptions;
+  }
 
   return config;
 }

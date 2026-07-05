@@ -122,7 +122,7 @@ export async function findAvailablePort(startPort, maxRetries = 100) {
  *
  * @param {{rootDir: string, initialFile: string|null, port: number, depth: number, openBrowser: boolean}} options
  */
-async function startViewer({ rootDir, initialFile, port: startPort, depth, openBrowser }) {
+async function startViewer({ rootDir, initialFile, port: startPort, depth, openBrowser, pdfStyleDefaults }) {
   const port = await findAvailablePort(startPort);
   if (!port) {
     throw new UsageError('Error: 利用可能なポートが見つかりませんでした');
@@ -132,7 +132,7 @@ async function startViewer({ rootDir, initialFile, port: startPort, depth, openB
     console.log(`ポート ${startPort} は使用中のため、${port} で起動します`);
   }
 
-  const mdv = createMdvServer({ rootDir, port, depth });
+  const mdv = createMdvServer({ rootDir, port, depth, pdfStyleDefaults });
   await mdv.start();
 
   const url = initialFile
@@ -191,7 +191,14 @@ async function runViewer({ values, positionals }) {
       ? config.open
       : true;
 
-  await startViewer({ rootDir, initialFile, port, depth, openBrowser });
+  // mdv.config.json の css/pdfOptions は Web UI の Style パネルの初期値に
+  // なる（rootDir 相対の生の値を渡す。ユーザーがパネルで明示設定した値=
+  // localStorage が常に優先される）。
+  const pdfStyleDefaults = {};
+  if (config.cssRaw) pdfStyleDefaults.css = config.cssRaw;
+  if (config.pdfOptionsRaw) pdfStyleDefaults.pdfOptions = config.pdfOptionsRaw;
+
+  await startViewer({ rootDir, initialFile, port, depth, openBrowser, pdfStyleDefaults });
   return undefined;
 }
 

@@ -125,3 +125,37 @@ describe('MDV Server', () => {
     });
   });
 });
+
+describe('/api/info pdfStyleDefaults (mdv.config.json -> Style panel flow)', () => {
+  it('echoes the pdfStyleDefaults option; empty object when absent', async () => {
+    const os = await import('node:os');
+    const fsp = await import('node:fs/promises');
+    const { createMdvServer } = await import('../src/server.js');
+
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'mdv-info-'));
+    const server = createMdvServer({
+      rootDir: dir,
+      port: 0,
+      pdfStyleDefaults: { css: 'report.css', pdfOptions: 'pdf-options.json' }
+    });
+    const { port } = await server.start();
+    try {
+      const data = await (await fetch(`http://localhost:${port}/api/info`)).json();
+      assert.deepStrictEqual(data.pdfStyleDefaults, { css: 'report.css', pdfOptions: 'pdf-options.json' });
+    } finally {
+      await server.stop();
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+
+    const dir2 = await fsp.mkdtemp(path.join(os.tmpdir(), 'mdv-info2-'));
+    const server2 = createMdvServer({ rootDir: dir2, port: 0 });
+    const { port: port2 } = await server2.start();
+    try {
+      const data2 = await (await fetch(`http://localhost:${port2}/api/info`)).json();
+      assert.deepStrictEqual(data2.pdfStyleDefaults, {});
+    } finally {
+      await server2.stop();
+      await fsp.rm(dir2, { recursive: true, force: true });
+    }
+  });
+});

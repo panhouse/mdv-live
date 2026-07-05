@@ -143,3 +143,27 @@ describe('cli/config: precedence (CLI flags > config > defaults)', () => {
     assert.strictEqual(resolvePort(undefined, {}, 8642), 8642);
   });
 });
+
+describe('loadConfig raw (rootDir-relative) css/pdfOptions', () => {
+  it('exposes cssRaw/pdfOptionsRaw alongside the resolved absolute paths', async () => {
+    const os = await import('node:os');
+    const fsp = await import('node:fs/promises');
+    const path = await import('node:path');
+    const { loadConfig } = await import('../src/cli/config.js');
+
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'mdv-cfgraw-'));
+    try {
+      await fsp.writeFile(
+        path.join(dir, 'mdv.config.json'),
+        JSON.stringify({ css: 'styles/report.css', pdfOptions: 'pdf-options.json' })
+      );
+      const config = await loadConfig(dir);
+      assert.strictEqual(config.cssRaw, 'styles/report.css');
+      assert.strictEqual(config.pdfOptionsRaw, 'pdf-options.json');
+      assert.strictEqual(config.css, path.resolve(dir, 'styles/report.css'));
+      assert.strictEqual(config.pdfOptions, path.resolve(dir, 'pdf-options.json'));
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+});

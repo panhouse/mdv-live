@@ -63,11 +63,13 @@ export async function seedFiles(rootDir, files) {
  * Boot a real mdv-live server rooted at rootDir on a freshly-found free
  * port.
  * @param {string} rootDir
+ * @param {object} [serverOptions] - Extra createMdvServer options
+ *   (e.g. pdfStyleDefaults) merged over the defaults.
  * @returns {Promise<{ port: number, baseURL: string, mdv: ReturnType<typeof createMdvServer>, stop: () => Promise<void> }>}
  */
-export async function startServer(rootDir) {
+export async function startServer(rootDir, serverOptions = {}) {
   const port = await findFreePort();
-  const mdv = createMdvServer({ rootDir, port, depth: 3 });
+  const mdv = createMdvServer({ rootDir, port, depth: 3, ...serverOptions });
   await mdv.start();
   const baseURL = `http://localhost:${port}`;
   return {

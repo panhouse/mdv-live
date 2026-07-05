@@ -39,7 +39,10 @@ function setupApiRoutes(app, options) {
   app.get('/api/info', (req, res) => {
     res.json({
       rootPath: app.locals.rootDir,
-      version: VERSION
+      version: VERSION,
+      // mdv.config.json 由来の PDF スタイル初期値（rootDir 相対）。
+      // フロントはユーザー未設定（localStorage 空）のときだけ採用する。
+      pdfStyleDefaults: app.locals.pdfStyleDefaults || {}
     });
   });
 
@@ -60,12 +63,15 @@ function setupApiRoutes(app, options) {
  * @returns {{ app: express.Application, server: http.Server, watcher: FSWatcher, wss: WebSocketServer, port: number, start: () => Promise<{port: number}>, stop: () => Promise<void> }}
  */
 export function createMdvServer(options) {
-  const { rootDir, port = DEFAULT_PORT, depth = DEFAULT_DEPTH } = options;
+  const { rootDir, port = DEFAULT_PORT, depth = DEFAULT_DEPTH, pdfStyleDefaults } = options;
 
   const app = express();
   const server = createServer(app);
 
   app.locals.rootDir = path.resolve(rootDir);
+  // mdv.config.json の css/pdfOptions（rootDir 相対）。/api/info 経由で
+  // Web UI の Style パネル初期値になる。
+  app.locals.pdfStyleDefaults = pdfStyleDefaults || {};
 
   // --- app.locals contract for Origin/Host guard consumers -----------------
   // Any mutation route that wants src/api/middleware/originGuard.js's

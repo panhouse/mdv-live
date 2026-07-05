@@ -40,6 +40,36 @@ export const PdfStyleManager = {
         this.loadPreviewCss();
     },
 
+    /**
+     * mdv.config.json 由来の初期値（/api/info の pdfStyleDefaults、rootDir
+     * 相対パス）を適用する。ユーザーがパネルで明示設定した値（localStorage）
+     * が既にあればそちらを優先し、何もしない。localStorage には書かない —
+     * config を変えれば次回起動時にそのまま追従する。
+     * @param {{ css?: string, pdfOptions?: string }} defaults
+     */
+    applyConfigDefaults(defaults) {
+        if (!defaults) return;
+        const hasStored = localStorage.getItem(STORAGE_KEYS.PDF_STYLE_PATH) !== null
+            || localStorage.getItem(STORAGE_KEYS.PDF_OPTIONS_PATH) !== null;
+        if (hasStored) return;
+
+        let changed = false;
+        if (defaults.css && !state.pdfStylePath) {
+            state.pdfStylePath = normalizeUserPath(defaults.css);
+            elements.pdfStylePath.value = state.pdfStylePath;
+            changed = true;
+        }
+        if (defaults.pdfOptions && !state.pdfOptionsPath) {
+            state.pdfOptionsPath = normalizeUserPath(defaults.pdfOptions);
+            elements.pdfOptionsPath.value = state.pdfOptionsPath;
+            changed = true;
+        }
+        if (changed) {
+            this.loadPreviewCss();
+            if (this._renderActive) this._renderActive();
+        }
+    },
+
     // PDF dispatch 切替: PDF options JSON が指定されている時だけサーバー
     // md-to-pdf を使う。CSS のみ (or 何もなし) の場合は印刷ダイアログ経由
     // で OS のページ設定を活かしつつ、preview に当たっている CSS が

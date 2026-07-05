@@ -145,6 +145,9 @@ async function init() {
         const infoResponse = await MDVApi.fetchInfo();
         const info = await infoResponse.json();
         state.rootPath = info.rootPath;
+        // mdv.config.json の css/pdfOptions を Style パネルの初期値に
+        // （ユーザーがパネルで設定済みなら何もしない）。
+        PdfStyleManager.applyConfigDefaults(info.pdfStyleDefaults);
     } catch (e) {
         console.error('Failed to fetch server info:', e);
     }
