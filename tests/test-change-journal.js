@@ -175,3 +175,16 @@ describe('changeJournal — global byte-budget LRU eviction (maxBytesTotal)', ()
     assert.strictEqual(journal.get('three.md', h3), '3'.repeat(20));
   });
 });
+
+describe('changeJournal — re-recording restores LRU-evicted content (codex round-2)', () => {
+  it('an evicted baseline becomes diffable again after the same content is re-recorded', () => {
+    // Tiny global budget: recording B evicts A's content (record survives).
+    const journal = createChangeJournal({ maxBytesTotal: 10, maxBytesPerFile: 8, maxVersionsPerFile: 4 });
+    const hashA = journal.record('a.md', 'AAAAAAA');   // 7 bytes
+    journal.record('b.md', 'BBBBBBB');                 // 7 bytes -> evicts a.md content
+    assert.strictEqual(journal.get('a.md', hashA), null, 'precondition: A content evicted');
+
+    journal.record('a.md', 'AAAAAAA'); // same hash, same content -> restore
+    assert.strictEqual(journal.get('a.md', hashA), 'AAAAAAA', 'content restored on re-record');
+  });
+});
