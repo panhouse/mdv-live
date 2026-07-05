@@ -109,6 +109,30 @@ describe('File Operations', () => {
 
       await fs.unlink(tempPath('new-file.md'));
     });
+
+    it('should write through a symlink (target updated, link preserved)', async () => {
+      // Regression guard: fs.writeFile followed symlinks, but a naive
+      // atomicWrite(fullPath) rename would replace the LINK with a regular
+      // file and leave the target untouched.
+      await fs.writeFile(tempPath('link-target.md'), 'original');
+      await fs.symlink('link-target.md', tempPath('link.md'));
+
+      const response = await fetch(apiUrl('/api/file'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
+        body: JSON.stringify({ path: 'link.md', content: 'via symlink' }),
+      });
+      assert.strictEqual(response.status, 200);
+
+      const targetContent = await fs.readFile(tempPath('link-target.md'), 'utf-8');
+      assert.strictEqual(targetContent, 'via symlink', 'the symlink TARGET must receive the write');
+
+      const linkStat = await fs.lstat(tempPath('link.md'));
+      assert.ok(linkStat.isSymbolicLink(), 'the symlink itself must survive the save');
+
+      await fs.unlink(tempPath('link.md'));
+      await fs.unlink(tempPath('link-target.md'));
+    });
   });
 
   describe('DELETE /api/file', () => {

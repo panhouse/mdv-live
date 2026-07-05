@@ -447,3 +447,48 @@ describe('GET /api/file — office preview integration', () => {
     assert.ok(data.downloadUrl);
   });
 });
+
+describe('renderXlsxPreview — first-sheet resolution via workbook rels', () => {
+  it('follows r:id through workbook.xml.rels when the part is not sheet1.xml', () => {
+    // Simulates a workbook whose first (and only) visible sheet is stored
+    // as sheet99.xml — what Excel produces after deleting/reordering
+    // sheets. A hard-coded sheet1.xml lookup would fail here.
+    const workbookXml = xmlDecl(
+      '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
+      'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+      '<sheets><sheet name="生き残り" sheetId="7" r:id="rId7"/></sheets>' +
+      '</workbook>'
+    );
+    const workbookRels = xmlDecl(
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId7" ' +
+      'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" ' +
+      'Target="worksheets/sheet99.xml"/>' +
+      '</Relationships>'
+    );
+    const sheetXml = xmlDecl(
+      '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+      '<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Sheet99Cell</t></is></c></row></sheetData>' +
+      '</worksheet>'
+    );
+    const buffer = Buffer.from(zipSync({
+      '[Content_Types].xml': strToU8(CONTENT_TYPES_XML),
+      '_rels/.rels': strToU8(relsXml('xl/workbook.xml')),
+      'xl/workbook.xml': strToU8(workbookXml),
+      'xl/_rels/workbook.xml.rels': strToU8(workbookRels),
+      'xl/worksheets/sheet99.xml': strToU8(sheetXml),
+    }));
+
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(html.includes('Sheet99Cell'), 'cell from the rels-resolved sheet should render');
+  });
+
+  it('still falls back to sheet1.xml when the rels part is absent', () => {
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody: '<row r="1"><c r="A1" t="inlineStr"><is><t>FallbackCell</t></is></c></row>',
+    });
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(html.includes('FallbackCell'));
+  });
+});

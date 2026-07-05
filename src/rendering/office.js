@@ -297,6 +297,39 @@ function otherSheetsHtml(sheetNames) {
 }
 
 /**
+ * Locate the zip entry of the workbook's FIRST sheet (document order in
+ * xl/workbook.xml). The part name is NOT always `sheet1.xml` — after
+ * deleting/reordering sheets, Excel keeps whatever file the first sheet's
+ * r:id relationship points at — so follow the relationship through
+ * xl/_rels/workbook.xml.rels. Falls back to the conventional
+ * `xl/worksheets/sheet1.xml` when the rels chain can't be resolved.
+ * @param {Object} files - Unzipped entry map
+ * @param {string} workbookXml
+ * @returns {string|null} XML of the first sheet, or null
+ */
+function readFirstSheetXml(files, workbookXml) {
+  const sheetTag = /<(?:\w+:)?sheet\b[^>]*>/.exec(workbookXml);
+  const ridMatch = sheetTag && /\b(?:\w+:)?id="([^"]+)"/.exec(sheetTag[0]);
+  const relsXml = readEntry(files, 'xl/_rels/workbook.xml.rels');
+
+  if (ridMatch && relsXml) {
+    const rid = ridMatch[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const relTag = new RegExp(`<(?:\\w+:)?Relationship\\b[^>]*\\bId="${rid}"[^>]*>`).exec(relsXml);
+    const target = relTag && /\bTarget="([^"]+)"/.exec(relTag[0]);
+    if (target) {
+      // Targets are relative to xl/ (e.g. "worksheets/sheet3.xml") or
+      // package-absolute ("/xl/worksheets/sheet3.xml").
+      const entryName = target[1].startsWith('/')
+        ? target[1].slice(1)
+        : `xl/${target[1]}`;
+      const xml = readEntry(files, entryName);
+      if (xml) return xml;
+    }
+  }
+  return readEntry(files, 'xl/worksheets/sheet1.xml');
+}
+
+/**
  * Render a quick "vibe" preview of an .xlsx workbook's first sheet.
  * @param {Buffer|Uint8Array} buffer - Raw .xlsx bytes
  * @param {{ maxRows?: number, maxCols?: number }} [opts]
@@ -309,8 +342,8 @@ export function renderXlsxPreview(buffer, { maxRows = 50, maxCols = 20 } = {}) {
   if (!workbookXml) throw mkOfficeError('Missing xl/workbook.xml');
   const sheetNames = parseSheetNames(workbookXml);
 
-  const sheetXml = readEntry(files, 'xl/worksheets/sheet1.xml');
-  if (!sheetXml) throw mkOfficeError('Missing xl/worksheets/sheet1.xml');
+  const sheetXml = readFirstSheetXml(files, workbookXml);
+  if (!sheetXml) throw mkOfficeError('Missing first worksheet part');
 
   const sharedStrings = parseSharedStrings(readEntry(files, 'xl/sharedStrings.xml'));
   const { rows, totalRows, maxColSeen } = parseSheetRows(sheetXml, sharedStrings, { maxRows });

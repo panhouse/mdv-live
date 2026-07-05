@@ -262,7 +262,24 @@ export function setupFileRoutes(app, options = {}) {
       return sendError(res, mkError('ACCESS_DENIED', 'Access denied'));
     }
 
-    await withLock(fullPath, async () => {
+    // Write through symlinks: the old fs.writeFile followed them, but
+    // atomicWrite's rename would replace the LINK itself with a regular
+    // file, orphaning the real target. Resolve the real path first (for a
+    // new file, resolve its parent directory) and lock/write on that, so a
+    // symlinked file's target is updated and the link survives. Resolution
+    // failures fall back to the validated fullPath — atomicWrite then
+    // surfaces the underlying fs error as before.
+    const isNewFile = !(await pathExists(fullPath));
+    let targetPath = fullPath;
+    try {
+      targetPath = isNewFile
+        ? path.join(await fs.realpath(path.dirname(fullPath)), path.basename(fullPath))
+        : await fs.realpath(fullPath);
+    } catch {
+      targetPath = fullPath;
+    }
+
+    await withLock(targetPath, async () => {
       try {
         // Only a *new* file changes the tree structure; editing existing
         // content does not. Broadcasting tree_update on every autosave makes
@@ -270,17 +287,16 @@ export function setupFileRoutes(app, options = {}) {
         // tree storm during normal editing). Content updates already reach
         // watchers via the targeted file_update channel, so an
         // existing-file save stays silent.
-        const isNewFile = !(await pathExists(fullPath));
         let originalStat = null;
         if (!isNewFile) {
           try {
-            originalStat = await fs.stat(fullPath);
+            originalStat = await fs.stat(targetPath);
           } catch {
             originalStat = null;
           }
         }
 
-        await atomicWrite(fullPath, content, originalStat);
+        await atomicWrite(targetPath, content, originalStat);
         if (isNewFile) notifyTreeUpdate(app);
         res.json({ success: true });
       } catch (err) {
