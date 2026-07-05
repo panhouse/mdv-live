@@ -11,6 +11,16 @@ import { makeFixtureDir, seedFiles, startServer, removeFixtureDir } from './help
 // is gone, see toggleBtn/confirmBtn below), the highlight toggle and ⌥↑↓
 // jump both work, and the localStorage baseline (STORAGE_KEYS.LAST_SEEN,
 // 'mdv-last-seen') survives reload whether or not the user confirmed it.
+//
+// 0.6.10 (owner: 「トグルとかで変更履歴がでるかでないかを選べるように」
+// 「削除行がwordみたいに横棒線がでるといいよね」「デフォルトはオフでok」
+// 「追加も変更も黄色で良い気がする」): the markup toggle is now a single
+// GLOBAL localStorage preference (STORAGE_KEYS.REVIEW_MARKUP,
+// 'mdv-review-markup') defaulting to OFF, deleted lines render inline with
+// a Word-style strikethrough instead of a bare tick, and .diff-added/
+// .diff-changed share one yellow style. Every Playwright test gets a fresh
+// browser context (no localStorage carried over), so "fresh profile
+// default OFF" needs no special setup — it's just the ambient state.
 
 let fixtureDir;
 let server;
@@ -30,27 +40,36 @@ async function waitForBaseline(page, p) {
 
 const FILE = 'review.md';
 
+// A tight bullet list (no blank lines between items) keeps the Myers diff
+// unambiguous — one changed bullet, one deleted bullet, one added bullet —
+// which also happens to be exactly the shape the owner asked to see fixed
+// (「削除行がwordみたいに横棒線がでるといいよね」, bullets being the
+// day-to-day 議事録 review case; see CLAUDE.md's dogfood note). The changed
+// bullet and the deleted bullet are kept NON-adjacent (an untouched bullet
+// sits between them): a deletion immediately next to a change with no
+// unchanged line between them gets folded into the SAME 'changed' hunk by
+// src/utils/lineDiff.js's buildHunks() (both a delete and an insert inside
+// one maximal non-equal run), which would produce no removedAt/removed
+// entry at all for this fixture — an isolated deletion is what actually
+// exercises the pure-deletion path this test is for.
 const ORIGINAL = [
   '# Review Doc',
   '',
-  'Paragraph one stays the same.',
-  '',
-  'Paragraph two will change.',
-  '',
-  'Paragraph three stays too.'
+  '- Bullet one stays the same',
+  '- Bullet two will change',
+  '- Bullet three stays the same',
+  '- Bullet four will be deleted',
+  '- Bullet five stays too'
 ].join('\n') + '\n';
 
 const EDITED = [
   '# Review Doc',
   '',
-  'Paragraph one stays the same.',
-  '',
-  'Paragraph two has changed now.',
-  '',
-  'Paragraph three stays too.',
-  '',
-  'New appended line one.',
-  'New appended line two.'
+  '- Bullet one stays the same',
+  '- Bullet two has changed now',
+  '- Bullet three stays the same',
+  '- Bullet five stays too',
+  '- New bullet appended'
 ].join('\n') + '\n';
 
 test.beforeAll(async () => {
@@ -64,7 +83,7 @@ test.afterAll(async () => {
   await removeFixtureDir(fixtureDir);
 });
 
-test('diff review: no toolbar controls on first open; a live edit shows them + highlights; toggle/jump work; the baseline survives reload (confirmed and not)', async ({ page }) => {
+test('diff review (0.6.10): default OFF; toggle shows added/changed in one yellow + deleted text struck through inline; the global toggle survives reload; ✓ 確認 clears everything', async ({ page }) => {
   await page.goto(server.baseURL + '/');
   await page.locator(`.tree-item[data-path="${FILE}"] [data-action="open"]`).click();
   await expect(page.locator('#content h1')).toHaveText('Review Doc');
@@ -74,82 +93,105 @@ test('diff review: no toolbar controls on first open; a live edit shows them + h
   const toggleBtn = page.locator('#diffToggleBtn');
   const confirmBtn = page.locator('#diffConfirmBtn');
 
-  // (a) First-ever open: no prior baseline -> silently recorded, no
-  // toolbar controls.
+  // First-ever open: no prior baseline -> silently recorded, no toolbar
+  // controls.
   await expect(toggleBtn).toBeHidden();
   await expect(confirmBtn).toBeHidden();
-  await expect.poll(() => page.evaluate((p) => {
-    // Keys are namespaced rootPath + NUL + path (cross-project isolation)
-    // - match by suffix.
-    const store = JSON.parse(localStorage.getItem('mdv-last-seen') || '{}');
-    const key = Object.keys(store).find((k) => k.endsWith('\u0000' + p));
-    return !!key && typeof store[key].hash === 'string';
-  }, FILE)).toBe(true);
+  await waitForBaseline(page, FILE);
 
   // Rewrite the file on disk while it's the active/watched tab. chokidar's
   // awaitWriteFinish adds latency before file_update arrives (see
   // 04-external-file-change.spec.js) — poll instead of asserting immediately.
   await writeFile(path.join(fixtureDir, FILE), EDITED, 'utf-8');
-  await expect(page.locator('#content')).toContainText('Paragraph two has changed now.', { timeout: 3000 });
+  await expect(page.locator('#content')).toContainText('Bullet two has changed now', { timeout: 3000 });
 
   // The toolbar controls appear with the right count once the live
   // file_update triggers modules/diffReview.js's re-check against the
-  // recorded baseline (0.6.8 Word-like declutter (owner): was the bar's
-  // 「N箇所変更されました」 summary, now the 「変更 N」 button label).
+  // recorded baseline. Count is 3: one changed bullet, one deleted bullet,
+  // one added bullet.
   await expect(toggleBtn).toBeVisible({ timeout: 3000 });
-  await expect(toggleBtn).toHaveText('変更 2');
+  await expect(toggleBtn).toHaveText('変更 3');
   await expect(confirmBtn).toBeVisible();
 
-  // Highlights: the changed paragraph and the newly-appended block.
-  const changedBlock = page.locator('#content [data-source-line].diff-changed', {
-    hasText: 'Paragraph two has changed now.'
-  });
-  const addedBlock = page.locator('#content [data-source-line].diff-added', {
-    hasText: 'New appended line one.'
-  });
-  await expect(changedBlock).toBeVisible();
-  await expect(addedBlock).toBeVisible();
-  // Untouched paragraphs must not be flagged.
-  await expect(page.locator('#content [data-source-line]', { hasText: 'Paragraph one stays the same.' }))
-    .not.toHaveClass(/diff-added|diff-changed/);
+  const changedLi = page.locator('#content li.diff-changed', { hasText: 'Bullet two has changed now' });
+  const addedLi = page.locator('#content li.diff-added', { hasText: 'New bullet appended' });
+  const removedInline = page.locator('#content .diff-removed-inline');
 
-  // (b) Toggle hides highlights but keeps the toolbar button visible
-  // (pressed -> off). 0.6.8 Word-like declutter (owner): click the
-  // toolbar's 「変更 N」 button instead of the old in-bar #diffHighlightToggle.
-  await expect(toggleBtn).toHaveAttribute('aria-pressed', 'true');
-  await toggleBtn.click();
-  await expect(page.locator('#content .diff-added, #content .diff-changed')).toHaveCount(0);
+  // 0.6.10: markup defaults to OFF (owner: 「デフォルトはオフでok」) — the
+  // count button/confirm button are the discoverable entry point, but NO
+  // highlights or inline deletions are painted until the toggle is pressed.
   await expect(toggleBtn).toHaveAttribute('aria-pressed', 'false');
-  await expect(toggleBtn).toBeVisible();
+  await expect(page.locator('#content .diff-added, #content .diff-changed')).toHaveCount(0);
+  await expect(removedInline).toHaveCount(0);
 
-  // Toggling back on re-applies them from the already-fetched diff (no
-  // re-fetch needed).
+  // Click 「変更 N」 to turn markup ON.
   await toggleBtn.click();
-  await expect(page.locator('#content .diff-added, #content .diff-changed')).toHaveCount(2);
   await expect(toggleBtn).toHaveAttribute('aria-pressed', 'true');
 
-  // (c) ⌥↑↓ scrolls a highlighted block into view (and briefly flashes it).
-  // Cycling in document order, the first ⌥↓ from no selection lands on the
-  // changed block (line 5), which precedes the added block (line 9).
-  // 0.6.8 Word-like declutter (owner): the jump shortcut itself is
-  // untouched by the bar removal — only the surrounding UI moved.
+  // Added AND changed both get the SAME yellow treatment (owner: 「追加も
+  // 変更も黄色で良い気がする」) — assert the two classes compute to the
+  // identical background, not just "both present".
+  await expect(changedLi).toBeVisible();
+  await expect(addedLi).toBeVisible();
+  const [changedBg, addedBg] = await Promise.all([
+    changedLi.evaluate((el) => getComputedStyle(el).backgroundColor),
+    addedLi.evaluate((el) => getComputedStyle(el).backgroundColor)
+  ]);
+  expect(changedBg).toBe(addedBg);
+  // Untouched bullets/heading must not be flagged.
+  await expect(page.locator('#content li', { hasText: 'Bullet one stays the same' }))
+    .not.toHaveClass(/diff-added|diff-changed/);
+  await expect(page.locator('#content h1')).not.toHaveClass(/diff-added|diff-changed/);
+
+  // The deleted bullet shows up inline, Word-style: the actual deleted
+  // text, struck through — not just a marker (0.6.10 replaced the old
+  // .diff-removed-after tick with this).
+  await expect(removedInline).toHaveCount(1);
+  await expect(removedInline).toContainText('Bullet four will be deleted');
+  await expect(removedInline).toHaveCSS('text-decoration-line', 'line-through');
+
+  // ...and the deleted text is genuinely gone from the file's raw content —
+  // this is a presentational-only echo of history, not a data leak/undo.
+  const raw = await page.evaluate(async (p) => {
+    const res = await fetch('/api/file?path=' + encodeURIComponent(p));
+    const data = await res.json();
+    return data.raw;
+  }, FILE);
+  expect(raw).not.toContain('Bullet four will be deleted');
+
+  // ⌥↑↓ still cycles through adds/changes/deletions (0.6.10: the injected
+  // .diff-removed-inline block is now a jump target too). In document
+  // order the changed bullet precedes the inline deletion block, which
+  // precedes the added bullet — the first ⌥↓ from no selection lands on
+  // the changed bullet.
   await page.keyboard.press('Alt+ArrowDown');
-  await expect(changedBlock).toBeInViewport();
-  await expect(changedBlock).toHaveClass(/diff-jump-flash/);
+  await expect(changedLi).toBeInViewport();
+  await expect(changedLi).toHaveClass(/diff-jump-flash/);
   // The flash class is temporary (~DIFF_JUMP_FLASH_MS) — it must clear on
   // its own without disturbing the persistent diff-changed highlight.
-  await expect(changedBlock).not.toHaveClass(/diff-jump-flash/, { timeout: 3000 });
-  await expect(changedBlock).toHaveClass(/diff-changed/);
+  await expect(changedLi).not.toHaveClass(/diff-jump-flash/, { timeout: 3000 });
+  await expect(changedLi).toHaveClass(/diff-changed/);
 
-  // (e) Reload WITHOUT confirming: the localStorage baseline (recorded on
-  // first open, still older than the on-disk edit) survives the reload, so
-  // the toolbar controls are recomputed and reappear.
+  // Reload WITHOUT confirming: the markup toggle is a GLOBAL preference
+  // (STORAGE_KEYS.REVIEW_MARKUP) — it was just turned ON above, so it must
+  // survive the reload and paint highlights immediately, with no re-click.
+  // The localStorage baseline (recorded on first open, still older than
+  // the on-disk edit) survives too, so the toolbar controls reappear.
   await page.reload();
   await expect(page.locator('#content h1')).toHaveText('Review Doc');
   await expect(toggleBtn).toBeVisible({ timeout: 3000 });
-  await expect(toggleBtn).toHaveText('変更 2');
+  await expect(toggleBtn).toHaveText('変更 3');
+  await expect(toggleBtn).toHaveAttribute('aria-pressed', 'true');
+  await expect(changedLi).toBeVisible();
+  await expect(removedInline).toHaveCount(1);
 
-  // (d) 「✓ 確認」 clears the toolbar controls/highlights and updates the
+  // Toggling back OFF hides everything again (still the same open diff).
+  await toggleBtn.click();
+  await expect(page.locator('#content .diff-added, #content .diff-changed')).toHaveCount(0);
+  await expect(removedInline).toHaveCount(0);
+  await expect(toggleBtn).toHaveAttribute('aria-pressed', 'false');
+
+  // 「✓ 確認」 clears the toolbar controls/highlights and updates the
   // stored baseline hash to the current content. 0.6.8 Word-like declutter
   // (owner): same action as the old in-bar 「最新を確認済みにする」, now a
   // plain toolbar button.
@@ -157,6 +199,7 @@ test('diff review: no toolbar controls on first open; a live edit shows them + h
   await expect(toggleBtn).toBeHidden();
   await expect(confirmBtn).toBeHidden();
   await expect(page.locator('#content .diff-added, #content .diff-changed')).toHaveCount(0);
+  await expect(removedInline).toHaveCount(0);
 
   // Persists: reloading again now shows no toolbar controls, since the
   // stored baseline matches the current (still-EDITED) content.
@@ -218,6 +261,10 @@ test('diff review: a TIGHT LIST bullet change highlights the <li> itself, not th
 
   // 0.6.8 Word-like declutter (owner): toolbar button replaces the old bar.
   await expect(page.locator('#diffToggleBtn')).toBeVisible({ timeout: 3000 });
+
+  // 0.6.10: markup defaults to OFF now — click the toggle before asserting
+  // any .diff-changed class (used to apply automatically at default-ON).
+  await page.locator('#diffToggleBtn').click();
 
   // The changed bullet's own <li> gets .diff-changed directly (pass 1 of
   // diffReview.js's range-intersection match) — not the <h1>, which would

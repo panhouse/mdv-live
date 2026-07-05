@@ -90,7 +90,28 @@ describe('api/diff.js — GET /api/diff (HTTP, baseline-capture flow)', () => {
       added: [],
       changed: [],
       removedAt: [],
+      removed: [],
     });
+  });
+
+  it('0.6.10: a deletion round-trips the actual removed text through removed[].lines', async () => {
+    // Baseline at this point (after the previous test) is
+    // '# Title\n\nOriginal line.\n\nAppended paragraph.\n' — 5 lines. Deleting
+    // ONLY the 'Original line.' line (keeping every surrounding blank line)
+    // is the minimal single-line edit, so the diff is unambiguous.
+    const base = await fetch(`${ctx.baseUrl}/api/diff?path=note.md`);
+    const { currentHash: baselineHash } = await base.json();
+
+    await fs.writeFile(`${ctx.rootDir}/note.md`, '# Title\n\n\nAppended paragraph.\n', 'utf-8');
+
+    const res = await fetch(`${ctx.baseUrl}/api/diff?path=note.md&from=${encodeURIComponent(baselineHash)}`);
+    const data = await res.json();
+    assert.strictEqual(data.available, true);
+    assert.deepStrictEqual(data.removedAt, [2]);
+    assert.deepStrictEqual(data.removed, [{ afterLine: 2, lines: ['Original line.'] }]);
+
+    // Restore for later tests in this describe block.
+    await fs.writeFile(`${ctx.rootDir}/note.md`, '# Title\n\nOriginal line.\n\nAppended paragraph.\n', 'utf-8');
   });
 
   it('unknown-baseline for a hash the journal never saw', async () => {

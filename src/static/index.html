@@ -94,8 +94,12 @@
 
                 <!-- 0.6.8 (modules/diffReview.js): Word's 変更履歴 model — these two
                      appear ONLY while the active tab has a pending diff (replaces the
-                     removed #diffReviewBar 3rd band). Hidden by default. -->
-                <button class="toolbar-btn hidden" id="diffToggleBtn" type="button" title="変更をハイライト表示/非表示（⌥↑↓ でジャンプ）" aria-label="変更のハイライトを切り替え" aria-pressed="true">変更 0</button>
+                     removed #diffReviewBar 3rd band). Hidden by default.
+                     0.6.10: the toggle's aria-pressed default is "false" — markup is a
+                     GLOBAL preference defaulting OFF (owner: 「デフォルトはオフでok」);
+                     _syncToolbar() overwrites this from the real persisted value on
+                     every paint, so this is only the pre-JS resting state. -->
+                <button class="toolbar-btn hidden" id="diffToggleBtn" type="button" title="変更をハイライト表示/非表示（⌥↑↓ でジャンプ）" aria-label="変更のハイライトを切り替え" aria-pressed="false">変更 0</button>
                 <button class="toolbar-btn hidden" id="diffConfirmBtn" type="button" title="最新の内容を確認済みにする" aria-label="確認済みにする">✓ 確認</button>
 
                 <button class="toolbar-btn" id="printBtn" title="Print / Save PDF (Cmd+P)" aria-label="Export to PDF">
