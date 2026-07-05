@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.8] - 2026-07-06
+
+### Changed — Word風に引き算（オーナー指摘によるリデザイン）
+
+- タブ下の差分バー（3行目）を**廃止**。変更があるときだけツールバーに
+  「変更 N」トグル（ハイライトON/OFF）と「✓ 確認」が現れる。
+  変更がなければ画面に検収UIは一切出ない
+- ツリーの緑✓（既読マーク）を**廃止**。残るのは未読の青●と
+  フォルダの未読数のみ
+
 ## [0.6.7] - 2026-07-06
 
 ### Fixed

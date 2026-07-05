@@ -3,13 +3,15 @@ import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { makeFixtureDir, seedFiles, startServer, removeFixtureDir } from './helpers.js';
 
-// modules/unreadBadges.js — 0.6.5 未読●/✓/フォルダバッジ + 次の未読へ. Covers
-// the full event-driven lifecycle: an external edit to a file that is NOT
-// the active tab lights up its row + parent directory count, opening it
-// flips the row to ✓ and decrements the count, a brand-new file arrives
-// unread, the sidebar header chip reflects the total and cycles to the
-// next unread on click, and the directory context-menu bulk-confirm clears
-// everything under it.
+// modules/unreadBadges.js — 0.6.5 未読●/フォルダバッジ + 次の未読へ
+// (0.6.8: the green ✓ "seen" badge is REMOVED — owner: 「既読マーク(緑✓)
+// いらない」; a read file now simply has no tree badge at all). Covers the
+// full event-driven lifecycle: an external edit to a file that is NOT the
+// active tab lights up its row + parent directory count, opening it clears
+// the ● (no ✓ replaces it) and decrements the count, a brand-new file
+// arrives unread, the sidebar header chip reflects the total and cycles to
+// the next unread on click, and the directory context-menu bulk-confirm
+// clears everything under it.
 
 let fixtureDir;
 let server;
@@ -60,16 +62,18 @@ test('unread badges: external edit lights up a non-open file + its folder, openi
 
     // Open readme.md — a first-ever open (no prior baseline) auto-confirms
     // via diffReview.js's first-sight markSeen(), which fires the onSeen
-    // seam this module subscribes to: per spec, OPENING a file marks it
-    // ✓ immediately (not "no badge") — it also establishes an "active tab"
-    // so later "next unread" cycling has somewhere to cycle FROM.
+    // seam this module subscribes to: OPENING a file clears any unread ●
+    // immediately (0.6.8: there's no ✓ to show instead — see this file's
+    // header comment) — it also establishes an "active tab" so later "next
+    // unread" cycling has somewhere to cycle FROM.
     await page.locator(`.tree-item[data-path="${README}"] [data-action="open"]`).click();
     await expect(page.locator('#content h1')).toHaveText('Readme');
     await waitForBaseline(page, README);
 
+    // 0.6.8 Word-like declutter (owner): no ✓ badge — a freshly-opened,
+    // unread-free file simply carries no tree badge at all.
     const readmeBadge = page.locator(`.tree-item[data-path="${README}"] > .tree-item-content > .tree-badge-status`);
-    await expect(readmeBadge).toHaveClass(/is-seen/, { timeout: 5000 });
-    await expect(readmeBadge).toHaveText('✓');
+    await expect(readmeBadge).toHaveCount(0);
 
     const chip = page.locator('#unreadCountChip');
     await expect(chip).toBeHidden();
@@ -93,20 +97,21 @@ test('unread badges: external edit lights up a non-open file + its folder, openi
     const dirBadge = dirRow.locator(':scope > .tree-item-content > .tree-badge-count');
     await expect(dirBadge).toHaveText('1');
 
-    // Readme (already confirmed ✓ above) is untouched by note1's change.
-    await expect(readmeBadge).toHaveClass(/is-seen/);
+    // Readme (already confirmed above) is untouched by note1's change — 0.6.8
+    // Word-like declutter (owner): still no badge (no ✓ to show).
+    await expect(readmeBadge).toHaveCount(0);
 
     // Header chip reflects the one outstanding unread file.
     await expect(chip).toBeVisible();
     await expect(chip).toHaveText('1');
 
-    // (b) Opening the unread file flips ● -> ✓ and the folder count
-    // disappears (back to 0 unread under docs/).
+    // (b) Opening the unread file clears the ● and the folder count
+    // disappears (back to 0 unread under docs/). 0.6.8 Word-like declutter
+    // (owner): no ✓ replaces it — the badge is simply gone.
     await note1Row.locator(':scope > .tree-item-content').click();
     await expect(page.locator('#content')).toContainText('Externally changed paragraph.');
 
-    await expect(note1Badge).toHaveClass(/is-seen/, { timeout: 5000 });
-    await expect(note1Badge).toHaveText('✓');
+    await expect(note1Badge).toHaveCount(0, { timeout: 5000 });
     await expect(dirBadge).toHaveCount(0);
     await expect(chip).toBeHidden();
 
@@ -126,7 +131,8 @@ test('unread badges: external edit lights up a non-open file + its folder, openi
     await expect(chip).toHaveText('1');
     await chip.click();
     await expect(page.locator('#content')).toContainText('Brand new file.');
-    await expect(note2Badge).toHaveClass(/is-seen/, { timeout: 5000 });
+    // 0.6.8 Word-like declutter (owner): no ✓ badge — assert it's simply gone.
+    await expect(note2Badge).toHaveCount(0, { timeout: 5000 });
     await expect(chip).toBeHidden();
 
     // Set up two unread files under docs/ with DIFFERENT provenance, to
@@ -153,13 +159,14 @@ test('unread badges: external edit lights up a non-open file + its folder, openi
     await expect(menuItem).toBeVisible();
     await menuItem.click();
 
-    // note1 had a known etag -> genuinely confirmed (✓), not just cleared.
-    await expect(note1Badge).toHaveClass(/is-seen/, { timeout: 5000 });
-    // note3 arrived as an 'added' item, which carries a content etag as of
-    // codex rounds 2-4 — so folder mark-all can genuinely confirm it too
-    // (✓), same as note1. (The old "cleared with no badge" expectation only
-    // applies to oversized/unreadable adds, which ship without an etag.)
-    await expect(note3Badge).toHaveClass(/is-seen/, { timeout: 5000 });
+    // note1 had a known etag -> genuinely confirmed, note3 arrived as an
+    // 'added' item which carries a content etag as of codex rounds 2-4, so
+    // folder mark-all can genuinely confirm it too, same as note1. 0.6.8
+    // Word-like declutter (owner): neither shows a ✓ — both badges are
+    // simply gone (the old "cleared with no badge" distinction between
+    // known/unknown etag no longer has a visible difference to assert).
+    await expect(note1Badge).toHaveCount(0, { timeout: 5000 });
+    await expect(note3Badge).toHaveCount(0, { timeout: 5000 });
     await expect(dirBadge).toHaveCount(0);
     await expect(chip).toBeHidden();
 });

@@ -3,13 +3,14 @@ import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { makeFixtureDir, seedFiles, startServer, removeFixtureDir } from './helpers.js';
 
-// modules/diffReview.js — 0.6.4 差分バー + ハイライト + ジャンプ. Covers the
-// full baseline lifecycle: first open silently records a baseline (no
-// bar), a later external edit is detected via the live file_update ->
-// GET /api/diff round trip and rendered as a bar + block highlights,
-// the highlight toggle and ⌥↑↓ jump both work, and the localStorage
-// baseline (STORAGE_KEYS.LAST_SEEN, 'mdv-last-seen') survives reload
-// whether or not the user confirmed it.
+// modules/diffReview.js — 0.6.4 ハイライト + ジャンプ. Covers the full
+// baseline lifecycle: first open silently records a baseline (no toolbar
+// controls), a later external edit is detected via the live file_update ->
+// GET /api/diff round trip and rendered as the toolbar's 「変更 N」/「✓ 確認」
+// buttons + block highlights (0.6.8: the old standalone #diffReviewBar band
+// is gone, see toggleBtn/confirmBtn below), the highlight toggle and ⌥↑↓
+// jump both work, and the localStorage baseline (STORAGE_KEYS.LAST_SEEN,
+// 'mdv-last-seen') survives reload whether or not the user confirmed it.
 
 let fixtureDir;
 let server;
@@ -63,15 +64,20 @@ test.afterAll(async () => {
   await removeFixtureDir(fixtureDir);
 });
 
-test('diff review: no bar on first open; a live edit shows the bar + highlights; toggle/jump work; the baseline survives reload (confirmed and not)', async ({ page }) => {
+test('diff review: no toolbar controls on first open; a live edit shows them + highlights; toggle/jump work; the baseline survives reload (confirmed and not)', async ({ page }) => {
   await page.goto(server.baseURL + '/');
   await page.locator(`.tree-item[data-path="${FILE}"] [data-action="open"]`).click();
   await expect(page.locator('#content h1')).toHaveText('Review Doc');
 
-  const bar = page.locator('#diffReviewBar');
+  // 0.6.8 Word-like declutter (owner): the old #diffReviewBar 3rd band is
+  // gone — the toolbar's #diffToggleBtn/#diffConfirmBtn replace it.
+  const toggleBtn = page.locator('#diffToggleBtn');
+  const confirmBtn = page.locator('#diffConfirmBtn');
 
-  // (a) First-ever open: no prior baseline -> silently recorded, no bar.
-  await expect(bar).toBeHidden();
+  // (a) First-ever open: no prior baseline -> silently recorded, no
+  // toolbar controls.
+  await expect(toggleBtn).toBeHidden();
+  await expect(confirmBtn).toBeHidden();
   await expect.poll(() => page.evaluate((p) => {
     // Keys are namespaced rootPath + NUL + path (cross-project isolation)
     // - match by suffix.
@@ -86,11 +92,13 @@ test('diff review: no bar on first open; a live edit shows the bar + highlights;
   await writeFile(path.join(fixtureDir, FILE), EDITED, 'utf-8');
   await expect(page.locator('#content')).toContainText('Paragraph two has changed now.', { timeout: 3000 });
 
-  // The bar appears with the right summary/count once the live file_update
-  // triggers modules/diffReview.js's re-check against the recorded baseline.
-  await expect(bar).toBeVisible({ timeout: 3000 });
-  await expect(bar).toContainText('変更されました');
-  await expect(bar.locator('.diff-bar-count')).toHaveText('2箇所');
+  // The toolbar controls appear with the right count once the live
+  // file_update triggers modules/diffReview.js's re-check against the
+  // recorded baseline (0.6.8 Word-like declutter (owner): was the bar's
+  // 「N箇所変更されました」 summary, now the 「変更 N」 button label).
+  await expect(toggleBtn).toBeVisible({ timeout: 3000 });
+  await expect(toggleBtn).toHaveText('変更 2');
+  await expect(confirmBtn).toBeVisible();
 
   // Highlights: the changed paragraph and the newly-appended block.
   const changedBlock = page.locator('#content [data-source-line].diff-changed', {
@@ -105,19 +113,26 @@ test('diff review: no bar on first open; a live edit shows the bar + highlights;
   await expect(page.locator('#content [data-source-line]', { hasText: 'Paragraph one stays the same.' }))
     .not.toHaveClass(/diff-added|diff-changed/);
 
-  // (b) Toggle hides highlights but keeps the bar.
-  await page.locator('#diffHighlightToggle').click();
+  // (b) Toggle hides highlights but keeps the toolbar button visible
+  // (pressed -> off). 0.6.8 Word-like declutter (owner): click the
+  // toolbar's 「変更 N」 button instead of the old in-bar #diffHighlightToggle.
+  await expect(toggleBtn).toHaveAttribute('aria-pressed', 'true');
+  await toggleBtn.click();
   await expect(page.locator('#content .diff-added, #content .diff-changed')).toHaveCount(0);
-  await expect(bar).toBeVisible();
+  await expect(toggleBtn).toHaveAttribute('aria-pressed', 'false');
+  await expect(toggleBtn).toBeVisible();
 
   // Toggling back on re-applies them from the already-fetched diff (no
   // re-fetch needed).
-  await page.locator('#diffHighlightToggle').click();
+  await toggleBtn.click();
   await expect(page.locator('#content .diff-added, #content .diff-changed')).toHaveCount(2);
+  await expect(toggleBtn).toHaveAttribute('aria-pressed', 'true');
 
   // (c) ⌥↑↓ scrolls a highlighted block into view (and briefly flashes it).
   // Cycling in document order, the first ⌥↓ from no selection lands on the
   // changed block (line 5), which precedes the added block (line 9).
+  // 0.6.8 Word-like declutter (owner): the jump shortcut itself is
+  // untouched by the bar removal — only the surrounding UI moved.
   await page.keyboard.press('Alt+ArrowDown');
   await expect(changedBlock).toBeInViewport();
   await expect(changedBlock).toHaveClass(/diff-jump-flash/);
@@ -128,26 +143,29 @@ test('diff review: no bar on first open; a live edit shows the bar + highlights;
 
   // (e) Reload WITHOUT confirming: the localStorage baseline (recorded on
   // first open, still older than the on-disk edit) survives the reload, so
-  // the bar is recomputed and reappears.
+  // the toolbar controls are recomputed and reappear.
   await page.reload();
   await expect(page.locator('#content h1')).toHaveText('Review Doc');
-  await expect(bar).toBeVisible({ timeout: 3000 });
-  await expect(bar.locator('.diff-bar-count')).toHaveText('2箇所');
+  await expect(toggleBtn).toBeVisible({ timeout: 3000 });
+  await expect(toggleBtn).toHaveText('変更 2');
 
-  // (d) 「最新を確認済みにする」 clears the bar/highlights and updates the
-  // stored baseline hash to the current content.
-  await page.locator('#diffConfirmBtn').click();
-  await expect(bar).toBeHidden();
+  // (d) 「✓ 確認」 clears the toolbar controls/highlights and updates the
+  // stored baseline hash to the current content. 0.6.8 Word-like declutter
+  // (owner): same action as the old in-bar 「最新を確認済みにする」, now a
+  // plain toolbar button.
+  await confirmBtn.click();
+  await expect(toggleBtn).toBeHidden();
+  await expect(confirmBtn).toBeHidden();
   await expect(page.locator('#content .diff-added, #content .diff-changed')).toHaveCount(0);
 
-  // Persists: reloading again now shows no bar, since the stored baseline
-  // matches the current (still-EDITED) content.
+  // Persists: reloading again now shows no toolbar controls, since the
+  // stored baseline matches the current (still-EDITED) content.
   await page.reload();
   await expect(page.locator('#content h1')).toHaveText('Review Doc');
-  await expect(bar).toBeHidden();
+  await expect(toggleBtn).toBeHidden();
 });
 
-test('diff bar disappears when the last tab is closed (welcome view)', async ({ page }) => {
+test('toolbar diff controls disappear when the last tab is closed (welcome view)', async ({ page }) => {
   const p = 'closeme.md';
   await writeFile(path.join(fixtureDir, p), '# Close Me\n\n本文の段落。\n');
   await page.goto(server.baseURL + '/');
@@ -157,12 +175,15 @@ test('diff bar disappears when the last tab is closed (welcome view)', async ({ 
   await waitForBaseline(page, p);
 
   await writeFile(path.join(fixtureDir, p), '# Close Me\n\n本文の段落。\n\n追記の段落。\n');
-  await expect(page.locator('#diffReviewBar')).toBeVisible({ timeout: 6000 });
+  // 0.6.8 Word-like declutter (owner): the toolbar's #diffToggleBtn
+  // replaces the old #diffReviewBar for this visibility check.
+  await expect(page.locator('#diffToggleBtn')).toBeVisible({ timeout: 6000 });
 
-  // Close the last tab -> welcome view; the bar must not linger (codex).
+  // Close the last tab -> welcome view; the controls must not linger (codex).
   await page.locator('#tabBar .tab .tab-close').click();
   await expect(page.locator('#content .welcome')).toBeVisible();
-  await expect(page.locator('#diffReviewBar')).toBeHidden();
+  await expect(page.locator('#diffToggleBtn')).toBeHidden();
+  await expect(page.locator('#diffConfirmBtn')).toBeHidden();
 });
 
 test('diff review: a TIGHT LIST bullet change highlights the <li> itself, not the preceding heading (0.6.6 list-item mapping)', async ({ page }) => {
@@ -195,8 +216,8 @@ test('diff review: a TIGHT LIST bullet change highlights the <li> itself, not th
   await writeFile(path.join(fixtureDir, p), edited);
   await expect(page.locator('#content')).toContainText('決定事項Bを修正した', { timeout: 3000 });
 
-  const bar = page.locator('#diffReviewBar');
-  await expect(bar).toBeVisible({ timeout: 3000 });
+  // 0.6.8 Word-like declutter (owner): toolbar button replaces the old bar.
+  await expect(page.locator('#diffToggleBtn')).toBeVisible({ timeout: 3000 });
 
   // The changed bullet's own <li> gets .diff-changed directly (pass 1 of
   // diffReview.js's range-intersection match) — not the <h1>, which would
@@ -221,12 +242,13 @@ test('Marp decks get real change counts (baseline seeded on first sight, codex)'
   await waitForBaseline(page, p);
 
   await writeFile(path.join(fixtureDir, p), deck + '\n---\n\n# 追加スライド\n');
-  const bar = page.locator('#diffReviewBar');
-  await expect(bar).toBeVisible({ timeout: 6000 });
-  // The regression showed 「差分は取得できませんでした」 here; a seeded
-  // baseline yields a real change count instead.
-  await expect(bar).toContainText('変更されました');
-  await expect(bar).not.toContainText('取得できませんでした');
+  // 0.6.8 Word-like declutter (owner): the toolbar's 「変更 N」 button
+  // replaces the bar; the regression this guards against showed the
+  // unknown-baseline label (「変更 ?」) here instead of a real count.
+  const toggleBtn = page.locator('#diffToggleBtn');
+  await expect(toggleBtn).toBeVisible({ timeout: 6000 });
+  await expect(toggleBtn).toHaveText(/^変更 \d+$/);
+  await expect(toggleBtn).not.toHaveText('変更 ?');
 });
 
 test('baselines are namespaced by served root (no cross-project bleed)', async ({ page }) => {
@@ -257,8 +279,10 @@ test('baselines are namespaced by served root (no cross-project bleed)', async (
   await page.locator('.tree-item[data-path="shared.md"] [data-action="open"]').click();
   await expect(page.locator('#content h1')).toHaveText('Project B');
   await page.waitForTimeout(700);
-  // With the bug, A's hash mismatches B's content -> spurious bar.
-  await expect(page.locator('#diffReviewBar')).toBeHidden();
+  // With the bug, A's hash mismatches B's content -> spurious toolbar
+  // controls. 0.6.8 Word-like declutter (owner): toolbar button replaces
+  // the bar for this assertion.
+  await expect(page.locator('#diffToggleBtn')).toBeHidden();
   await page.goto('about:blank');
   await serverB.stop();
   await removeFixtureDir(rootA);

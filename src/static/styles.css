@@ -185,7 +185,9 @@ body {
 .tree-children { padding-left: 16px; }
 .tree-children.collapsed { display: none; }
 
-/* Unread/seen tree badges (0.6.5, modules/unreadBadges.js) */
+/* Unread tree badge (0.6.5, modules/unreadBadges.js — the green ✓ "seen"
+   variant this used to also render was removed in 0.6.8, owner: "既読マー
+   ク(緑✓)いらない"; a read file now simply carries no badge). */
 .tree-badge-status {
     flex: none;
     margin-left: auto;
@@ -194,7 +196,6 @@ body {
     line-height: 1;
 }
 .tree-badge-status.is-unread { color: var(--accent); }
-.tree-badge-status.is-seen { color: var(--success); font-weight: 700; }
 
 .tree-badge-count {
     flex: none;
@@ -1076,77 +1077,12 @@ body {
 .search-jump-flash { animation: searchJumpFlash 1.5s ease-out; }
 
 /* ============================================================
-   Diff Review (modules/diffReview.js — 0.6.4 差分バー + ハイライト)
+   Diff Review (modules/diffReview.js — 0.6.4 ハイライト + ジャンプ;
+   0.6.8: the standalone #diffReviewBar band is REMOVED — the toolbar's
+   #diffToggleBtn/#diffConfirmBtn reuse the existing .toolbar-btn/.hidden/
+   .toolbar-btn.active rules (see styles.css's Toolbar section), so there
+   is no dedicated CSS for them here.)
    ============================================================ */
-
-.diff-bar {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 8px 16px;
-    border-bottom: 1px solid var(--border);
-    background: color-mix(in srgb, var(--warning) 10%, var(--bg-secondary));
-    font-size: 12.5px;
-    color: var(--text-secondary);
-}
-
-.diff-bar.hidden { display: none; }
-
-.diff-bar-count { font-weight: 700; color: var(--warning); }
-
-.diff-bar-note { color: var(--text-muted); font-style: italic; flex: 1; }
-
-.diff-bar-hint { margin-left: auto; color: var(--text-muted); white-space: nowrap; }
-
-.diff-toggle {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    background: none;
-    border: none;
-    padding: 0;
-    cursor: pointer;
-    color: var(--text-secondary);
-    font-size: 12.5px;
-    font-family: inherit;
-    white-space: nowrap;
-}
-
-.diff-toggle-track {
-    width: 30px;
-    height: 17px;
-    border-radius: 9px;
-    background: var(--border);
-    position: relative;
-    flex: none;
-    transition: background 0.15s;
-}
-
-.diff-toggle-track::after {
-    content: "";
-    position: absolute;
-    left: 2px;
-    top: 2px;
-    width: 13px;
-    height: 13px;
-    border-radius: 50%;
-    background: #fff;
-    transition: transform 0.15s;
-}
-
-.diff-toggle[aria-pressed="true"] .diff-toggle-track { background: var(--accent); }
-.diff-toggle[aria-pressed="true"] .diff-toggle-track::after { transform: translateX(13px); }
-
-.diff-bar-confirm {
-    padding: 5px 12px;
-    border: none;
-    border-radius: 6px;
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    font-family: inherit;
-    flex: none;
-}
 
 /* Block-level change highlights, applied to the SAME [data-source-line]
    elements search-jump uses. `:not(tr)` keeps table rows (the only
@@ -1249,8 +1185,9 @@ body {
         padding: 0 !important;
     }
 
-    .sidebar, .resize-handle, .toolbar, .tab-bar, .pdf-style-panel,
-    #diffReviewBar { display: none !important; }
+    .sidebar, .resize-handle, .toolbar, .tab-bar, .pdf-style-panel {
+        display: none !important;
+    }
 
     /* Review highlights are screen chrome, not document content — a
        printed/PDF'd page must not carry the green/yellow diff tints. */
@@ -1455,8 +1392,7 @@ body.marp-fullscreen {
 body.marp-fullscreen .sidebar,
 body.marp-fullscreen .resize-handle,
 body.marp-fullscreen .toolbar,
-body.marp-fullscreen .tab-bar,
-body.marp-fullscreen #diffReviewBar {
+body.marp-fullscreen .tab-bar {
     display: none !important;
 }
 
