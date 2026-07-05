@@ -1137,3 +1137,19 @@ describe('renderXlsxPreview — codex round-13 fix (midnight rounding carry)', (
     assert.ok(html.includes('2021/1/1 12:34:57'));
   });
 });
+
+describe('renderXlsxPreview — codex round-14 fix (formats on cached formula values)', () => {
+  it('a formula cell with a cached date serial renders as a date like its neighbors', () => {
+    const stylesXml = buildStylesXml({ cellXfsNumFmtIds: [0, 14] });
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody:
+        '<row r="1"><c r="A1" s="1"><v>46208</v></c>' +
+        '<c r="B1" s="1"><f>TODAY()</f><v>46208</v></c></row>',
+      stylesXml,
+    });
+    const { html } = renderXlsxPreview(buffer);
+    const dates = (html.match(/2026\/7\/5/g) || []).length;
+    assert.strictEqual(dates, 2, 'both the plain and the formula cell must render as dates');
+  });
+});

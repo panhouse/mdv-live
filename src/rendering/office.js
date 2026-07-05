@@ -678,17 +678,15 @@ function parseSheetRows(xml, sharedStrings, { maxRows, styleFormats = null, date
           // cell with a cached <v> (the no-cached-value case was handled
           // by the early formula fallback above).
           if (vMatchEarly) {
+            // Cached numeric values go through the same number-format path
+            // whether or not they came from a formula — a real Excel
+            // =TODAY() cell with a date style must render like its plain
+            // neighbors, not as a raw serial.
             const raw = decodeXmlEntities(vMatchEarly[1] ?? '');
-            if (fMatchEarly) {
-              // Formula WITH a cached value: keep showing the value as
-              // today — no date/percent/thousands conversion.
-              text = raw;
-            } else {
-              const sMatch = /\bs="(\d+)"/.exec(attrs);
-              const styleIdx = sMatch ? parseInt(sMatch[1], 10) : 0;
-              const fmt = styleFormats ? (styleFormats[styleIdx] || NO_FORMAT) : null;
-              text = formatNumericCell(raw, fmt, date1904);
-            }
+            const sMatch = /\bs="(\d+)"/.exec(attrs);
+            const styleIdx = sMatch ? parseInt(sMatch[1], 10) : 0;
+            const fmt = styleFormats ? (styleFormats[styleIdx] || NO_FORMAT) : null;
+            text = formatNumericCell(raw, fmt, date1904);
           } else {
             text = '';
           }
