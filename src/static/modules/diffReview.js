@@ -191,6 +191,16 @@ export const DiffReviewManager = {
     _requestTabRefresh: null,
     _staleRefetchKey: null,
     setRequestTabRefresh(fn) { this._requestTabRefresh = fn; },
+    /**
+     * Forget which paths have been journal-seeded. Called on WebSocket
+     * reconnect (app.js wiring): a reconnect may mean the server —
+     * and its in-memory journal — restarted, so every fast-path seed
+     * suppression is stale (codex round-16).
+     */
+    resetSeeds() {
+        this._seededPaths.clear();
+        this._staleRefetchKey = null;
+    },
 
     init() {
         this._buildDom();
@@ -288,7 +298,12 @@ export const DiffReviewManager = {
         if (!pathChanged && tab.etag && tab.etag === lastSeen.hash) {
             if (!this._seededPaths.has(tab.path)) {
                 this._seededPaths.add(tab.path);
-                MDVApi.diff(tab.path, '').catch(() => {});
+                // On failure, forget the suppression so a later visit
+                // retries instead of silently degrading to
+                // unknown-baseline (codex round-16).
+                MDVApi.diff(tab.path, '').catch(() => {
+                    this._seededPaths.delete(tab.path);
+                });
             }
             this._hide();
             return;

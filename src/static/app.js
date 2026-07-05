@@ -118,6 +118,11 @@ async function refreshCurrentTab() {
             // WS onFileRendered seam — refresh the diff bar here too or a
             // focus/reconnect repaint leaves it stale (codex round-2).
             DiffReviewManager.refresh();
+        } else {
+            // Even with nothing to repaint, run the diff refresh: after a
+            // server restart the fast path must get its chance to re-seed
+            // the (now empty) journal with this baseline (codex round-16).
+            DiffReviewManager.refresh();
         }
     } catch (e) {
         console.error('Failed to refresh tab:', e);
@@ -145,7 +150,13 @@ async function init() {
     WebSocketManager.setContentRenderer(ContentRenderer);
     WebSocketManager.setInlineNotesPanel(InlineNotesPanel);
     WebSocketManager.setPresenterView(PresenterView);
-    WebSocketManager.setRefreshCurrentTab(refreshCurrentTab);
+    WebSocketManager.setRefreshCurrentTab(() => {
+        // A reconnect may mean the server (and its in-memory change
+        // journal) restarted — drop the client's seed suppressions so
+        // baselines get re-recorded (codex round-16).
+        DiffReviewManager.resetSeeds();
+        return refreshCurrentTab();
+    });
     // 0.6.4 (diff review): re-run the active tab's baseline-diff check
     // after a live file_update actually repaints the content pane — see
     // modules/websocket.js's docstring.
