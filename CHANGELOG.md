@@ -50,7 +50,9 @@ Origin/Host 検証ロジックを一本化し、これらすべての変更系 A
 サーブ対象ディレクトリ（`mdv convert` の場合はカレントディレクトリ）に
 `mdv.config.json` を置くと、`port`/`depth`/`open`/`css`/`pdfOptions` を
 毎回 CLI 引数で指定しなくてもプロジェクトごとに固定できる。優先順位は
-**CLI 引数 > `mdv.config.json` > 組み込みデフォルト**。
+**CLI 引数 > `mdv.config.json` > 組み込みデフォルト**。`css`/`pdfOptions`
+はビューワの Style パネルにも自動で初期値として入る（パネルでの手動設定
+= ブラウザ記憶が常に優先）。
 
 ### Changed — エラーレスポンスの形を統一
 

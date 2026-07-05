@@ -178,13 +178,17 @@ MDV server running at http://localhost:8643
 }
 ```
 
-| キー | 型 | 対応する CLI フラグ |
+| キー | 型 | 効くところ |
 |---|---|---|
-| `port` | number | `-p, --port` |
-| `depth` | number | `-d, --depth` |
-| `open` | boolean | `--no-browser` の逆 |
-| `css` | string（`mdv.config.json` からの相対パス） | `-s, --style` (`mdv convert`) |
-| `pdfOptions` | string（同上） | `--pdf-options` (`mdv convert`) |
+| `port` | number | ビューワ（`-p, --port` 相当） |
+| `depth` | number | ビューワ（`-d, --depth` 相当） |
+| `open` | boolean | ビューワ（`--no-browser` の逆） |
+| `css` | string（`mdv.config.json` からの相対パス） | `mdv convert` の `-s` 相当 **+ ビューワの Style パネル初期値** |
+| `pdfOptions` | string（同上） | `mdv convert` の `--pdf-options` 相当 **+ ビューワの Style パネル初期値** |
+
+`css` / `pdfOptions` はビューワ起動時に Style パネルへ自動で入るので、
+プロジェクトごとの PDF スタイルが「開いただけで」適用されます。パネルで
+手動設定した値（ブラウザに記憶）が常に優先されます。
 
 **優先順位: CLI 引数 > `mdv.config.json` > 組み込みデフォルト**。未知のキーは
 警告を出して無視されます（エラーにはなりません）。
