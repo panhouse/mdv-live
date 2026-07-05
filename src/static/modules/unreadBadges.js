@@ -55,7 +55,7 @@
 import { state } from './state.js';
 import { elements } from './dom.js';
 import { TabManager } from './tabs.js';
-import { getLastSeen, markSeen, onSeen } from './diffReview.js';
+import { DiffReviewManager, getLastSeen, markSeen, onSeen } from './diffReview.js';
 
 export const UnreadBadgesManager = {
     // path -> etag|null. Presence = unread. `null` etag means "unread but
@@ -73,6 +73,10 @@ export const UnreadBadgesManager = {
         this._buildHeaderChip();
         onSeen((path, hash) => this._handleSeen(path, hash));
         document.addEventListener('keydown', (e) => this._handleShortcut(e));
+        // The bulk confirm may include the ACTIVE file — its diff bar
+        // must not keep claiming "changed" for a baseline this action just
+        // updated (codex round-5).
+        DiffReviewManager.refresh();
     },
 
     _buildHeaderChip() {
