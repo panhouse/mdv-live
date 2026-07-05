@@ -924,3 +924,30 @@ describe('renderXlsxPreview — codex round-5 fixes (seconds, CJK time builtins)
     assert.ok(html.includes('2026/7/5'));
   });
 });
+
+describe('renderXlsxPreview — codex round-6 fixes (datetime seconds, serial 60)', () => {
+  it('seconds-bearing datetime formats keep seconds', () => {
+    const stylesXml = buildStylesXml({
+      numFmts: [{ id: 167, code: 'yyyy-mm-dd h:mm:ss' }],
+      cellXfsNumFmtIds: [0, 167],
+    });
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody: '<row r="1"><c r="A1" s="1"><v>44197.5242685</v></c></row>',
+      stylesXml,
+    });
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(html.includes('2021/1/1 12:34:57'), 'timestamp must keep :57 seconds');
+  });
+
+  it('serial 60 renders as Excel\'s compatibility 1900/2/29', () => {
+    const stylesXml = buildStylesXml({ cellXfsNumFmtIds: [0, 14] });
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody: '<row r="1"><c r="A1" s="1"><v>60</v></c></row>',
+      stylesXml,
+    });
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(html.includes('1900/2/29'));
+  });
+});

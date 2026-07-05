@@ -419,9 +419,17 @@ function isDate1904(workbookXml) {
  * @param {boolean} date1904 - Whether the workbook uses the 1904 date system
  * @returns {string}
  */
-function formatExcelDate(serial, hasTime, date1904) {
+function formatExcelDate(serial, hasTime, date1904, hasSeconds) {
   const wholeDays = Math.floor(serial);
   const fraction = serial - wholeDays;
+
+  // Excel's 1900 system displays serial 60 as the nonexistent 1900/2/29
+  // (Lotus 1-2-3 compatibility). Match the workbook's own display.
+  if (!date1904 && wholeDays === 60) {
+    return hasTime && fraction > 1e-6
+      ? `1900/2/29 ${formatExcelTime(fraction, false, hasSeconds)}`
+      : '1900/2/29';
+  }
 
   const epoch = date1904
     ? Date.UTC(1904, 0, 1)
@@ -430,10 +438,10 @@ function formatExcelDate(serial, hasTime, date1904) {
 
   let out = `${d.getUTCFullYear()}/${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
   if (hasTime && fraction > 1e-6) {
-    const totalMinutes = Math.round(fraction * 24 * 60);
-    const hh = Math.floor(totalMinutes / 60) % 24;
-    const mm = totalMinutes % 60;
-    out += ` ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+    // Delegate to the shared time formatter so seconds-bearing datetime
+    // formats (yyyy-mm-dd h:mm:ss) keep their seconds instead of silently
+    // rounding to minutes.
+    out += ` ${formatExcelTime(fraction, false, hasSeconds)}`;
   }
   return out;
 }
@@ -474,7 +482,7 @@ function formatNumericCell(raw, fmt, date1904) {
   const num = Number(raw);
   if (!Number.isFinite(num)) return raw;
   if (fmt.isTimeOnly) return formatExcelTime(num, fmt.isElapsed, fmt.hasSeconds);
-  if (fmt.isDate) return formatExcelDate(num, fmt.hasTime, date1904);
+  if (fmt.isDate) return formatExcelDate(num, fmt.hasTime, date1904, fmt.hasSeconds);
   if (fmt.isPercent) return formatPercent(num);
   if (fmt.isThousands) return formatThousands(num);
   return raw;
