@@ -114,16 +114,30 @@ describe('PDF Export API', () => {
   it('POST /api/pdf/export returns 400 without filePath', async () => {
     const res = await fetch(`${ctx.baseUrl}/api/pdf/export`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
       body: JSON.stringify({}),
     });
     assert.strictEqual(res.status, 400);
   });
 
+  it('POST /api/pdf/export rejects cross-origin requests (Origin guard)', async () => {
+    const res = await fetch(`${ctx.baseUrl}/api/pdf/export`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Origin': 'http://evil.example',
+      },
+      body: JSON.stringify({ filePath: 'plain.md' }),
+    });
+    assert.strictEqual(res.status, 403);
+    const data = await res.json();
+    assert.strictEqual(data.code, 'ORIGIN_REJECTED');
+  });
+
   it('POST /api/pdf/export returns 403 for path traversal', async () => {
     const res = await fetch(`${ctx.baseUrl}/api/pdf/export`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
       body: JSON.stringify({ filePath: '../../../etc/passwd' }),
     });
     assert.strictEqual(res.status, 403);
@@ -132,7 +146,7 @@ describe('PDF Export API', () => {
   it('POST /api/pdf/export returns 404 for missing file', async () => {
     const res = await fetch(`${ctx.baseUrl}/api/pdf/export`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
       body: JSON.stringify({ filePath: 'no-such-file.md' }),
     });
     assert.strictEqual(res.status, 404);
@@ -143,7 +157,7 @@ describe('PDF Export API', () => {
   it('POST /api/pdf/export returns 404 (controlled JSON) for directory path', async () => {
     const res = await fetch(`${ctx.baseUrl}/api/pdf/export`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
       body: JSON.stringify({ filePath: 'subdir' }),
     });
     assert.strictEqual(res.status, 404);
@@ -223,7 +237,7 @@ describe('PDF Export API', () => {
 
     const res = await fetch(`${ctx.baseUrl}/api/pdf/export`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
       body: JSON.stringify({ filePath: 'plain.md' }),
     });
     assert.strictEqual(res.status, 200);
@@ -254,7 +268,7 @@ describe('PDF Export API', () => {
       try {
         const res = await fetch(`${ctx.baseUrl}/api/pdf/export`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
           body: JSON.stringify({ filePath: 'leak.md' }),
         });
         assert.strictEqual(res.status, 403, `symlink to outside should be denied; got ${res.status}`);
@@ -346,7 +360,7 @@ describe('PDF Export API', () => {
   it('POST /api/pdf/export returns application/pdf for plain markdown (md-to-pdf path)', { timeout: PDF_TEST_TIMEOUT_MS }, async () => {
     const res = await fetch(`${ctx.baseUrl}/api/pdf/export`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
       body: JSON.stringify({ filePath: 'plain.md' }),
     });
     assert.strictEqual(res.status, 200, `expected 200, got ${res.status}`);
@@ -359,7 +373,7 @@ describe('PDF Export API', () => {
   it('POST /api/pdf/export returns application/pdf for Marp file', { timeout: PDF_TEST_TIMEOUT_MS }, async () => {
     const res = await fetch(`${ctx.baseUrl}/api/pdf/export`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
       body: JSON.stringify({ filePath: 'marp.md' }),
     });
     assert.strictEqual(res.status, 200, `expected 200, got ${res.status}`);

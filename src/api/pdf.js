@@ -3,6 +3,7 @@ import path from 'path';
 import os from 'os';
 import { isMarp } from '../rendering/markdown.js';
 import { mkError, sendError } from '../utils/errors.js';
+import { makeOriginGuard } from './middleware/originGuard.js';
 import { validatePathReal } from '../utils/path.js';
 import { exportMarpPdf, exportMarkdownPdf } from '../services/pdf.js';
 
@@ -41,7 +42,10 @@ async function resolveOptionalUserFile(relativePath, rootDir) {
 export function setupPdfRoutes(app) {
   const { rootDir } = app.locals;
 
-  app.post('/api/pdf/export', async (req, res) => {
+  // Not a state mutation, but a POST that spawns marp-cli/md-to-pdf on an
+  // attacker-chosen file — same Origin/Host guard as the mutation routes
+  // (allow-list read per request from app.locals; see src/server.js).
+  app.post('/api/pdf/export', makeOriginGuard(), async (req, res) => {
     const { filePath, stylePath, pdfOptionsPath } = req.body;
 
     if (!filePath) {
