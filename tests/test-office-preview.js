@@ -1107,3 +1107,33 @@ describe('renderXlsxPreview — codex round-12 fixes (decimal precision, formula
     assert.strictEqual(rowCount, 10);
   });
 });
+
+describe('renderXlsxPreview — codex round-13 fix (midnight rounding carry)', () => {
+  it('a timestamp that rounds up to 24:00 carries into the NEXT day', () => {
+    const stylesXml = buildStylesXml({
+      numFmts: [{ id: 170, code: 'yyyy-mm-dd h:mm:ss' }],
+      cellXfsNumFmtIds: [0, 170],
+    });
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody: '<row r="1"><c r="A1" s="1"><v>44197.9999999</v></c></row>',
+      stylesXml,
+    });
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(html.includes('2021/1/2 00:00:00'), `expected next-day carry, html: ${html.slice(html.indexOf('<tbody'), html.indexOf('</tbody'))}`);
+  });
+
+  it('normal timestamps are unaffected by the carry logic', () => {
+    const stylesXml = buildStylesXml({
+      numFmts: [{ id: 171, code: 'yyyy-mm-dd h:mm:ss' }],
+      cellXfsNumFmtIds: [0, 171],
+    });
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody: '<row r="1"><c r="A1" s="1"><v>44197.5242685</v></c></row>',
+      stylesXml,
+    });
+    const { html } = renderXlsxPreview(buffer);
+    assert.ok(html.includes('2021/1/1 12:34:57'));
+  });
+});

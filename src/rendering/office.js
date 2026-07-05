@@ -425,15 +425,32 @@ function isDate1904(workbookXml) {
  * @returns {string}
  */
 function formatExcelDate(serial, hasTime, date1904, hasSeconds) {
-  const wholeDays = Math.floor(serial);
+  const pad = (n) => String(n).padStart(2, '0');
+  let wholeDays = Math.floor(serial);
   const fraction = serial - wholeDays;
+
+  // Round the time part to display precision FIRST and carry a full day
+  // into the date — otherwise 44197.9999999 renders as the PREVIOUS day
+  // at 00:00 instead of the next day (near-midnight timestamps).
+  let timeStr = '';
+  if (hasTime && fraction > 1e-6) {
+    const unit = hasSeconds ? 86400 : 1440;
+    let ticks = Math.round(fraction * unit);
+    if (ticks >= unit) {
+      wholeDays += 1;
+      ticks = 0;
+    }
+    if (hasSeconds) {
+      timeStr = ` ${pad(Math.floor(ticks / 3600))}:${pad(Math.floor((ticks % 3600) / 60))}:${pad(ticks % 60)}`;
+    } else {
+      timeStr = ` ${pad(Math.floor(ticks / 60))}:${pad(ticks % 60)}`;
+    }
+  }
 
   // Excel's 1900 system displays serial 60 as the nonexistent 1900/2/29
   // (Lotus 1-2-3 compatibility). Match the workbook's own display.
   if (!date1904 && wholeDays === 60) {
-    return hasTime && fraction > 1e-6
-      ? `1900/2/29 ${formatExcelTime(fraction, false, hasSeconds)}`
-      : '1900/2/29';
+    return `1900/2/29${timeStr}`;
   }
 
   const epoch = date1904
@@ -441,14 +458,7 @@ function formatExcelDate(serial, hasTime, date1904, hasSeconds) {
     : (wholeDays > 59 ? Date.UTC(1899, 11, 30) : Date.UTC(1899, 11, 31));
   const d = new Date(epoch + wholeDays * 86400000);
 
-  let out = `${d.getUTCFullYear()}/${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
-  if (hasTime && fraction > 1e-6) {
-    // Delegate to the shared time formatter so seconds-bearing datetime
-    // formats (yyyy-mm-dd h:mm:ss) keep their seconds instead of silently
-    // rounding to minutes.
-    out += ` ${formatExcelTime(fraction, false, hasSeconds)}`;
-  }
-  return out;
+  return `${d.getUTCFullYear()}/${d.getUTCMonth() + 1}/${d.getUTCDate()}${timeStr}`;
 }
 
 /**
