@@ -318,8 +318,21 @@ export const SearchPalette = {
         const hit = this._hits[index];
         if (!hit) return;
         this.close();
-        await TabManager.open(hit.path);
-        this._scrollToHit(hit);
+        // TabManager.renderActive() restores the tab's remembered scroll
+        // position via setTimeout(0) (tabs.js), which would land AFTER an
+        // immediate jump and yank the pane away from the hit. Suppress the
+        // restore with the existing skipScrollRestore flag (same mechanism
+        // editor.js uses), and run the jump in a macrotask queued behind
+        // the render so layout has settled.
+        state.skipScrollRestore = true;
+        try {
+            await TabManager.open(hit.path);
+        } finally {
+            setTimeout(() => {
+                state.skipScrollRestore = false;
+                this._scrollToHit(hit);
+            }, 0);
+        }
     },
 
     _scrollToHit(hit) {

@@ -17,10 +17,15 @@ test.beforeAll(async () => {
     ].join('\n') + '\n',
     // No hits — proves the query doesn't match everything.
     'plain.md': '# Unrelated\n\nNo matches in this file.\n',
-    // One hit inside a subdirectory.
+    // One hit inside a subdirectory, deep inside a LONG document. The
+    // length is load-bearing: TabManager.renderActive() restores the
+    // remembered scrollTop via setTimeout(0), and an unsuppressed restore
+    // yanks the pane back to the top AFTER the search jump (codex review
+    // finding) — only a hit far below the fold catches that regression.
     'docs/sub/estimate.md': [
       '# 見積書',
       '',
+      ...Array.from({ length: 120 }, (_, i) => `前段の埋め草パラグラフ ${i + 1} 行目。\n`),
       'エンジニア単価は135万円/月とする。'
     ].join('\n') + '\n'
   });
@@ -84,9 +89,11 @@ test('search palette: Cmd/Ctrl+K opens, debounced query renders grouped highligh
   const activeTab = page.locator('#tabBar .tab.active');
   await expect(activeTab).toContainText('estimate.md');
 
-  // The matching block (raw line 3: 'エンジニア単価は135万円/月とする。') is
-  // scrolled into the viewport and briefly flash-highlighted.
-  const targetBlock = page.locator('#content [data-source-line="3"]');
+  // The matching block — deep below 120 filler paragraphs, so an
+  // unsuppressed scroll-restore racing the jump would leave it far
+  // off-screen — is scrolled into the viewport and flash-highlighted.
+  // Located by hit text, not a hardcoded source line.
+  const targetBlock = page.locator('#content [data-source-line]', { hasText: 'エンジニア単価は135万円/月とする。' });
   await expect(targetBlock).toBeInViewport();
   await expect(targetBlock).toHaveClass(/search-jump-flash/);
   // The flash class is temporary (SEARCH_JUMP_FLASH_MS ~1.5s) — it must

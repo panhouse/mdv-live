@@ -278,3 +278,26 @@ describe('api/search.js — GET /api/search (HTTP)', () => {
     assert.strictEqual(data.results[0].col, 4);
   });
 });
+
+describe('searchFiles — runaway guard counts walked (not just grepped) files', () => {
+  it('terminates on maxFiles even when every file is type/size-skipped', async () => {
+    const os = await import('node:os');
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-walkcap-'));
+    try {
+      // 6 binary files (type-skipped) + 1 matching md AFTER them in sort order.
+      for (let i = 0; i < 6; i++) {
+        await fs.writeFile(path.join(dir, `img${i}.png`), Buffer.from([0x89, 0x50]));
+      }
+      await fs.writeFile(path.join(dir, 'zzz.md'), 'needle here');
+
+      const capped = await searchFiles({ rootDir: dir, query: 'needle', maxFiles: 3 });
+      assert.strictEqual(capped.truncated, true, 'walk must stop at the walked-files cap');
+      assert.strictEqual(capped.results.length, 0, 'the md beyond the cap must not be reached');
+
+      const uncapped = await searchFiles({ rootDir: dir, query: 'needle' });
+      assert.strictEqual(uncapped.results.length, 1);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});

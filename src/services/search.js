@@ -83,13 +83,16 @@ function buildSnippet(rawLine, matchIndex, matchLength) {
  * @param {string} options.rootDir - Absolute root directory to search from
  * @param {string} options.query - Literal substring to search for (never treated as regex)
  * @param {number} [options.limit] - Max results to return (clamped to SEARCH_MAX_RESULTS); defaults to SEARCH_MAX_RESULTS
+ * @param {number} [options.maxFiles] - Runaway guard: max FILE ENTRIES WALKED
+ *   (including type/size-skipped ones — a folder of 50k images must still
+ *   terminate). Defaults to SEARCH_MAX_FILES; overridable for tests.
  * @returns {Promise<{
  *   results: Array<{ path: string, line: number, col: number, snippet: string }>,
  *   truncated: boolean,
  *   stats: { filesScanned: number, elapsedMs: number }
  * }>}
  */
-export async function searchFiles({ rootDir, query, limit }) {
+export async function searchFiles({ rootDir, query, limit, maxFiles = SEARCH_MAX_FILES }) {
   const startedAt = Date.now();
 
   if (!query) {
@@ -102,7 +105,8 @@ export async function searchFiles({ rootDir, query, limit }) {
   const cap = Math.min(requestedLimit, SEARCH_MAX_RESULTS);
 
   const results = [];
-  let filesScanned = 0;
+  let filesScanned = 0; // files actually opened and grepped (reported in stats)
+  let filesWalked = 0;  // every file entry considered, incl. skipped — feeds the runaway guard
   let truncated = false;
   let stopped = false;
 
@@ -128,11 +132,15 @@ export async function searchFiles({ rootDir, query, limit }) {
       if (entry.isDirectory()) {
         await walk(fullPath);
       } else if (entry.isFile()) {
-        if (filesScanned >= SEARCH_MAX_FILES) {
+        // Guard on WALKED entries, not grepped ones: type/size-skipped
+        // files (images, >1MB logs, ...) must also consume the budget or a
+        // huge binary-heavy folder walks forever (codex review finding).
+        if (filesWalked >= maxFiles) {
           truncated = true;
           stopped = true;
           return;
         }
+        filesWalked++;
         await searchFile(fullPath);
       }
       // symlinks/sockets/etc. (neither isFile() nor isDirectory()) are skipped
