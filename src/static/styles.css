@@ -585,6 +585,103 @@ body {
 }
 
 /* ============================================================
+   Office Preview (docx/xlsx/pptx "vibe" preview)
+   ============================================================ */
+
+.office-preview-pane { max-width: 900px; }
+
+.office-preview-banner {
+    padding: 8px 16px;
+    margin-bottom: 16px;
+    border-radius: 6px;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.office-preview-meta,
+.office-preview-notice {
+    margin-bottom: 12px;
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.office-preview-empty {
+    padding: 24px;
+    color: var(--text-muted);
+    text-align: center;
+}
+
+/* xlsx */
+.office-preview-table-wrap {
+    overflow-x: auto;
+    max-height: 70vh;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+}
+
+.office-preview-table { border-collapse: collapse; width: 100%; font-size: 14px; }
+.office-preview-table th, .office-preview-table td {
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    white-space: nowrap;
+}
+.office-preview-table thead th {
+    position: sticky;
+    top: 0;
+    background: var(--bg-secondary);
+    font-weight: 600;
+    z-index: 1;
+}
+.office-preview-table tbody tr:nth-child(even) { background: var(--bg-secondary); }
+
+/* pptx */
+.office-preview-slides { display: flex; flex-direction: column; gap: 16px; }
+.office-preview-slide {
+    padding: 16px 20px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+}
+.office-preview-slide-num { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+.office-preview-slide-title { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+.office-preview-slide-bullets { padding-left: 1.4em; color: var(--text-secondary); }
+.office-preview-slide-bullets li { margin-bottom: 4px; }
+
+/* docx */
+.office-preview-docx p {
+    margin-bottom: 12px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.office-preview-actions { margin-top: 20px; }
+
+.preview-download-btn {
+    display: inline-block;
+    padding: 8px 16px;
+    border-radius: 6px;
+    background: var(--accent);
+    color: white;
+    text-decoration: none;
+    font-size: 14px;
+}
+.preview-download-btn:hover { opacity: 0.9; }
+
+/* ============================================================
+   Video Fallback (unsupported codec, e.g. MPEG-4 Part 2 / HEVC)
+   ============================================================ */
+
+.video-fallback-message {
+    max-width: 480px;
+    text-align: center;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+/* ============================================================
    Editor Mode
    ============================================================ */
 

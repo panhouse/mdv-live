@@ -5,6 +5,77 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-07-05
+
+### Added — Office 雰囲気プレビュー（.xlsx / .pptx / .docx）
+
+20MB 以下の `.xlsx`（先頭シートの表 + シート名一覧）/ `.pptx`（スライドごとの
+テキストアウトライン）/ `.docx`（段落の羅列）を、レイアウト再現なしの
+「雰囲気プレビュー」としてブラウザ内で確認できるようになった（fflate による
+zip+XML 軽量パース、`src/rendering/office.js`）。破損・パスワード付き・20MB 超・
+旧形式（`.doc`/`.xls`/`.ppt`）は従来通りダウンロードカードにフォールバック。
+
+### Added — 再生できない動画のフォールバック表示
+
+MPEG-4 Part 2 / HEVC などブラウザが再生できないコーデックの動画を開いたとき、
+真っ黒なプレイヤーの代わりに案内とダウンロードボタンを表示するようになった。
+
+### Security — 全ファイル変更系 API に CSRF (Origin/Host) ガード
+
+これまで Origin/Host 検証が実装されていたのは marpNote（スピーカーノート
+自動保存）エンドポイントのみで、ファイル保存/削除/`mkdir`/`move`/
+アップロード/サーバー停止は無防備だった（悪意ある外部ページからの form
+POST で操作できてしまう構成）。`src/api/middleware/originGuard.js` に
+Origin/Host 検証ロジックを一本化し、これらすべての変更系 API と
+`POST /api/pdf/export`（任意ファイルを PDF 変換ツールに渡す POST）に適用した。
+
+### Changed — メインのファイル保存経路がアトミック + ロック方式に
+
+`POST /api/file` が素の `fs.writeFile` 呼び出しから、`atomicWrite`
+（一時ファイル + rename、別ファイルシステムをまたぐ場合のフォールバック、
+パーミッション保持）と `withLock`（パスごとの Promise チェーン mutex）を
+経由する方式に変わった。書き込み中のクラッシュや同時書き込みでファイルが
+壊れる・混ざるリスクを解消。
+
+### Fixed — ファイルツリー表示とファイル監視の無視リストが乖離していた
+
+ファイルツリー (`node_modules`/`__pycache__`/`.git` の3件のみ無視) と
+ファイル監視 (`dist/`・`venv/` など19件を無視) が別々の無視リストを
+持っており、ツリーには表示されるのに外部からの変更が監視されず反映されない
+ディレクトリが存在した。`src/utils/ignorePatterns.js` に無視リストを
+一本化し、この乖離を解消。
+
+### Added — `mdv.config.json`（プロジェクトごとの設定ファイル）
+
+サーブ対象ディレクトリ（`mdv convert` の場合はカレントディレクトリ）に
+`mdv.config.json` を置くと、`port`/`depth`/`open`/`css`/`pdfOptions` を
+毎回 CLI 引数で指定しなくてもプロジェクトごとに固定できる。優先順位は
+**CLI 引数 > `mdv.config.json` > 組み込みデフォルト**。
+
+### Changed — エラーレスポンスの形を統一
+
+各ルートで個別に書かれていた `res.status().json({...})` を廃止し、
+`src/utils/errors.js` の `sendError`/`mkError` 経由に統一。レスポンスは
+すべて `{ ok: false, code, error }` の形になり、内部の fs パス等が
+エラーメッセージに漏れることもなくなった。
+
+### Changed — multer を 2.x に更新
+
+既知の脆弱性が修正された `multer` 2.x に更新。
+
+### Internal（開発者向け・API 互換性への影響なし）
+
+- フロントエンドの単一 IIFE（旧 `app.js`、約4,000行）をネイティブ ES
+  Modules に分解（`src/static/modules/` 約25ファイル + `src/static/lib/`）。
+  ビルドステップは導入していない（zero-build を維持）。
+- CLI (`bin/mdv.js`) を `src/cli/` 配下のテスト可能なモジュール群
+  （`registry`/`config`/`convert`/`resolveTarget`/`serverRegistry`/`errors`）
+  に分解。`bin/mdv.js` はサブコマンドへの dispatch と `process.exit()` のみ
+  を担う薄いエントリーポイントに。
+- Playwright による E2E スモークスイート（`npm run test:e2e`）と GitHub
+  Actions CI を追加。`npm test` / `npm run test:e2e` / `npm run lint` が
+  すべて PASS/クリーンであることが以降のマージ条件。
+
 ## [0.5.22] - 2026-06-02
 
 ### Fixed — 大量のファイル/フォルダがあるディレクトリで開くとタブが固まる

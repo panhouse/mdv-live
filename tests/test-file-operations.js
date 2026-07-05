@@ -5,10 +5,9 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 
-import { createMdvServer } from '../src/server.js';
+import { startTestServer } from './helpers/server.js';
 
 /**
  * Check if a file or directory exists at the given path.
@@ -18,37 +17,30 @@ async function pathExists(filePath) {
 }
 
 describe('File Operations', () => {
-  let server;
-  let tempDir;
-  const PORT = 19997;
+  let ctx;
 
   function apiUrl(endpoint) {
-    return `http://localhost:${PORT}${endpoint}`;
+    return `${ctx.baseUrl}${endpoint}`;
   }
 
   function tempPath(...segments) {
-    return path.join(tempDir, ...segments);
+    return path.join(ctx.rootDir, ...segments);
   }
 
   before(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-test-'));
-
-    await Promise.all([
-      fs.writeFile(tempPath('README.md'), '# Hello\n\nThis is a test.'),
-      fs.writeFile(tempPath('test.py'), "print('hello')"),
-      fs.mkdir(tempPath('subdir')),
-    ]);
-    await fs.writeFile(tempPath('subdir', 'nested.md'), '# Nested');
-
-    server = createMdvServer({ rootDir: tempDir, port: PORT });
-    await server.start();
+    ctx = await startTestServer({
+      files: {
+        'README.md': '# Hello\n\nThis is a test.',
+        'test.py': "print('hello')",
+        'subdir/nested.md': '# Nested',
+      },
+    });
   });
 
   after(async () => {
-    if (server) {
-      await server.stop();
+    if (ctx) {
+      await ctx.stop();
     }
-    await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   describe('GET /api/file', () => {
@@ -93,7 +85,7 @@ describe('File Operations', () => {
 
       const response = await fetch(apiUrl('/api/file'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
         body: JSON.stringify({ path: 'README.md', content: newContent }),
       });
       assert.strictEqual(response.status, 200);
@@ -107,7 +99,7 @@ describe('File Operations', () => {
     it('should create new file', async () => {
       const response = await fetch(apiUrl('/api/file'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
         body: JSON.stringify({ path: 'new-file.md', content: '# New File' }),
       });
       assert.strictEqual(response.status, 200);
@@ -115,7 +107,36 @@ describe('File Operations', () => {
       const exists = await pathExists(tempPath('new-file.md'));
       assert.ok(exists);
 
+      // New files must get umask-based default permissions (as fs.writeFile
+      // did), not atomicWrite's restrictive 0600 temp-file mode.
+      const stat = await fs.stat(tempPath('new-file.md'));
+      assert.strictEqual(stat.mode & 0o777, 0o666 & ~process.umask());
+
       await fs.unlink(tempPath('new-file.md'));
+    });
+
+    it('should write through a symlink (target updated, link preserved)', async () => {
+      // Regression guard: fs.writeFile followed symlinks, but a naive
+      // atomicWrite(fullPath) rename would replace the LINK with a regular
+      // file and leave the target untouched.
+      await fs.writeFile(tempPath('link-target.md'), 'original');
+      await fs.symlink('link-target.md', tempPath('link.md'));
+
+      const response = await fetch(apiUrl('/api/file'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
+        body: JSON.stringify({ path: 'link.md', content: 'via symlink' }),
+      });
+      assert.strictEqual(response.status, 200);
+
+      const targetContent = await fs.readFile(tempPath('link-target.md'), 'utf-8');
+      assert.strictEqual(targetContent, 'via symlink', 'the symlink TARGET must receive the write');
+
+      const linkStat = await fs.lstat(tempPath('link.md'));
+      assert.ok(linkStat.isSymbolicLink(), 'the symlink itself must survive the save');
+
+      await fs.unlink(tempPath('link.md'));
+      await fs.unlink(tempPath('link-target.md'));
     });
   });
 
@@ -125,6 +146,7 @@ describe('File Operations', () => {
 
       const response = await fetch(apiUrl('/api/file?path=to_delete.md'), {
         method: 'DELETE',
+        headers: { 'Sec-Fetch-Site': 'same-origin' },
       });
       assert.strictEqual(response.status, 200);
 
@@ -138,6 +160,7 @@ describe('File Operations', () => {
 
       const response = await fetch(apiUrl('/api/file?path=to_delete_dir'), {
         method: 'DELETE',
+        headers: { 'Sec-Fetch-Site': 'same-origin' },
       });
       assert.strictEqual(response.status, 200);
 
@@ -148,6 +171,7 @@ describe('File Operations', () => {
     it('should return 404 for non-existent file', async () => {
       const response = await fetch(apiUrl('/api/file?path=nonexistent.md'), {
         method: 'DELETE',
+        headers: { 'Sec-Fetch-Site': 'same-origin' },
       });
       assert.strictEqual(response.status, 404);
     });
@@ -157,7 +181,7 @@ describe('File Operations', () => {
     it('should create directory', async () => {
       const response = await fetch(apiUrl('/api/mkdir'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
         body: JSON.stringify({ path: 'new_folder' }),
       });
       assert.strictEqual(response.status, 200);
@@ -171,7 +195,7 @@ describe('File Operations', () => {
     it('should create nested directories', async () => {
       const response = await fetch(apiUrl('/api/mkdir'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
         body: JSON.stringify({ path: 'deep/nested/folder' }),
       });
       assert.strictEqual(response.status, 200);
@@ -189,7 +213,7 @@ describe('File Operations', () => {
 
       const response = await fetch(apiUrl('/api/move'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
         body: JSON.stringify({ source: 'source.md', destination: 'moved.md' }),
       });
       assert.strictEqual(response.status, 200);

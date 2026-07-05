@@ -1,28 +1,40 @@
 /**
  * File operations API routes
+ *
+ * Error responses go through utils/errors.js (sendError/mkError) so every
+ * route returns the normalized `{ ok:false, code, error }` envelope with a
+ * stable HTTP status and no raw fs error message leakage. Mutating routes
+ * (save/delete/mkdir/move) are Origin/Host-guarded (CSRF defense, same rule
+ * as src/api/marpNote/guards.js) and serialize per-path through
+ * concurrency/pathLock.js; save additionally goes through
+ * utils/atomicWrite.js (temp file + rename, permission-preserving).
  */
 
 import fs from 'fs/promises';
 import { createReadStream } from 'fs';
 import path from 'path';
 import mime from 'mime-types';
-import WebSocket from 'ws';
 import { getFileType } from '../utils/fileTypes.js';
 import { renderFile } from '../rendering/index.js';
-import { validatePathReal } from '../utils/path.js';
+import { renderXlsxPreview, renderPptxPreview, renderDocxPreview } from '../rendering/office.js';
+import { resolveWithinRoot } from '../utils/path.js';
+import { escapeHtml } from '../utils/html.js';
+import { mkError, sendError, ERROR_STATUS } from '../utils/errors.js';
+import { atomicWrite } from '../utils/atomicWrite.js';
+import { withLock } from '../concurrency/pathLock.js';
+import { makeOriginGuard } from './middleware/originGuard.js';
+import { broadcastTreeUpdate } from '../websocket.js';
+import { OFFICE_PREVIEW_MAX_BYTES } from '../config/constants.js';
 
-/**
- * Validate path and resolve to full path (with symlink protection)
- * @param {string} relativePath - Relative path to validate
- * @param {string} rootDir - Root directory
- * @returns {Promise<{ valid: boolean, fullPath: string }>} Validation result with full path
- */
-async function resolveAndValidate(relativePath, rootDir) {
-  if (!relativePath || !await validatePathReal(relativePath, rootDir)) {
-    return { valid: false, fullPath: '' };
-  }
-  return { valid: true, fullPath: path.join(rootDir, relativePath) };
-}
+// Maps a lowercase extension to the office.js renderer that understands it.
+// Kept next to fileTypes.js's officePreview flag (which decides *whether* to
+// attempt a preview at all) but separate, since the flag is a filename-level
+// concept while this is purely "which parser".
+const OFFICE_RENDERERS = {
+  xlsx: renderXlsxPreview,
+  pptx: renderPptxPreview,
+  docx: renderDocxPreview,
+};
 
 /**
  * Check whether a file or directory exists at the given path.
@@ -34,20 +46,39 @@ async function pathExists(fullPath) {
 }
 
 /**
- * Broadcast tree_update to all WebSocket clients
+ * Broadcast tree_update to all WebSocket clients, if any are connected.
+ * Delegates payload construction to the single SSOT helper in
+ * src/websocket.js; only the lazy app.locals.wss lookup (populated by
+ * server.js AFTER setupFileRoutes runs) and the null-guard stay local.
  * @param {Express} app - Express app instance
  * @returns {void}
  */
-function broadcastTreeUpdate(app) {
+function notifyTreeUpdate(app) {
   const wss = app.locals.wss;
-  if (!wss) return;
+  if (wss) broadcastTreeUpdate(wss);
+}
 
-  const message = JSON.stringify({ type: 'tree_update' });
-  for (const client of wss.clients) {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(message);
-    }
-  }
+/**
+ * Normalize a caught error for a write-path failure. Passes through errors
+ * that already carry one of our own recognized codes (e.g. atomicWrite's
+ * `READONLY`/`WRITE_FAILED`); wraps anything else (raw fs errors, etc.) as a
+ * generic WRITE_FAILED with a fixed message so fs paths/messages never leak.
+ * @param {Error} err - Caught error
+ * @returns {Error} Coded error safe to pass to sendError
+ */
+function toWriteError(err) {
+  if (err && err.code && err.code in ERROR_STATUS) return err;
+  return mkError('WRITE_FAILED', 'write failed', { cause: err });
+}
+
+/**
+ * Same as toWriteError but for read-path failures (READ_FAILED).
+ * @param {Error} err - Caught error
+ * @returns {Error} Coded error safe to pass to sendError
+ */
+function toReadError(err) {
+  if (err && err.code && err.code in ERROR_STATUS) return err;
+  return mkError('READ_FAILED', 'read failed', { cause: err });
 }
 
 /**
@@ -91,26 +122,62 @@ function buildBinaryFileResponse(name, fileType, downloadUrl) {
 }
 
 /**
+ * Attempt to build an office "vibe preview" response for a docx/xlsx/pptx
+ * file. Returns null (never throws) whenever a preview isn't possible —
+ * oversized file, unrecognized extension, corrupt/unsupported document,
+ * read failure — so the caller can fall back to the plain binary-file
+ * response exactly as it would have without this feature.
+ * @param {string} fullPath - Absolute path to the file (already validated)
+ * @param {string} name - Basename (used both for the extension lookup and
+ *   the response's `name` field)
+ * @param {string} icon - fileType.icon to echo back unchanged
+ * @param {string} downloadUrl - Pre-built /api/download URL
+ * @param {number} size - File size in bytes (from a stat already taken by
+ *   the caller, so this never stats the file a second time)
+ * @returns {Promise<object|null>}
+ */
+async function tryBuildOfficePreviewResponse(fullPath, name, icon, downloadUrl, size) {
+  if (size > OFFICE_PREVIEW_MAX_BYTES) return null;
+
+  const ext = path.extname(name).slice(1).toLowerCase();
+  const renderer = OFFICE_RENDERERS[ext];
+  if (!renderer) return null;
+
+  try {
+    const buffer = await fs.readFile(fullPath);
+    const { html } = renderer(buffer);
+    return { name, fileType: 'office', icon, content: html, downloadUrl };
+  } catch (_err) {
+    return null;
+  }
+}
+
+/**
  * Setup file routes
  * @param {Express} app - Express app instance
+ * @param {{ port?: number, allowedHosts?: string[] }} [options] - Optional
+ *   Origin-guard configuration; mirrors setupMarpNoteRoutes(app, options).
+ *   When omitted, the guard reads `req.app.locals.allowedHosts` per request
+ *   (the contract createMdvServer maintains — see src/server.js).
  * @returns {void}
  */
-export function setupFileRoutes(app) {
+export function setupFileRoutes(app, options = {}) {
   const { rootDir } = app.locals;
+  const originGuard = makeOriginGuard(options);
 
   // Serve raw files (for HTML preview with relative paths)
   app.get('/raw/*', async (req, res) => {
     const relativePath = req.params[0];
-    const { valid, fullPath } = await resolveAndValidate(relativePath, rootDir);
+    const { valid, fullPath } = await resolveWithinRoot(relativePath, rootDir);
 
     if (!relativePath || !valid) {
-      return res.status(403).json({ error: 'Access denied' });
+      return sendError(res, mkError('ACCESS_DENIED', 'Access denied'));
     }
 
     try {
       const stat = await fs.stat(fullPath);
       if (!stat.isFile()) {
-        return res.status(400).json({ error: 'Not a file' });
+        return sendError(res, mkError('NOT_A_FILE', 'Not a file'));
       }
 
       const mimeType = mime.lookup(fullPath) || 'application/octet-stream';
@@ -118,28 +185,28 @@ export function setupFileRoutes(app) {
       res.sendFile(fullPath);
     } catch (err) {
       if (err.code === 'ENOENT') {
-        return res.status(404).json({ error: 'File not found' });
+        return sendError(res, mkError('NOT_FOUND', 'File not found'));
       }
-      res.status(500).json({ error: err.message });
+      return sendError(res, toReadError(err));
     }
   });
 
   // Get file content
   app.get('/api/file', async (req, res) => {
     const { path: relativePath } = req.query;
-    const { valid, fullPath } = await resolveAndValidate(relativePath, rootDir);
+    const { valid, fullPath } = await resolveWithinRoot(relativePath, rootDir);
 
     if (!relativePath) {
-      return res.status(400).json({ error: 'Path is required' });
+      return sendError(res, mkError('PATH_REQUIRED', 'Path is required'));
     }
     if (!valid) {
-      return res.status(403).json({ error: 'Access denied' });
+      return sendError(res, mkError('ACCESS_DENIED', 'Access denied'));
     }
 
     try {
       const stats = await fs.stat(fullPath);
       if (stats.isDirectory()) {
-        return res.status(400).json({ error: 'Cannot read directory' });
+        return sendError(res, mkError('IS_DIRECTORY', 'Cannot read directory'));
       }
 
       const fileType = getFileType(relativePath);
@@ -147,18 +214,21 @@ export function setupFileRoutes(app) {
 
       if (fileType.binary) {
         const downloadUrl = buildDownloadUrl(relativePath);
+
+        if (fileType.officePreview) {
+          const preview = await tryBuildOfficePreviewResponse(
+            fullPath, name, fileType.icon, downloadUrl, stats.size
+          );
+          if (preview) return res.json(preview);
+        }
+
         return res.json(buildBinaryFileResponse(name, fileType, downloadUrl));
       }
 
       // HTML files: return htmlUrl for iframe preview + raw content for editing
       if (fileType.type === 'html') {
         const content = await fs.readFile(fullPath, 'utf-8');
-        const escaped = content
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/"/g, '&quot;')
-          .replace(/'/g, '&#x27;');
+        const escaped = escapeHtml(content);
         return res.json({
           name,
           fileType: 'html',
@@ -174,130 +244,175 @@ export function setupFileRoutes(app) {
       res.json({ name, ...rendered });
     } catch (err) {
       if (err.code === 'ENOENT') {
-        return res.status(404).json({ error: 'File not found' });
+        return sendError(res, mkError('NOT_FOUND', 'File not found'));
       }
-      res.status(500).json({ error: err.message });
+      return sendError(res, toReadError(err));
     }
   });
 
   // Save file content
-  app.post('/api/file', async (req, res) => {
+  app.post('/api/file', originGuard, async (req, res) => {
     const { path: relativePath, content } = req.body;
-    const { valid, fullPath } = await resolveAndValidate(relativePath, rootDir);
+    const { valid, fullPath } = await resolveWithinRoot(relativePath, rootDir);
 
     if (!relativePath) {
-      return res.status(400).json({ error: 'Path is required' });
+      return sendError(res, mkError('PATH_REQUIRED', 'Path is required'));
     }
     if (!valid) {
-      return res.status(403).json({ error: 'Access denied' });
+      return sendError(res, mkError('ACCESS_DENIED', 'Access denied'));
     }
 
+    // Write through symlinks: the old fs.writeFile followed them, but
+    // atomicWrite's rename would replace the LINK itself with a regular
+    // file, orphaning the real target. Resolve the real path first (for a
+    // new file, resolve its parent directory) and lock/write on that, so a
+    // symlinked file's target is updated and the link survives. Resolution
+    // failures fall back to the validated fullPath — atomicWrite then
+    // surfaces the underlying fs error as before.
+    const isNewFile = !(await pathExists(fullPath));
+    let targetPath = fullPath;
     try {
-      // Only a *new* file changes the tree structure; editing existing content
-      // does not. Broadcasting tree_update on every autosave makes all clients
-      // re-fetch and re-render the whole tree needlessly (a tree storm during
-      // normal editing). Content updates already reach watchers via the
-      // targeted file_update channel, so an existing-file save stays silent.
-      const isNewFile = !(await pathExists(fullPath));
-      await fs.writeFile(fullPath, content, 'utf-8');
-      if (isNewFile) broadcastTreeUpdate(app);
-      res.json({ success: true });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
+      targetPath = isNewFile
+        ? path.join(await fs.realpath(path.dirname(fullPath)), path.basename(fullPath))
+        : await fs.realpath(fullPath);
+    } catch {
+      targetPath = fullPath;
     }
+
+    await withLock(targetPath, async () => {
+      try {
+        // Only a *new* file changes the tree structure; editing existing
+        // content does not. Broadcasting tree_update on every autosave makes
+        // all clients re-fetch and re-render the whole tree needlessly (a
+        // tree storm during normal editing). Content updates already reach
+        // watchers via the targeted file_update channel, so an
+        // existing-file save stays silent.
+        let originalStat = null;
+        if (!isNewFile) {
+          try {
+            originalStat = await fs.stat(targetPath);
+          } catch {
+            originalStat = null;
+          }
+        }
+
+        await atomicWrite(targetPath, content, originalStat);
+        if (isNewFile) {
+          // atomicWrite's temp file is created 0600 and rename carries that
+          // over; a brand-new file should get the same umask-based default
+          // fs.writeFile produced (typically 0644), so shared directories
+          // and downstream tools keep group/world read access.
+          await fs.chmod(targetPath, 0o666 & ~process.umask());
+          notifyTreeUpdate(app);
+        }
+        res.json({ success: true });
+      } catch (err) {
+        sendError(res, toWriteError(err));
+      }
+    });
   });
 
   // Delete file or directory
-  app.delete('/api/file', async (req, res) => {
+  app.delete('/api/file', originGuard, async (req, res) => {
     const { path: relativePath } = req.query;
-    const { valid, fullPath } = await resolveAndValidate(relativePath, rootDir);
+    const { valid, fullPath } = await resolveWithinRoot(relativePath, rootDir);
 
     if (!relativePath) {
-      return res.status(400).json({ error: 'Path is required' });
+      return sendError(res, mkError('PATH_REQUIRED', 'Path is required'));
     }
     if (!valid) {
-      return res.status(403).json({ error: 'Access denied' });
+      return sendError(res, mkError('ACCESS_DENIED', 'Access denied'));
     }
 
-    try {
-      const stats = await fs.stat(fullPath);
-      if (stats.isDirectory()) {
-        await fs.rm(fullPath, { recursive: true });
-      } else {
-        await fs.unlink(fullPath);
-      }
+    await withLock(fullPath, async () => {
+      try {
+        const stats = await fs.stat(fullPath);
+        if (stats.isDirectory()) {
+          await fs.rm(fullPath, { recursive: true });
+        } else {
+          await fs.unlink(fullPath);
+        }
 
-      broadcastTreeUpdate(app);
-      res.json({ success: true });
-    } catch (err) {
-      if (err.code === 'ENOENT') {
-        return res.status(404).json({ error: 'File not found' });
+        notifyTreeUpdate(app);
+        res.json({ success: true });
+      } catch (err) {
+        if (err.code === 'ENOENT') {
+          return sendError(res, mkError('NOT_FOUND', 'File not found'));
+        }
+        sendError(res, toWriteError(err));
       }
-      res.status(500).json({ error: err.message });
-    }
+    });
   });
 
   // Create directory
-  app.post('/api/mkdir', async (req, res) => {
+  app.post('/api/mkdir', originGuard, async (req, res) => {
     const { path: relativePath } = req.body;
-    const { valid, fullPath } = await resolveAndValidate(relativePath, rootDir);
+    const { valid, fullPath } = await resolveWithinRoot(relativePath, rootDir);
 
     if (!relativePath) {
-      return res.status(400).json({ error: 'Path is required' });
+      return sendError(res, mkError('PATH_REQUIRED', 'Path is required'));
     }
     if (!valid) {
-      return res.status(403).json({ error: 'Access denied' });
+      return sendError(res, mkError('ACCESS_DENIED', 'Access denied'));
     }
 
-    try {
-      await fs.mkdir(fullPath, { recursive: true });
-      broadcastTreeUpdate(app);
-      res.json({ success: true });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
+    await withLock(fullPath, async () => {
+      try {
+        await fs.mkdir(fullPath, { recursive: true });
+        notifyTreeUpdate(app);
+        res.json({ success: true });
+      } catch (err) {
+        sendError(res, toWriteError(err));
+      }
+    });
   });
 
   // Move/rename file or directory
-  app.post('/api/move', async (req, res) => {
+  app.post('/api/move', originGuard, async (req, res) => {
     const { source, destination } = req.body;
 
     if (!source || !destination) {
-      return res.status(400).json({ error: 'Source and destination are required' });
+      return sendError(res, mkError('SOURCE_DEST_REQUIRED', 'Source and destination are required'));
     }
 
-    const sourceResult = await resolveAndValidate(source, rootDir);
-    const destResult = await resolveAndValidate(destination, rootDir);
+    const sourceResult = await resolveWithinRoot(source, rootDir);
+    const destResult = await resolveWithinRoot(destination, rootDir);
 
     if (!sourceResult.valid || !destResult.valid) {
-      return res.status(403).json({ error: 'Access denied' });
+      return sendError(res, mkError('ACCESS_DENIED', 'Access denied'));
     }
 
-    try {
-      await fs.rename(sourceResult.fullPath, destResult.fullPath);
-      broadcastTreeUpdate(app);
-      res.json({ success: true });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
+    // Serialized on the source path (the identity of the entity being
+    // moved). The destination is deliberately NOT also locked: nested
+    // withLock calls on the same key deadlock, and source === destination
+    // would otherwise need special-casing.
+    await withLock(sourceResult.fullPath, async () => {
+      try {
+        await fs.rename(sourceResult.fullPath, destResult.fullPath);
+        notifyTreeUpdate(app);
+        res.json({ success: true });
+      } catch (err) {
+        sendError(res, toWriteError(err));
+      }
+    });
   });
 
   // Download file (with Range Request support for video/audio streaming)
   app.get('/api/download', async (req, res) => {
     const { path: relativePath } = req.query;
-    const { valid, fullPath } = await resolveAndValidate(relativePath, rootDir);
+    const { valid, fullPath } = await resolveWithinRoot(relativePath, rootDir);
 
     if (!relativePath) {
-      return res.status(400).json({ error: 'Path is required' });
+      return sendError(res, mkError('PATH_REQUIRED', 'Path is required'));
     }
     if (!valid) {
-      return res.status(403).json({ error: 'Access denied' });
+      return sendError(res, mkError('ACCESS_DENIED', 'Access denied'));
     }
 
     try {
       const stat = await fs.stat(fullPath);
       if (!stat.isFile()) {
-        return res.status(400).json({ error: 'Not a file' });
+        return sendError(res, mkError('NOT_A_FILE', 'Not a file'));
       }
 
       const rangeHeader = req.headers.range;
@@ -332,9 +447,9 @@ export function setupFileRoutes(app) {
       createReadStream(fullPath, { start, end }).pipe(res);
     } catch (err) {
       if (err.code === 'ENOENT') {
-        return res.status(404).json({ error: 'File not found' });
+        return sendError(res, mkError('NOT_FOUND', 'File not found'));
       }
-      return res.status(500).json({ error: err.message });
+      return sendError(res, toReadError(err));
     }
   });
 }

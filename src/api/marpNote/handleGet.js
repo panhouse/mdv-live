@@ -10,8 +10,10 @@ import { checkHost, sanitiseRelativePath } from './guards.js';
 import { readDeckSafely } from './readDeck.js';
 
 export function makeGetHandler({ rootDir, allowedHosts }) {
+  // rootDir and allowedHosts are both thunks, resolved per request (the
+  // allow-list is refreshed by start() once the real port is bound).
   return async function handleGet(req, res) {
-    const hostErr = checkHost(req, allowedHosts);
+    const hostErr = checkHost(req, allowedHosts());
     if (hostErr) return sendError(res, hostErr);
     res.setHeader('Cache-Control', 'no-store');
 

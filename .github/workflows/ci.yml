@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Install Playwright browser
+        # --with-deps はここで Chromium 用のシステムライブラリも入れる。
+        # unit テストの PDF 生成系（md-to-pdf が内部起動する Chromium）が
+        # 同じライブラリ群を必要とするため、npm test より先に実行する。
+        run: npx playwright install --with-deps chromium
+
+      - name: Relax AppArmor userns restriction for Chrome sandbox
+        # ubuntu-24.04 は非特権ユーザー名前空間を AppArmor で制限しており、
+        # puppeteer (md-to-pdf) の Chrome がサンドボックス作成に失敗して
+        # 起動できない。Playwright は自前で回避するが puppeteer は不可。
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Unit / API tests
+        run: npm test
+
+      - name: E2E smoke tests
+        run: npm run test:e2e
+
+      - name: Audit production dependencies
+        # 依存更新（multer 2.x 等）完了までは情報提供のみ。完了後に continue-on-error を外す。
+        run: npm audit --omit=dev
+        continue-on-error: true
+
+      - name: Verify npm tarball contents
+        run: npm pack --dry-run

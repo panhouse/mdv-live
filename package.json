@@ -1,6 +1,6 @@
 {
   "name": "mdv-live",
-  "version": "0.5.22",
+  "version": "0.6.0",
   "description": "Markdown Viewer - File tree + Live preview + Marp support + Hot reload",
   "main": "src/server.js",
   "bin": {
@@ -8,8 +8,10 @@
   },
   "scripts": {
     "start": "node bin/mdv.js",
-    "dev": "node bin/mdv.js --dev",
+    "dev": "node bin/mdv.js",
     "test": "node --test tests/*.js",
+    "test:e2e": "playwright test",
+    "lint": "eslint .",
     "setup-macos": "bash scripts/setup-macos-app.sh"
   },
   "keywords": [
@@ -48,11 +50,12 @@
     "@marp-team/marp-core": "^4.0.0",
     "chokidar": "^4.0.3",
     "express": "^4.21.2",
+    "fflate": "^0.8.3",
     "highlight.js": "^11.10.0",
     "markdown-it": "^14.1.0",
     "markdown-it-task-lists": "^2.1.1",
     "mime-types": "^2.1.35",
-    "multer": "^1.4.5-lts.1",
+    "multer": "^2.2.0",
     "open": "^10.1.0",
     "ws": "^8.18.0"
   },
@@ -61,7 +64,10 @@
     "md-to-pdf": "^5.2.5"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@highlightjs/cdn-assets": "^11.11.1",
+    "@playwright/test": "^1.61.1",
+    "eslint": "^10.6.0",
     "html2pdf.js": "^0.14.0",
     "mermaid": "^11.15.0"
   }

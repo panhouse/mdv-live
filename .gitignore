@@ -59,3 +59,8 @@ test.md
 # Test runtime artifacts (test-html-preview.js etc. write fixtures during runs)
 tests/fixtures/html-preview/
 tests/fixtures/marp-notes/
+
+# Playwright E2E artifacts
+test-results/
+playwright-report/
+.claude/

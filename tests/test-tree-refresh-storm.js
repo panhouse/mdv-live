@@ -16,7 +16,8 @@ import path from 'node:path';
 import WebSocket from 'ws';
 
 import { buildFileTree, readDirPage } from '../src/api/tree.js';
-import { createMdvServer } from '../src/server.js';
+import { MAX_CHILDREN_PER_DIR } from '../src/config/constants.js';
+import { startTestServer } from './helpers/server.js';
 
 describe('buildFileTree depth control (expand = direct children only)', () => {
   let tempDir;
@@ -60,9 +61,42 @@ describe('buildFileTree depth control (expand = direct children only)', () => {
   });
 });
 
+// Regression (P1 fix, 2026-07 refactor): tree.js used to hide only
+// node_modules/__pycache__/.git — dist/, build/, .venv/ etc. rendered in the
+// tree but were NOT watched by chokidar (watcher.js already ignored 19
+// patterns), so external changes to those directories never refreshed the
+// UI. tree.js now shares src/utils/ignorePatterns.js (isIgnoredName) with the
+// watcher, so both sides agree on what is hidden.
+describe('tree hides names ignored by the watcher (isIgnoredName parity)', () => {
+  let tempDir;
+
+  before(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-ignore-'));
+    await fs.mkdir(path.join(tempDir, 'dist'));
+    await fs.mkdir(path.join(tempDir, 'build'));
+    await fs.mkdir(path.join(tempDir, '.venv'));
+    await fs.writeFile(path.join(tempDir, '.env'), 'SECRET=1');
+    await fs.writeFile(path.join(tempDir, 'visible.md'), '# visible');
+  });
+
+  after(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('buildFileTree omits dist/, build/, .venv/, and dotfiles', async () => {
+    const items = await buildFileTree(tempDir, tempDir, 0);
+    const names = items.map((i) => i.name);
+    assert.ok(!names.includes('dist'), 'dist/ should be hidden (was visible pre-fix)');
+    assert.ok(!names.includes('build'), 'build/ should be hidden (was visible pre-fix)');
+    assert.ok(!names.includes('.venv'), '.venv/ should be hidden (was visible pre-fix)');
+    assert.ok(!names.includes('.env'), 'dotfiles should be hidden');
+    assert.ok(names.includes('visible.md'), 'ordinary files remain visible');
+  });
+});
+
 describe('directory pagination (cap + load more)', () => {
   let tempDir;
-  const CAP = 500; // mirrors MAX_CHILDREN_PER_DIR in src/api/tree.js
+  const CAP = MAX_CHILDREN_PER_DIR;
   const TOTAL = 505;
 
   before(async () => {
@@ -104,31 +138,24 @@ describe('directory pagination (cap + load more)', () => {
 });
 
 describe('GET /api/tree/page endpoint', () => {
-  let server;
-  let tempDir;
-  const PORT = 19969;
+  let ctx;
 
   before(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-pageapi-'));
-    await Promise.all(
-      Array.from({ length: 12 }, (_, i) =>
-        fs.writeFile(path.join(tempDir, `g${String(i).padStart(2, '0')}.md`), 'x')
-      )
-    );
+    const files = {};
+    for (let i = 0; i < 12; i++) {
+      files[`g${String(i).padStart(2, '0')}.md`] = 'x';
+    }
     // A subdirectory with a child, to assert the initial tree does NOT preload.
-    await fs.mkdir(path.join(tempDir, 'sub'));
-    await fs.writeFile(path.join(tempDir, 'sub', 'inside.md'), 'x');
-    server = createMdvServer({ rootDir: tempDir, port: PORT });
-    await server.start();
+    files['sub/inside.md'] = 'x';
+    ctx = await startTestServer({ files });
   });
 
   after(async () => {
-    if (server) await server.stop();
-    await fs.rm(tempDir, { recursive: true, force: true });
+    if (ctx) await ctx.stop();
   });
 
   it('paginates the root directory', async () => {
-    const res = await fetch(`http://localhost:${PORT}/api/tree/page?path=&offset=0&limit=5`);
+    const res = await fetch(`${ctx.baseUrl}/api/tree/page?path=&offset=0&limit=5`);
     assert.strictEqual(res.status, 200);
     const items = await res.json();
     assert.strictEqual(items.length, 6, '5 items + sentinel');
@@ -139,13 +166,13 @@ describe('GET /api/tree/page endpoint', () => {
 
   it('rejects path traversal', async () => {
     const res = await fetch(
-      `http://localhost:${PORT}/api/tree/page?path=${encodeURIComponent('../../etc')}&offset=0&limit=5`
+      `${ctx.baseUrl}/api/tree/page?path=${encodeURIComponent('../../etc')}&offset=0&limit=5`
     );
     assert.strictEqual(res.status, 403);
   });
 
   it('GET /api/tree returns subdirectories unloaded (no eager lookahead)', async () => {
-    const res = await fetch(`http://localhost:${PORT}/api/tree`);
+    const res = await fetch(`${ctx.baseUrl}/api/tree`);
     assert.strictEqual(res.status, 200);
     const tree = await res.json();
     const sub = tree.find((n) => n.name === 'sub');
@@ -157,12 +184,10 @@ describe('GET /api/tree/page endpoint', () => {
 });
 
 describe('POST /api/file tree_update broadcast scope', () => {
-  let server;
-  let tempDir;
-  const PORT = 19970;
+  let ctx;
 
   function openClient() {
-    const ws = new WebSocket(`ws://localhost:${PORT}`);
+    const ws = new WebSocket(ctx.baseUrl.replace(/^http/, 'ws'));
     const received = [];
     ws.on('message', (data) => {
       try {
@@ -178,9 +203,13 @@ describe('POST /api/file tree_update broadcast scope', () => {
   }
 
   async function savedThenSettle(body) {
-    const res = await fetch(`http://localhost:${PORT}/api/file`, {
+    // 'Sec-Fetch-Site: same-origin' is required as of the 2026-07 refactor's
+    // P1-1 fix: POST /api/file is now Origin/Host-guarded (CSRF defense,
+    // src/api/file.js), so a same-origin signal is needed since this plain
+    // fetch() sends no Origin header. See src/api/file.js notes.
+    const res = await fetch(`${ctx.baseUrl}/api/file`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
       body: JSON.stringify(body),
     });
     assert.strictEqual(res.status, 200);
@@ -188,15 +217,13 @@ describe('POST /api/file tree_update broadcast scope', () => {
   }
 
   before(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-bcast-'));
-    await fs.writeFile(path.join(tempDir, 'existing.md'), '# existing');
-    server = createMdvServer({ rootDir: tempDir, port: PORT });
-    await server.start();
+    ctx = await startTestServer({
+      files: { 'existing.md': '# existing' },
+    });
   });
 
   after(async () => {
-    if (server) await server.stop();
-    await fs.rm(tempDir, { recursive: true, force: true });
+    if (ctx) await ctx.stop();
   });
 
   it('editing an existing file does NOT broadcast tree_update', async () => {

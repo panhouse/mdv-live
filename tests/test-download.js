@@ -4,10 +4,8 @@
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
-import fs from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
-import { createMdvServer } from '../src/server.js';
+
+import { startTestServer } from './helpers/server.js';
 
 // Minimal valid 1x1 PNG image (67 bytes)
 const MINIMAL_PNG = Buffer.from([
@@ -23,33 +21,27 @@ const MINIMAL_PNG = Buffer.from([
 ]);
 
 describe('Download API', () => {
-  let server;
-  let tempDir;
-  const PORT = 19995;
+  let ctx;
 
   before(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-download-test-'));
-
-    await Promise.all([
-      fs.writeFile(path.join(tempDir, 'test.txt'), 'test content'),
-      fs.writeFile(path.join(tempDir, 'test.md'), '# Markdown'),
-      fs.writeFile(path.join(tempDir, 'test.png'), MINIMAL_PNG),
-    ]);
-
-    server = createMdvServer({ rootDir: tempDir, port: PORT });
-    await server.start();
+    ctx = await startTestServer({
+      files: {
+        'test.txt': 'test content',
+        'test.md': '# Markdown',
+        'test.png': MINIMAL_PNG,
+      },
+    });
   });
 
   after(async () => {
-    if (server) {
-      await server.stop();
+    if (ctx) {
+      await ctx.stop();
     }
-    await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   describe('GET /api/download', () => {
     it('should download text file', async () => {
-      const response = await fetch(`http://localhost:${PORT}/api/download?path=test.txt`);
+      const response = await fetch(`${ctx.baseUrl}/api/download?path=test.txt`);
       assert.strictEqual(response.status, 200);
 
       const content = await response.text();
@@ -57,7 +49,7 @@ describe('Download API', () => {
     });
 
     it('should download markdown file', async () => {
-      const response = await fetch(`http://localhost:${PORT}/api/download?path=test.md`);
+      const response = await fetch(`${ctx.baseUrl}/api/download?path=test.md`);
       assert.strictEqual(response.status, 200);
 
       const content = await response.text();
@@ -65,7 +57,7 @@ describe('Download API', () => {
     });
 
     it('should download binary file (image)', async () => {
-      const response = await fetch(`http://localhost:${PORT}/api/download?path=test.png`);
+      const response = await fetch(`${ctx.baseUrl}/api/download?path=test.png`);
       assert.strictEqual(response.status, 200);
 
       const buffer = await response.arrayBuffer();
@@ -73,19 +65,19 @@ describe('Download API', () => {
     });
 
     it('should return 404 for non-existent file', async () => {
-      const response = await fetch(`http://localhost:${PORT}/api/download?path=nonexistent.txt`);
+      const response = await fetch(`${ctx.baseUrl}/api/download?path=nonexistent.txt`);
       assert.strictEqual(response.status, 404);
     });
 
     it('should return 400 without path parameter', async () => {
-      const response = await fetch(`http://localhost:${PORT}/api/download`);
+      const response = await fetch(`${ctx.baseUrl}/api/download`);
       assert.strictEqual(response.status, 400);
     });
   });
 
   describe('Binary File Handling', () => {
     it('should return image info for image files', async () => {
-      const response = await fetch(`http://localhost:${PORT}/api/file?path=test.png`);
+      const response = await fetch(`${ctx.baseUrl}/api/file?path=test.png`);
       assert.strictEqual(response.status, 200);
 
       const data = await response.json();

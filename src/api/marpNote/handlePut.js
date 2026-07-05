@@ -22,10 +22,13 @@ import {
 import { readDeckSafely } from './readDeck.js';
 
 export function makePutHandler({ rootDir, allowedHosts }) {
+  // rootDir and allowedHosts are both thunks, resolved per request (the
+  // allow-list is refreshed by start() once the real port is bound).
   return async function handlePut(req, res) {
+    const hosts = allowedHosts();
     const guards = [
-      checkHost(req, allowedHosts),
-      checkOrigin(req, allowedHosts),
+      checkHost(req, hosts),
+      checkOrigin(req, hosts),
       checkJsonContent(req),
       checkIfMatch(req)
     ];
@@ -74,7 +77,7 @@ export function makePutHandler({ rootDir, allowedHosts }) {
   };
 }
 
-async function performNoteUpdate({ req, res, rootDir, rel, slideIndex, note, ifMatch, earlyDeck }) {
+async function performNoteUpdate({ res, rootDir, rel, slideIndex, note, ifMatch, earlyDeck }) {
   // Re-read inside the lock so the etag check sees writes by predecessors.
   let deck;
   try {
@@ -99,7 +102,7 @@ async function performNoteUpdate({ req, res, rootDir, rel, slideIndex, note, ifM
 
   const currentEtag = makeEtag(deck.rawSource);
   if (ifMatch !== currentEtag) {
-    return res.status(412).json({ ok: false, code: 'STALE', currentEtag });
+    return sendError(res, mkError('STALE', 'stale', { currentEtag }));
   }
 
   let parsed;

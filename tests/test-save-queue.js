@@ -1,35 +1,16 @@
 /**
  * Tests for src/static/lib/saveQueue.js — pure JS, no DOM required.
- *
- * The browser-side library exposes itself on `globalThis.MDVSaveQueue`. We
- * load it into an isolated VM context so we can exercise it under Node.
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
-import vm from 'node:vm';
-
-const here = path.dirname(fileURLToPath(import.meta.url));
-const code = readFileSync(
-  path.join(here, '..', 'src', 'static', 'lib', 'saveQueue.js'),
-  'utf-8'
-);
-
-function loadQueue() {
-  const sandbox = vm.createContext({ console });
-  vm.runInContext(code, sandbox);
-  return sandbox.MDVSaveQueue;
-}
+import { createSaveQueue } from '../src/static/lib/saveQueue.js';
 
 describe('SaveQueue — coalesce + serialization', () => {
   it('coalesces edits to the same slide that arrive while a save is in flight', async () => {
     // Use a slow saveFn so we can observe coalesce of edits arriving while
     // the first save is in flight.
     const calls = [];
-    const { createSaveQueue } = loadQueue();
     const q = createSaveQueue({
       saveFn: async (path, slideIndex, note) => {
         calls.push(note);
@@ -51,7 +32,6 @@ describe('SaveQueue — coalesce + serialization', () => {
 
   it('saves different slides in insertion order, serially', async () => {
     const order = [];
-    const { createSaveQueue } = loadQueue();
     const q = createSaveQueue({
       saveFn: async (p, idx) => {
         order.push(['start', idx]);
@@ -70,9 +50,8 @@ describe('SaveQueue — coalesce + serialization', () => {
 
   it('different paths drain independently', async () => {
     const calls = [];
-    const { createSaveQueue } = loadQueue();
     const q = createSaveQueue({
-      saveFn: async (p, idx) => {
+      saveFn: async (p, _idx) => {
         calls.push(p);
         await new Promise((r) => setTimeout(r, 10));
       }
@@ -89,7 +68,6 @@ describe('SaveQueue — coalesce + serialization', () => {
     // forcibly abort it). Use a slow saveFn so we can observe pending
     // entries being dropped before they're processed.
     const calls = [];
-    const { createSaveQueue } = loadQueue();
     const q = createSaveQueue({
       saveFn: async (p, idx) => {
         calls.push([p, idx]);
@@ -110,7 +88,6 @@ describe('SaveQueue — coalesce + serialization', () => {
 
   it('continues draining other slides even if a saveFn throws', async () => {
     const calls = [];
-    const { createSaveQueue } = loadQueue();
     const q = createSaveQueue({
       saveFn: async (p, idx) => {
         if (idx === 0) throw new Error('boom');
@@ -125,14 +102,7 @@ describe('SaveQueue — coalesce + serialization', () => {
 });
 
 describe('SaveQueue — Promise-returning enqueue', () => {
-  // Note: createSaveQueue runs inside a vm sandbox, so objects it returns
-  // (saveFn results, COALESCED/DROPPED sentinels) have a different
-  // Object.prototype than the test's main realm. assert.deepStrictEqual
-  // therefore rejects structurally-equal values as "not reference-equal".
-  // We compare fields individually with strictEqual instead.
-
   it('resolves enqueue() with the saveFn return value', async () => {
-    const { createSaveQueue } = loadQueue();
     const q = createSaveQueue({
       saveFn: async () => ({ ok: true, etag: '"abc"' })
     });
@@ -142,7 +112,6 @@ describe('SaveQueue — Promise-returning enqueue', () => {
   });
 
   it('resolves the superseded enqueue() with COALESCED when overwritten', async () => {
-    const { createSaveQueue } = loadQueue();
     const q = createSaveQueue({
       saveFn: async (_p, _idx, note) => {
         // Slow enough that a 2nd enqueue arrives while 1st is in-flight.
@@ -167,7 +136,6 @@ describe('SaveQueue — Promise-returning enqueue', () => {
   });
 
   it('dropPath rejects pending enqueues with DROPPED', async () => {
-    const { createSaveQueue } = loadQueue();
     const q = createSaveQueue({
       saveFn: async () => {
         await new Promise((r) => setTimeout(r, 30));
@@ -189,7 +157,6 @@ describe('SaveQueue — Promise-returning enqueue', () => {
   });
 
   it('resolves enqueue() with an error result when saveFn throws', async () => {
-    const { createSaveQueue } = loadQueue();
     const q = createSaveQueue({
       saveFn: async () => { throw new Error('network down'); }
     });
@@ -200,7 +167,6 @@ describe('SaveQueue — Promise-returning enqueue', () => {
 
   it('forwards the origin tag from enqueue() to saveFn', async () => {
     const calls = [];
-    const { createSaveQueue } = loadQueue();
     const q = createSaveQueue({
       saveFn: async (_p, _idx, _note, _etag, origin) => {
         calls.push(origin);
@@ -218,7 +184,6 @@ describe('SaveQueue — Promise-returning enqueue', () => {
     // an inline edit must not overwrite a pending presenter edit for
     // the same slide and vice versa.
     const calls = [];
-    const { createSaveQueue } = loadQueue();
     const q = createSaveQueue({
       saveFn: async (_p, idx, note, _etag, origin) => {
         await new Promise((r) => setTimeout(r, 30));

@@ -26,7 +26,8 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { createMdvServer } from '../src/server.js';
+
+import { startTestServer } from './helpers/server.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -70,8 +71,6 @@ function makeRedPng(w, h) {
   return Buffer.concat([sig, chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
 
-const port = 19978;
-const baseUrl = `http://localhost:${port}`;
 const PDF_TEST_TIMEOUT_MS = 60000;
 
 const PLAIN_MD = `# Plain Markdown Test
@@ -96,46 +95,58 @@ Hello.
 `;
 
 describe('PDF Export API', () => {
-  let server;
-  let tempDir;
+  let ctx;
 
   before(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdv-pdf-test-'));
-    await fs.writeFile(path.join(tempDir, 'plain.md'), PLAIN_MD);
-    await fs.writeFile(path.join(tempDir, 'marp.md'), MARP_MD);
-    await fs.mkdir(path.join(tempDir, 'subdir'));
-
-    server = createMdvServer({ rootDir: tempDir, port });
-    await server.start();
+    ctx = await startTestServer({
+      files: {
+        'plain.md': PLAIN_MD,
+        'marp.md': MARP_MD,
+        'subdir/': null,
+      },
+    });
   });
 
   after(async () => {
-    if (server) await server.stop();
-    await fs.rm(tempDir, { recursive: true, force: true });
+    if (ctx) await ctx.stop();
   });
 
   it('POST /api/pdf/export returns 400 without filePath', async () => {
-    const res = await fetch(`${baseUrl}/api/pdf/export`, {
+    const res = await fetch(`${ctx.baseUrl}/api/pdf/export`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
       body: JSON.stringify({}),
     });
     assert.strictEqual(res.status, 400);
   });
 
-  it('POST /api/pdf/export returns 403 for path traversal', async () => {
-    const res = await fetch(`${baseUrl}/api/pdf/export`, {
+  it('POST /api/pdf/export rejects cross-origin requests (Origin guard)', async () => {
+    const res = await fetch(`${ctx.baseUrl}/api/pdf/export`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Origin': 'http://evil.example',
+      },
+      body: JSON.stringify({ filePath: 'plain.md' }),
+    });
+    assert.strictEqual(res.status, 403);
+    const data = await res.json();
+    assert.strictEqual(data.code, 'ORIGIN_REJECTED');
+  });
+
+  it('POST /api/pdf/export returns 403 for path traversal', async () => {
+    const res = await fetch(`${ctx.baseUrl}/api/pdf/export`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
       body: JSON.stringify({ filePath: '../../../etc/passwd' }),
     });
     assert.strictEqual(res.status, 403);
   });
 
   it('POST /api/pdf/export returns 404 for missing file', async () => {
-    const res = await fetch(`${baseUrl}/api/pdf/export`, {
+    const res = await fetch(`${ctx.baseUrl}/api/pdf/export`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
       body: JSON.stringify({ filePath: 'no-such-file.md' }),
     });
     assert.strictEqual(res.status, 404);
@@ -144,9 +155,9 @@ describe('PDF Export API', () => {
   // Regression: codex round 3 P2 — fs.readFile が try 外で directory 指定時に
   // unhandled rejection になり 500 が返らず Express デフォルトエラーに陥っていた
   it('POST /api/pdf/export returns 404 (controlled JSON) for directory path', async () => {
-    const res = await fetch(`${baseUrl}/api/pdf/export`, {
+    const res = await fetch(`${ctx.baseUrl}/api/pdf/export`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
       body: JSON.stringify({ filePath: 'subdir' }),
     });
     assert.strictEqual(res.status, 404);
@@ -220,13 +231,13 @@ describe('PDF Export API', () => {
   // rename されるとワークスペースから消える事故。JS API 利用 + writeFile
   // 直書きでワークスペースに一切触れないことを担保
   it('POST /api/pdf/export does not touch the source directory (no foo.pdf created)', { timeout: PDF_TEST_TIMEOUT_MS }, async () => {
-    const sentinel = path.join(tempDir, 'plain.pdf');
+    const sentinel = path.join(ctx.rootDir, 'plain.pdf');
     const sentinelBefore = await fs.readFile(sentinel).catch(() => null);
     assert.strictEqual(sentinelBefore, null, 'fixture should not pre-exist plain.pdf');
 
-    const res = await fetch(`${baseUrl}/api/pdf/export`, {
+    const res = await fetch(`${ctx.baseUrl}/api/pdf/export`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
       body: JSON.stringify({ filePath: 'plain.md' }),
     });
     assert.strictEqual(res.status, 200);
@@ -247,7 +258,7 @@ describe('PDF Export API', () => {
     try {
       const secret = path.join(outside, 'secret.md');
       await fs.writeFile(secret, '# Secret outside root\n');
-      const linkPath = path.join(tempDir, 'leak.md');
+      const linkPath = path.join(ctx.rootDir, 'leak.md');
       try {
         await fs.symlink(secret, linkPath);
       } catch (err) {
@@ -255,9 +266,9 @@ describe('PDF Export API', () => {
         throw err;
       }
       try {
-        const res = await fetch(`${baseUrl}/api/pdf/export`, {
+        const res = await fetch(`${ctx.baseUrl}/api/pdf/export`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
           body: JSON.stringify({ filePath: 'leak.md' }),
         });
         assert.strictEqual(res.status, 403, `symlink to outside should be denied; got ${res.status}`);
@@ -347,9 +358,9 @@ describe('PDF Export API', () => {
   });
 
   it('POST /api/pdf/export returns application/pdf for plain markdown (md-to-pdf path)', { timeout: PDF_TEST_TIMEOUT_MS }, async () => {
-    const res = await fetch(`${baseUrl}/api/pdf/export`, {
+    const res = await fetch(`${ctx.baseUrl}/api/pdf/export`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
       body: JSON.stringify({ filePath: 'plain.md' }),
     });
     assert.strictEqual(res.status, 200, `expected 200, got ${res.status}`);
@@ -360,9 +371,9 @@ describe('PDF Export API', () => {
   });
 
   it('POST /api/pdf/export returns application/pdf for Marp file', { timeout: PDF_TEST_TIMEOUT_MS }, async () => {
-    const res = await fetch(`${baseUrl}/api/pdf/export`, {
+    const res = await fetch(`${ctx.baseUrl}/api/pdf/export`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
       body: JSON.stringify({ filePath: 'marp.md' }),
     });
     assert.strictEqual(res.status, 200, `expected 200, got ${res.status}`);

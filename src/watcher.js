@@ -4,29 +4,14 @@
 
 import chokidar from 'chokidar';
 import path from 'path';
+import {
+  AWAIT_WRITE_FINISH_POLL_MS,
+  AWAIT_WRITE_FINISH_STABILITY_MS,
+  TREE_UPDATE_DEBOUNCE_MS
+} from './config/constants.js';
 import { renderFile } from './rendering/index.js';
-
-const IGNORED_PATTERNS = [
-  /(^|[\/\\])\../,  // Dotfiles
-  /node_modules/,
-  /\.git/,
-  /__pycache__/,
-  /\.pyc$/,
-  /\.cache/,
-  /\.pytest_cache/,
-  /\.mypy_cache/,
-  /\.ruff_cache/,
-  /venv/,
-  /\.venv/,
-  /dist/,
-  /build/,
-  /\.next/,
-  /\.nuxt/,
-  /coverage/,
-  /\.DS_Store/,
-  /Thumbs\.db/,
-  /desktop\.ini/,
-];
+import { CHOKIDAR_IGNORED } from './utils/ignorePatterns.js';
+import { broadcastTreeUpdate as sendTreeUpdate } from './websocket.js';
 
 const TREE_CHANGE_EVENTS = ['add', 'unlink', 'addDir', 'unlinkDir'];
 
@@ -42,13 +27,13 @@ export function setupWatcher(rootDir, wss, options = {}) {
   const { depth = 3 } = options;
 
   const watcher = chokidar.watch(rootDir, {
-    ignored: IGNORED_PATTERNS,
+    ignored: CHOKIDAR_IGNORED,
     persistent: true,
     ignoreInitial: true,
     depth,
     awaitWriteFinish: {
-      stabilityThreshold: 100,
-      pollInterval: 50
+      stabilityThreshold: AWAIT_WRITE_FINISH_STABILITY_MS,
+      pollInterval: AWAIT_WRITE_FINISH_POLL_MS
     }
   });
 
@@ -59,17 +44,13 @@ export function setupWatcher(rootDir, wss, options = {}) {
   // Coalesce bursts: a bulk FS operation (git checkout, npm install, unzip)
   // fires many add/unlink events. Emit at most one tree_update per debounce
   // window so clients don't re-fetch and re-render the whole tree per event.
-  const TREE_UPDATE_DEBOUNCE_MS = 150;
   let treeUpdateTimer = null;
 
   function broadcastTreeUpdate() {
     if (treeUpdateTimer) return; // a broadcast is already scheduled for this burst
     treeUpdateTimer = setTimeout(() => {
       treeUpdateTimer = null;
-      wss.broadcast({
-        type: 'tree_update',
-        tree: null
-      });
+      sendTreeUpdate(wss);
     }, TREE_UPDATE_DEBOUNCE_MS);
   }
 

@@ -4,6 +4,7 @@
 
 import MarkdownIt from 'markdown-it';
 import taskLists from 'markdown-it-task-lists';
+import { escapeHtml } from '../utils/html.js';
 
 /**
  * markdown-it plugin: CJK + Unicode句読点で emphasis が壊れる問題を修正。
@@ -141,18 +142,6 @@ function protectMermaidBlocks(content) {
 }
 
 /**
- * Escape HTML entities for safe display
- * @param {string} text - Text to escape
- * @returns {string}
- */
-function escapeHtmlEntities(text) {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-/**
  * Restore Mermaid blocks after markdown processing
  * @param {string} html - Rendered HTML
  * @param {string[]} blocks - Mermaid code blocks
@@ -162,7 +151,7 @@ function escapeHtmlEntities(text) {
 function restoreMermaidBlocks(html, blocks, nonce) {
   let result = html;
   for (let i = 0; i < blocks.length; i++) {
-    const escaped = escapeHtmlEntities(blocks[i]);
+    const escaped = escapeHtml(blocks[i]);
     const mermaidHtml = `<pre><code class="language-mermaid">${escaped}</code></pre>`;
     const placeholder = `<!--MDV_MERMAID_${nonce}_${i}-->`;
     // Replace both paragraph-wrapped and bare placeholders (use split+join for global replace)

@@ -7,33 +7,51 @@ import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createMdvServer } from '../src/server.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { startTestServer } from './helpers/server.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const { version: PKG_VERSION } = JSON.parse(
   readFileSync(path.join(__dirname, '..', 'package.json'), 'utf-8')
 );
-const testRootDir = path.join(__dirname, '..');
-const port = 19999;
+
+// Moved from the (now-removed) repo-root test-marp.md fixture.
+const MARP_FIXTURE = `---
+marp: true
+---
+
+# Slide 1
+
+This is a test Marp presentation.
+
+---
+
+# Slide 2
+
+Second slide content.
+`;
 
 describe('MDV Server', () => {
-  let server;
+  let ctx;
 
   before(async () => {
-    server = createMdvServer({ rootDir: testRootDir, port });
-    await server.start();
+    ctx = await startTestServer({
+      files: {
+        'README.md': '# Hello\n\nThis is a test README.\n',
+        'test-marp.md': MARP_FIXTURE,
+      },
+    });
   });
 
   after(async () => {
-    if (server) {
-      await server.stop();
+    if (ctx) {
+      await ctx.stop();
     }
   });
 
   describe('API Endpoints', () => {
     it('GET /api/info should return server info', async () => {
-      const response = await fetch(`http://localhost:${port}/api/info`);
+      const response = await fetch(`${ctx.baseUrl}/api/info`);
       assert.strictEqual(response.status, 200);
 
       const data = await response.json();
@@ -42,7 +60,7 @@ describe('MDV Server', () => {
     });
 
     it('GET /api/tree should return file tree', async () => {
-      const response = await fetch(`http://localhost:${port}/api/tree`);
+      const response = await fetch(`${ctx.baseUrl}/api/tree`);
       assert.strictEqual(response.status, 200);
 
       const data = await response.json();
@@ -50,7 +68,7 @@ describe('MDV Server', () => {
     });
 
     it('GET /api/file should return file content for markdown', async () => {
-      const response = await fetch(`http://localhost:${port}/api/file?path=README.md`);
+      const response = await fetch(`${ctx.baseUrl}/api/file?path=README.md`);
       assert.strictEqual(response.status, 200);
 
       const data = await response.json();
@@ -60,17 +78,17 @@ describe('MDV Server', () => {
     });
 
     it('GET /api/file should return 400 without path', async () => {
-      const response = await fetch(`http://localhost:${port}/api/file`);
+      const response = await fetch(`${ctx.baseUrl}/api/file`);
       assert.strictEqual(response.status, 400);
     });
 
     it('GET /api/file should return 404 for non-existent file', async () => {
-      const response = await fetch(`http://localhost:${port}/api/file?path=nonexistent.md`);
+      const response = await fetch(`${ctx.baseUrl}/api/file?path=nonexistent.md`);
       assert.strictEqual(response.status, 404);
     });
 
     it('GET /api/file should detect Marp files correctly', async () => {
-      const response = await fetch(`http://localhost:${port}/api/file?path=test-marp.md`);
+      const response = await fetch(`${ctx.baseUrl}/api/file?path=test-marp.md`);
       assert.strictEqual(response.status, 200);
 
       const data = await response.json();
@@ -79,7 +97,7 @@ describe('MDV Server', () => {
     });
 
     it('GET /api/file should NOT detect README.md as Marp', async () => {
-      const response = await fetch(`http://localhost:${port}/api/file?path=README.md`);
+      const response = await fetch(`${ctx.baseUrl}/api/file?path=README.md`);
       assert.strictEqual(response.status, 200);
 
       const data = await response.json();
@@ -89,7 +107,7 @@ describe('MDV Server', () => {
 
   describe('Static Files', () => {
     it('GET / should return index.html', async () => {
-      const response = await fetch(`http://localhost:${port}/`);
+      const response = await fetch(`${ctx.baseUrl}/`);
       assert.strictEqual(response.status, 200);
 
       const contentType = response.headers.get('content-type');
@@ -97,13 +115,47 @@ describe('MDV Server', () => {
     });
 
     it('GET /static/app.js should return JavaScript', async () => {
-      const response = await fetch(`http://localhost:${port}/static/app.js`);
+      const response = await fetch(`${ctx.baseUrl}/static/app.js`);
       assert.strictEqual(response.status, 200);
     });
 
     it('GET /static/styles.css should return CSS', async () => {
-      const response = await fetch(`http://localhost:${port}/static/styles.css`);
+      const response = await fetch(`${ctx.baseUrl}/static/styles.css`);
       assert.strictEqual(response.status, 200);
     });
+  });
+});
+
+describe('/api/info pdfStyleDefaults (mdv.config.json -> Style panel flow)', () => {
+  it('echoes the pdfStyleDefaults option; empty object when absent', async () => {
+    const os = await import('node:os');
+    const fsp = await import('node:fs/promises');
+    const { createMdvServer } = await import('../src/server.js');
+
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'mdv-info-'));
+    const server = createMdvServer({
+      rootDir: dir,
+      port: 0,
+      pdfStyleDefaults: { css: 'report.css', pdfOptions: 'pdf-options.json' }
+    });
+    const { port } = await server.start();
+    try {
+      const data = await (await fetch(`http://localhost:${port}/api/info`)).json();
+      assert.deepStrictEqual(data.pdfStyleDefaults, { css: 'report.css', pdfOptions: 'pdf-options.json' });
+    } finally {
+      await server.stop();
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+
+    const dir2 = await fsp.mkdtemp(path.join(os.tmpdir(), 'mdv-info2-'));
+    const server2 = createMdvServer({ rootDir: dir2, port: 0 });
+    const { port: port2 } = await server2.start();
+    try {
+      const data2 = await (await fetch(`http://localhost:${port2}/api/info`)).json();
+      assert.deepStrictEqual(data2.pdfStyleDefaults, {});
+    } finally {
+      await server2.stop();
+      await fsp.rm(dir2, { recursive: true, force: true });
+    }
   });
 });

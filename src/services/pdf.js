@@ -15,7 +15,6 @@ import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
-import os from 'os';
 import { createRequire } from 'module';
 import { resolvePdfOptions } from '../styles/index.js';
 

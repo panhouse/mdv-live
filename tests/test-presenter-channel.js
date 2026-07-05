@@ -1,47 +1,40 @@
 /**
  * Tests for src/static/lib/presenterChannel.js — pure JS, no DOM required.
  *
- * The browser-side library exposes itself on `globalThis.MDVPresenterChannel`.
- * We load it into an isolated VM context so we can exercise it under Node.
  * `create()` (BroadcastChannel) is not exercised here — it needs a browser.
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
-import vm from 'node:vm';
-import nodeCrypto from 'node:crypto';
+import { CHANNEL_NAME, create, newWindowId } from '../src/static/lib/presenterChannel.js';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const code = readFileSync(
-  path.join(here, '..', 'src', 'static', 'lib', 'presenterChannel.js'),
-  'utf-8'
-);
-
-// `extras` lets a test omit `crypto` to exercise the fallback path.
-function loadModule(extras = {}) {
-  const sandbox = vm.createContext({ console, ...extras });
-  vm.runInContext(code, sandbox);
-  return sandbox.MDVPresenterChannel;
+// newWindowId's fallback path only runs when `crypto.randomUUID` is
+// unavailable. Real Node has a global `crypto` (WebCrypto) with
+// `randomUUID`, so we temporarily remove the global to exercise the
+// fallback, then restore the original property descriptor.
+function withoutGlobalCrypto(fn) {
+  const orig = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+  try {
+    Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true });
+    return fn();
+  } finally {
+    if (orig) Object.defineProperty(globalThis, 'crypto', orig);
+  }
 }
 
 describe('presenterChannel — module surface', () => {
   it('exposes CHANNEL_NAME, create, newWindowId', () => {
-    const mod = loadModule({ crypto: nodeCrypto });
-    assert.equal(mod.CHANNEL_NAME, 'mdv-marp-presenter');
-    assert.equal(typeof mod.create, 'function');
-    assert.equal(typeof mod.newWindowId, 'function');
+    assert.equal(CHANNEL_NAME, 'mdv-marp-presenter');
+    assert.equal(typeof create, 'function');
+    assert.equal(typeof newWindowId, 'function');
   });
 });
 
 describe('presenterChannel — newWindowId (save routing)', () => {
   it('returns a unique non-empty string on every call (crypto.randomUUID)', () => {
-    const mod = loadModule({ crypto: nodeCrypto });
     const ids = new Set();
     for (let i = 0; i < 1000; i++) {
-      const id = mod.newWindowId();
+      const id = newWindowId();
       assert.equal(typeof id, 'string');
       assert.ok(id.length > 0, 'window id must be non-empty');
       ids.add(id);
@@ -50,15 +43,15 @@ describe('presenterChannel — newWindowId (save routing)', () => {
   });
 
   it('falls back to a unique id when crypto.randomUUID is unavailable', () => {
-    // No `crypto` in the sandbox → the typeof guard takes the fallback.
-    const mod = loadModule();
-    const ids = new Set();
-    for (let i = 0; i < 1000; i++) {
-      const id = mod.newWindowId();
-      assert.equal(typeof id, 'string');
-      assert.ok(id.length > 0, 'fallback window id must be non-empty');
-      ids.add(id);
-    }
-    assert.equal(ids.size, 1000, 'fallback window ids must all be unique');
+    withoutGlobalCrypto(() => {
+      const ids = new Set();
+      for (let i = 0; i < 1000; i++) {
+        const id = newWindowId();
+        assert.equal(typeof id, 'string');
+        assert.ok(id.length > 0, 'fallback window id must be non-empty');
+        ids.add(id);
+      }
+      assert.equal(ids.size, 1000, 'fallback window ids must all be unique');
+    });
   });
 });

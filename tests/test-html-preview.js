@@ -2,28 +2,13 @@
  * Tests for HTML Preview Feature
  */
 
-import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
-import path from 'node:path';
-import fs from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
-import { createMdvServer } from '../src/server.js';
+
 import { getFileType } from '../src/utils/fileTypes.js';
+import { startTestServer } from './helpers/server.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const testRootDir = path.join(__dirname, 'fixtures', 'html-preview');
-const port = 19987;
-
-describe('HTML Preview Feature', () => {
-  let server;
-
-  before(async () => {
-    // Create test directory and files
-    await fs.mkdir(testRootDir, { recursive: true });
-
-    // Create test HTML file
-    await fs.writeFile(path.join(testRootDir, 'index.html'), `<!DOCTYPE html>
+const INDEX_HTML = `<!DOCTYPE html>
 <html>
 <head>
   <link rel="stylesheet" href="styles.css">
@@ -32,29 +17,27 @@ describe('HTML Preview Feature', () => {
   <h1>Test HTML</h1>
   <script src="script.js"></script>
 </body>
-</html>`);
+</html>`;
 
-    // Create test CSS file
-    await fs.writeFile(path.join(testRootDir, 'styles.css'), `body { color: red; }`);
+describe('HTML Preview Feature', () => {
+  let ctx;
 
-    // Create test JS file
-    await fs.writeFile(path.join(testRootDir, 'script.js'), `console.log('hello');`);
-
-    // Create subdirectory with HTML
-    await fs.mkdir(path.join(testRootDir, 'subdir'), { recursive: true });
-    await fs.writeFile(path.join(testRootDir, 'subdir', 'page.html'), `<html><body>Sub page</body></html>`);
-    await fs.writeFile(path.join(testRootDir, 'subdir', 'page.htm'), `<html><body>HTM page</body></html>`);
-
-    server = createMdvServer({ rootDir: testRootDir, port });
-    await server.start();
+  before(async () => {
+    ctx = await startTestServer({
+      files: {
+        'index.html': INDEX_HTML,
+        'styles.css': `body { color: red; }`,
+        'script.js': `console.log('hello');`,
+        'subdir/page.html': `<html><body>Sub page</body></html>`,
+        'subdir/page.htm': `<html><body>HTM page</body></html>`,
+      },
+    });
   });
 
   after(async () => {
-    if (server) {
-      await server.stop();
+    if (ctx) {
+      await ctx.stop();
     }
-    // Cleanup test files
-    await fs.rm(testRootDir, { recursive: true, force: true });
   });
 
   describe('File Type Detection', () => {
@@ -75,7 +58,7 @@ describe('HTML Preview Feature', () => {
 
   describe('GET /api/file for HTML', () => {
     it('should return htmlUrl for HTML files', async () => {
-      const response = await fetch(`http://localhost:${port}/api/file?path=index.html`);
+      const response = await fetch(`${ctx.baseUrl}/api/file?path=index.html`);
       assert.strictEqual(response.status, 200);
 
       const data = await response.json();
@@ -88,7 +71,7 @@ describe('HTML Preview Feature', () => {
     });
 
     it('should return htmlUrl for .htm files', async () => {
-      const response = await fetch(`http://localhost:${port}/api/file?path=subdir/page.htm`);
+      const response = await fetch(`${ctx.baseUrl}/api/file?path=subdir/page.htm`);
       assert.strictEqual(response.status, 200);
 
       const data = await response.json();
@@ -97,7 +80,7 @@ describe('HTML Preview Feature', () => {
     });
 
     it('should escape HTML content for code view', async () => {
-      const response = await fetch(`http://localhost:${port}/api/file?path=index.html`);
+      const response = await fetch(`${ctx.baseUrl}/api/file?path=index.html`);
       const data = await response.json();
 
       // Content should have escaped HTML
@@ -107,7 +90,7 @@ describe('HTML Preview Feature', () => {
     });
 
     it('should preserve raw HTML content', async () => {
-      const response = await fetch(`http://localhost:${port}/api/file?path=index.html`);
+      const response = await fetch(`${ctx.baseUrl}/api/file?path=index.html`);
       const data = await response.json();
 
       // Raw should have unescaped HTML
@@ -118,7 +101,7 @@ describe('HTML Preview Feature', () => {
 
   describe('GET /raw/* endpoint', () => {
     it('should serve HTML files with correct content type', async () => {
-      const response = await fetch(`http://localhost:${port}/raw/index.html`);
+      const response = await fetch(`${ctx.baseUrl}/raw/index.html`);
       assert.strictEqual(response.status, 200);
 
       const contentType = response.headers.get('content-type');
@@ -129,7 +112,7 @@ describe('HTML Preview Feature', () => {
     });
 
     it('should serve CSS files referenced by HTML', async () => {
-      const response = await fetch(`http://localhost:${port}/raw/styles.css`);
+      const response = await fetch(`${ctx.baseUrl}/raw/styles.css`);
       assert.strictEqual(response.status, 200);
 
       const contentType = response.headers.get('content-type');
@@ -140,7 +123,7 @@ describe('HTML Preview Feature', () => {
     });
 
     it('should serve JS files referenced by HTML', async () => {
-      const response = await fetch(`http://localhost:${port}/raw/script.js`);
+      const response = await fetch(`${ctx.baseUrl}/raw/script.js`);
       assert.strictEqual(response.status, 200);
 
       const contentType = response.headers.get('content-type');
@@ -148,7 +131,7 @@ describe('HTML Preview Feature', () => {
     });
 
     it('should serve files from subdirectories', async () => {
-      const response = await fetch(`http://localhost:${port}/raw/subdir/page.html`);
+      const response = await fetch(`${ctx.baseUrl}/raw/subdir/page.html`);
       assert.strictEqual(response.status, 200);
 
       const body = await response.text();
@@ -156,25 +139,25 @@ describe('HTML Preview Feature', () => {
     });
 
     it('should return 404 for non-existent files', async () => {
-      const response = await fetch(`http://localhost:${port}/raw/nonexistent.html`);
+      const response = await fetch(`${ctx.baseUrl}/raw/nonexistent.html`);
       assert.strictEqual(response.status, 404);
     });
 
     it('should reject path traversal attempts', async () => {
       // Note: Express normalizes paths like /../../../ to /, so we test with encoded path
       // The important thing is that the file is not accessible
-      const response = await fetch(`http://localhost:${port}/raw/test%2F..%2F..%2F..%2Fetc%2Fpasswd`);
+      const response = await fetch(`${ctx.baseUrl}/raw/test%2F..%2F..%2F..%2Fetc%2Fpasswd`);
       // Should return 403 (Access denied) because validatePath rejects '..'
       assert.strictEqual(response.status, 403);
     });
 
     it('should reject absolute paths', async () => {
-      const response = await fetch(`http://localhost:${port}/raw//etc/passwd`);
+      const response = await fetch(`${ctx.baseUrl}/raw//etc/passwd`);
       assert.strictEqual(response.status, 403);
     });
 
     it('should reject paths with null bytes', async () => {
-      const response = await fetch(`http://localhost:${port}/raw/index.html%00.txt`);
+      const response = await fetch(`${ctx.baseUrl}/raw/index.html%00.txt`);
       assert.strictEqual(response.status, 403);
     });
   });
