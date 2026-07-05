@@ -25,6 +25,7 @@ export const elements = {
     pdfOptionsPath: document.getElementById('pdfOptionsPath'),
     pdfStyleApply: document.getElementById('pdfStyleApply'),
     pdfStyleClear: document.getElementById('pdfStyleClear'),
+    searchBoxToggle: document.getElementById('searchBoxToggle'),
     editLabel: document.getElementById('editLabel'),
     editorStatus: document.getElementById('editorStatus'),
     shutdownBtn: document.getElementById('shutdownBtn'),

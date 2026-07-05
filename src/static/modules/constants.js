@@ -23,6 +23,22 @@ export const NOTES_ROW_MIN_PX = 0;
 export const SPLIT_HANDLE_PX = 8;
 export const SLIDE_ROW_MIN_PX = 80;
 
+// Search palette (modules/searchPalette.js — Cmd/Ctrl+K).
+/** Debounce before firing MDVApi.search() as the user types. */
+export const SEARCH_DEBOUNCE_MS = 200;
+/** Minimum query length before a request is fired at all. */
+export const SEARCH_MIN_QUERY_LENGTH = 2;
+/**
+ * Requested `limit` for the palette's own request. This is a UI-snappiness
+ * cap independent of the server's hard SEARCH_MAX_RESULTS (500,
+ * src/config/constants.js) — a live-typing palette has no use for hundreds
+ * of DOM rows, so we ask for fewer and let `truncated` drive the footer's
+ * "more results" notice.
+ */
+export const SEARCH_PALETTE_LIMIT = 50;
+/** How long the jump-to-hit flash highlight stays on the target element/pane. */
+export const SEARCH_JUMP_FLASH_MS = 1500;
+
 export const HLJS_THEMES = {
     light: '/static/vendor/highlight/github.min.css',
     dark: '/static/vendor/highlight/github-dark.min.css'

@@ -142,6 +142,7 @@ records what's vendored; `scripts/sync-vendor.js` re-populates it and
 | GET | `/api/tree` | no | — | `api/tree.js` |
 | GET | `/api/tree/expand` | no | — | `api/tree.js` |
 | GET | `/api/tree/page` | no | — | `api/tree.js` |
+| GET | `/api/search` | no | — | `api/search.js` → `services/search.js` |
 | POST | `/api/upload` | yes | Origin | `api/upload.js` |
 | POST | `/api/pdf/export` | writes to `os.tmpdir()`, not rootDir | Origin | `api/pdf.js` |
 | GET | `/api/info` | no | — | `server.js` |

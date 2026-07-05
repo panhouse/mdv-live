@@ -9,6 +9,7 @@ import { TabManager } from './tabs.js';
 import { EditorManager } from './editor.js';
 import { PrintManager } from './print.js';
 import { FileOperationsManager } from './fileOperations.js';
+import { SearchPalette } from './searchPalette.js';
 
 export const KeyboardManager = {
     selectedTreePath: null,
@@ -18,7 +19,8 @@ export const KeyboardManager = {
         'w': { handler: () => TabManager.close(state.activeTabIndex), requiresTab: true },
         'e': { handler: () => EditorManager.toggle().catch(() => { /* status already shown */ }), requiresTab: true },
         's': { handler: () => EditorManager.save(), requiresEditMode: true },
-        'p': { handler: () => PrintManager.print(), requiresTab: true }
+        'p': { handler: () => PrintManager.print(), requiresTab: true },
+        'k': { handler: () => SearchPalette.open() }
     },
 
     handleModShortcut(key) {

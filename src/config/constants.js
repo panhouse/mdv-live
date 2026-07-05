@@ -76,3 +76,26 @@ export const MAX_SLIDE_INDEX = 1000;
  * would block the event loop for too long. 20MB.
  */
 export const OFFICE_PREVIEW_MAX_BYTES = 20 * 1024 * 1024;
+
+/**
+ * Full-text search (src/services/search.js engine, src/api/search.js route).
+ */
+
+/** Per-file size cap for search — larger files are skipped entirely (not read). 1MB. */
+export const SEARCH_MAX_FILE_BYTES = 1 * 1024 * 1024;
+
+/**
+ * Hard cap on total results returned by one search request, regardless of
+ * the caller-requested `limit`. Hitting it sets `truncated: true`.
+ */
+export const SEARCH_MAX_RESULTS = 500;
+
+/**
+ * Runaway guard: max files scanned (read + grepped) in one search request
+ * before the walk stops early, independent of how many results were found.
+ * Also sets `truncated: true` when hit.
+ */
+export const SEARCH_MAX_FILES = 5000;
+
+/** Max accepted length (chars) of the `q` query-string param (GET /api/search). */
+export const SEARCH_QUERY_MAX_LENGTH = 256;

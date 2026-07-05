@@ -29,6 +29,7 @@ import { PrintManager } from './modules/print.js';
 import { ContextMenuManager } from './modules/contextMenu.js';
 import { DragDropManager } from './modules/dragDrop.js';
 import { KeyboardManager } from './modules/keyboard.js';
+import { SearchPalette } from './modules/searchPalette.js';
 import { MDVApi } from './lib/apiClient.js';
 
 // ============================================================
@@ -129,6 +130,7 @@ async function init() {
     DialogManager.init();
     ContextMenuManager.init();
     DragDropManager.init();
+    SearchPalette.init();
     KeyboardManager.init();
     PresenterView.init();
 
