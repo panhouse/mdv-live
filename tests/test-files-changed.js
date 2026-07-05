@@ -163,6 +163,38 @@ describe('watcher.js — files_changed broadcast', () => {
     assert.ok(!item.etag, 'added items carry no etag');
   });
 
+  it('deleting a text file broadcasts kind: removed (codex round-1)', async () => {
+    const { ws, messages } = await connectClient(ctx);
+    await fs.writeFile(`${ctx.rootDir}/doomed.md`, 'bye\n', 'utf-8');
+    await pollUntil(() =>
+      messages.find((m) => m.type === 'files_changed' && m.items.some((it) => it.path === 'doomed.md' && it.kind === 'added'))
+    );
+    await fs.unlink(`${ctx.rootDir}/doomed.md`);
+    const msg = await pollUntil(() =>
+      messages.find((m) => m.type === 'files_changed' && m.items.some((it) => it.path === 'doomed.md' && it.kind === 'removed'))
+    );
+    ws.close();
+    const item = msg.items.find((it) => it.path === 'doomed.md' && it.kind === 'removed');
+    assert.ok(item, 'removed item present');
+    assert.strictEqual(item.etag, undefined);
+  });
+
+  it('changing an html file does NOT enter the badge feed (untrackable type, codex round-1)', async () => {
+    const { ws, messages } = await connectClient(ctx);
+    await fs.writeFile(`${ctx.rootDir}/page.html`, '<h1>v1</h1>\n', 'utf-8');
+    // 'added' for html must not appear either
+    await fs.writeFile(`${ctx.rootDir}/canary.md`, 'canary\n', 'utf-8');
+    await pollUntil(() =>
+      messages.find((m) => m.type === 'files_changed' && m.items.some((it) => it.path === 'canary.md'))
+    );
+    ws.close();
+    const htmlItems = messages
+      .filter((m) => m.type === 'files_changed')
+      .flatMap((m) => m.items)
+      .filter((it) => it.path === 'page.html');
+    assert.strictEqual(htmlItems.length, 0, 'html files stay out of the badge feed');
+  });
+
   it('adding a new binary file does not broadcast files_changed (tree_update still fires)', async () => {
     const { ws, messages } = await connectClient(ctx);
     const from = messages.length;

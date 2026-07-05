@@ -105,12 +105,21 @@ export const UnreadBadgesManager = {
 
     /**
      * Handle a `files_changed` WS broadcast (websocket.js dispatch seam).
-     * @param {Array<{path: string, etag?: string, kind: 'changed'|'added'}>} items
+     * @param {Array<{path: string, etag?: string, kind: 'changed'|'added'|'removed'}>} items
      */
     handleFilesChanged(items) {
         if (!Array.isArray(items)) return;
         for (const item of items) {
             if (!item || typeof item.path !== 'string') continue;
+
+            if (item.kind === 'removed') {
+                // Deleted (or rename-source) file: forget it entirely, or
+                // the header chip counts a ghost and 次の未読へ opens a
+                // dead path (codex round-1).
+                this._unreadEtag.delete(item.path);
+                this._seenKnown.delete(item.path);
+                continue;
+            }
 
             if (item.kind === 'added') {
                 // Newly-arrived file: unconditionally unread, per spec.

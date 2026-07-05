@@ -87,6 +87,16 @@ export function setupWatcher(rootDir, wss, options = {}) {
     }, FILES_CHANGED_DEBOUNCE_MS);
   }
 
+  // The badge feed only reports files the review surface can actually
+  // track — the same {markdown, code, text} set diffReview.js's
+  // DIFFABLE_FILE_TYPES covers. Anything else (html previews, binaries)
+  // would become an unread the client can never mark seen by opening it
+  // (codex 0.6.5 round-1).
+  const isTrackable = (relativePath) => {
+    const { type } = getFileType(relativePath);
+    return type === 'markdown' || type === 'code' || type === 'text';
+  };
+
   watcher.on('change', async (filePath) => {
     const relativePath = toRelativePath(filePath);
     const relativeDir = path.dirname(relativePath);
@@ -106,8 +116,11 @@ export function setupWatcher(rootDir, wss, options = {}) {
 
       // Same raw-content etag file_update carries, reused (not
       // recomputed) so a hash the badge feed reports is guaranteed to
-      // match the one diffReview.js's baseline comparison sees.
-      scheduleFilesChanged({ path: relativePath, etag, kind: 'changed' });
+      // match the one diffReview.js's baseline comparison sees. Only
+      // trackable types — see isTrackable below (codex 0.6.5 round-1).
+      if (isTrackable(relativePath)) {
+        scheduleFilesChanged({ path: relativePath, etag, kind: 'changed' });
+      }
 
       wss.broadcastFileUpdate(relativePath, {
         type: 'file_update',
@@ -120,14 +133,24 @@ export function setupWatcher(rootDir, wss, options = {}) {
     }
   });
 
-  // Brand-new files only (not directories) — text-renderable ones only
-  // (getFileType().binary), matching the set of files that ever get a
-  // rendered pane/etag at all. No etag is computed here (the file isn't
-  // read) — the client treats an 'added' item as unconditionally unread.
+  // Brand-new files only (not directories). No etag is computed here (the
+  // file isn't read) — the client treats an 'added' item as
+  // unconditionally unread.
   watcher.on('add', (filePath) => {
     const relativePath = toRelativePath(filePath);
-    if (!getFileType(relativePath).binary) {
+    if (isTrackable(relativePath)) {
       scheduleFilesChanged({ path: relativePath, kind: 'added' });
+    }
+  });
+
+  // Deleted files leave the badge feed too, or the client's unread map
+  // keeps counting ghosts (and 次の未読へ opens a dead path). Renames
+  // arrive as unlink+add pairs and are covered by both handlers
+  // (codex 0.6.5 round-1).
+  watcher.on('unlink', (filePath) => {
+    const relativePath = toRelativePath(filePath);
+    if (isTrackable(relativePath)) {
+      scheduleFilesChanged({ path: relativePath, kind: 'removed' });
     }
   });
 
