@@ -59,8 +59,11 @@ test('diff review: no bar on first open; a live edit shows the bar + highlights;
   // (a) First-ever open: no prior baseline -> silently recorded, no bar.
   await expect(bar).toBeHidden();
   await expect.poll(() => page.evaluate((p) => {
+    // Keys are namespaced rootPath + NUL + path (cross-project isolation)
+    // - match by suffix.
     const store = JSON.parse(localStorage.getItem('mdv-last-seen') || '{}');
-    return store[p] && typeof store[p].hash === 'string';
+    const key = Object.keys(store).find((k) => k.endsWith('\u0000' + p));
+    return !!key && typeof store[key].hash === 'string';
   }, FILE)).toBe(true);
 
   // Rewrite the file on disk while it's the active/watched tab. chokidar's
@@ -165,4 +168,43 @@ test('Marp decks get real change counts (baseline seeded on first sight, codex)'
   // baseline yields a real change count instead.
   await expect(bar).toContainText('変更されました');
   await expect(bar).not.toContainText('取得できませんでした');
+});
+
+test('baselines are namespaced by served root (no cross-project bleed)', async ({ page }) => {
+  // Same origin (port) + same relative path, DIFFERENT roots: project B
+  // must not inherit project A's baseline (codex round-4).
+  const portToReuse = server.port;
+  const rootA = await makeFixtureDir('mdv-e2e-rootA-');
+  await seedFiles(rootA, { 'shared.md': '# Project A\n\nAの本文。\n' });
+  // Detach the page's live WebSocket BEFORE stopping a server —
+  // server.close() waits for open connections and hangs otherwise.
+  await page.goto('about:blank');
+  await server.stop();
+  const serverA = await startServer(rootA, { port: portToReuse });
+  // NOTE: the helper's baseURL reflects its own free-port pick, not the
+  // serverOptions.port override - address the reused port directly.
+  const base = `http://localhost:${portToReuse}`;
+  await page.goto(base + '/');
+  await page.locator('.tree-item[data-path="shared.md"] [data-action="open"]').click();
+  await expect(page.locator('#content h1')).toHaveText('Project A');
+  await page.waitForTimeout(500); // baseline for root A
+  await page.goto('about:blank');
+  await serverA.stop();
+
+  const rootB = await makeFixtureDir('mdv-e2e-rootB-');
+  await seedFiles(rootB, { 'shared.md': '# Project B\n\nBの本文はまったく別物。\n' });
+  const serverB = await startServer(rootB, { port: portToReuse });
+  await page.goto(base + '/');
+  await page.locator('.tree-item[data-path="shared.md"] [data-action="open"]').click();
+  await expect(page.locator('#content h1')).toHaveText('Project B');
+  await page.waitForTimeout(700);
+  // With the bug, A's hash mismatches B's content -> spurious bar.
+  await expect(page.locator('#diffReviewBar')).toBeHidden();
+  await page.goto('about:blank');
+  await serverB.stop();
+  await removeFixtureDir(rootA);
+  await removeFixtureDir(rootB);
+  // Restart the shared suite server so later tests in this file (if any
+  // are added) and afterAll teardown find a live instance.
+  server = await startServer(fixtureDir, { port: portToReuse });
 });

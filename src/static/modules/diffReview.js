@@ -118,6 +118,21 @@ function readStore() {
     }
 }
 
+/**
+ * Baselines are namespaced by the SERVED ROOT (state.rootPath from
+ * /api/info): localhost origins share localStorage, so without this a
+ * baseline saved for project A's README.md would be reused for project
+ * B's README.md when a different root is served on the same port
+ * (codex round-4). Returns null until rootPath is known — callers
+ * treat that as "no baseline yet" and never persist under a wrong root.
+ * @param {string} path
+ * @returns {string|null}
+ */
+function storeKey(path) {
+    if (!state.rootPath) return null;
+    return `${state.rootPath}\u0000${path}`;
+}
+
 function writeStore(store) {
     try {
         localStorage.setItem(STORAGE_KEYS.LAST_SEEN, JSON.stringify(store));
@@ -132,7 +147,9 @@ function writeStore(store) {
  * @returns {{ hash: string|null, ts: number }|null}
  */
 export function getLastSeen(path) {
-    const entry = readStore()[path];
+    const key = storeKey(path);
+    if (!key) return null;
+    const entry = readStore()[key];
     return entry && typeof entry === 'object' ? entry : null;
 }
 
@@ -142,8 +159,17 @@ export function getLastSeen(path) {
  * @param {string|null|undefined} hash
  */
 export function markSeen(path, hash) {
+    const key = storeKey(path);
+    if (!key) return;
     const store = readStore();
-    store[path] = { hash: hash || null, ts: Date.now() };
+    if (!hash) {
+        // A null baseline can never match a later real hash — storing it
+        // would flag the file as changed forever (and 確認済み would never
+        // stick for files too large to hash). Delete instead (codex).
+        delete store[key];
+    } else {
+        store[key] = { hash, ts: Date.now() };
+    }
     writeStore(store);
 }
 
@@ -270,6 +296,15 @@ export const DiffReviewManager = {
         }
 
         if (data.available === false) {
+            if (!data.currentHash) {
+                // File too large to even hash (/api/diff's pre-read bail).
+                // It can never become diffable and 確認済み could never
+                // stick (no hash to store) — treat like a binary tab: no
+                // bar, and drop any stale baseline (codex round-4).
+                markSeen(tab.path, null);
+                this._hide();
+                return;
+            }
             this._current = { path: tab.path, kind: 'unavailable', currentHash: data.currentHash };
             this._jumpIndex = -1;
             this._clearHighlightClasses();
