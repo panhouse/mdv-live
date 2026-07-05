@@ -658,7 +658,14 @@ body {
 .office-preview-table th, .office-preview-table td {
     padding: 6px 12px;
     border: 1px solid var(--border);
-    white-space: nowrap;
+    /* nowrap だと長文セルが表を画面外まで押し広げ、隣の列が「消えた」
+       ように見える（実業務ファイルの検品で発覚）。折り返しつつ、1列が
+       表を独占しないよう上限幅を設ける。列数が多い場合は wrap 側の
+       overflow-x が引き続き面倒を見る。 */
+    white-space: normal;
+    overflow-wrap: anywhere;
+    max-width: 32em;
+    min-width: 4em;
 }
 .office-preview-table thead th {
     position: sticky;
@@ -668,6 +675,7 @@ body {
     z-index: 1;
 }
 .office-preview-table tbody tr:nth-child(even) { background: var(--bg-secondary); }
+.office-preview-formula { color: var(--text-muted, #888); }
 
 /* pptx */
 .office-preview-slides { display: flex; flex-direction: column; gap: 16px; }

@@ -295,7 +295,7 @@ export const TabManager = {
             // (src/api/file.js) carry `content`; oversized/legacy office
             // files (still fileType 'office') fall through to the plain
             // binary card below exactly as before.
-            ContentRenderer.renderOffice(tab.content, tab.name, tab.downloadUrl);
+            ContentRenderer.renderOffice(tab.content);
         } else if (binaryTypes.includes(fileType)) {
             ContentRenderer.renderBinary(tab.name, fileType);
         } else {

@@ -79,8 +79,9 @@ test('office: an xlsx opens from the tree and shows a table preview + banner', a
   await expect(page.locator('#content .office-preview-table')).toContainText('MDV-DEMO-CELL');
   await expect(page.locator('#content .office-preview-table')).toContainText('12345');
 
-  // Download link stays visible for the "real thing" (元アプリで見る).
-  await expect(page.locator('#content a.preview-download-btn')).toBeVisible();
+  // No download button under the preview (owner decision 2026-07-05):
+  // the sidebar context menu covers downloading.
+  await expect(page.locator('#content a.preview-download-btn')).toHaveCount(0);
 });
 
 test('office: a legacy .xls file still shows the plain binary download card', async ({ page }) => {
