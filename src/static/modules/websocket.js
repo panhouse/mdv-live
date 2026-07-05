@@ -23,6 +23,20 @@
  * helper instead of its own truthy guards — see that module's docstring
  * for the full field/guard table and why folding the `if (tab.isMarp)`
  * block into one call is behavior-preserving.
+ *
+ * 0.6.4 (diff review): a fourth forward reference, same pattern as the
+ * three above — modules/diffReview.js needs to re-run its baseline-diff
+ * check whenever a live file_update actually repaints the content pane
+ * (so the change-count bar / highlights stay live for the active tab),
+ * but it has no reason to depend on WebSocketManager any other way. Rather
+ * than import it directly (this module has no other need of it, and
+ * diffReview.js has no need of this module either — an import here would
+ * exist solely for this one call), app.js wires it via setOnFileRendered()
+ * once at bootstrap. Only called on the two branches that actually replace
+ * elements.content's markup (renderMarp / render) — NOT on the early
+ * returns above them (image reload, no-content, or the "deferred render
+ * while mid-edit of inline notes" branch, none of which touch the DOM
+ * diffReview.js reads data-source-line out of).
  */
 import { state } from './state.js';
 import { elements } from './dom.js';
@@ -35,6 +49,7 @@ export const WebSocketManager = {
     _inlineNotesPanel: null,
     _presenterView: null,
     _refreshCurrentTab: null,
+    _onFileRendered: null,
 
     // Called once from app.js at bootstrap to wire the forward references
     // into managers/functions that still live in the app.js monolith.
@@ -52,6 +67,12 @@ export const WebSocketManager = {
 
     setRefreshCurrentTab(fn) {
         this._refreshCurrentTab = fn;
+    },
+
+    // 0.6.4: post-render seam for modules/diffReview.js — see this
+    // module's docstring above.
+    setOnFileRendered(fn) {
+        this._onFileRendered = fn;
     },
 
     connect() {
@@ -160,5 +181,7 @@ export const WebSocketManager = {
             this._contentRenderer.render(data.content, data.fileType || tab.fileType);
             restoreScrollPosition(elements.content, currentScroll);
         }
+
+        if (this._onFileRendered) this._onFileRendered(tab);
     }
 };

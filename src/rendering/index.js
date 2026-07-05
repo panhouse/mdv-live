@@ -96,6 +96,7 @@ export async function renderFile(filePath, relativeDir) {
     return {
       content: renderCode(content, fileType.lang),
       raw: content,
+      etag: makeEtag(content),
       fileType: 'code'
     };
   }
@@ -103,6 +104,7 @@ export async function renderFile(filePath, relativeDir) {
   return {
     content: renderText(content),
     raw: content,
+    etag: makeEtag(content),
     fileType: 'text'
   };
 }
@@ -134,6 +136,11 @@ function renderMarkdownFile(content, relativeDir) {
   return {
     content: rewriteMediaPaths(renderMarkdown(content), relativeDir),
     raw: content,
+    // Raw-content hash for EVERY text envelope (not just Marp): the diff
+    // review's fast path compares tab.etag to its stored baseline, and an
+    // etag that only sometimes refreshes is worse than none (codex 0.6.4
+    // round-7 — stale etags after focus refreshes hid real changes).
+    etag: makeEtag(content),
     fileType: 'markdown',
     isMarp: false
   };

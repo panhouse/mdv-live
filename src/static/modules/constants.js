@@ -14,7 +14,14 @@ export const STORAGE_KEYS = {
     PDF_STYLE_PATH: 'mdv-pdf-style-path',
     PDF_OPTIONS_PATH: 'mdv-pdf-options-path',
     NOTES_ROW_PX: 'mdv-notes-row-px',
-    NOTES_STALE_BACKUP: 'mdv-notes-stale-backup'
+    NOTES_STALE_BACKUP: 'mdv-notes-stale-backup',
+    // Diff review (modules/diffReview.js — change-tracking bar/highlights,
+    // 0.6.4). Holds { [path]: { hash, ts } } — the baseline a client last
+    // confirmed seeing for each path. This is also the shared foundation
+    // 0.6.5's unread/checked-off tree state builds on (see
+    // docs/plan-review-surface-0.6.x.md §③): diffReview.js's exported
+    // getLastSeen()/markSeen() are the one place that reads/writes it.
+    LAST_SEEN: 'mdv-last-seen'
 };
 
 export const NOTES_AUTOSAVE_DEBOUNCE_MS = 800;
@@ -38,6 +45,10 @@ export const SEARCH_MIN_QUERY_LENGTH = 2;
 export const SEARCH_PALETTE_LIMIT = 50;
 /** How long the jump-to-hit flash highlight stays on the target element/pane. */
 export const SEARCH_JUMP_FLASH_MS = 1500;
+
+// Diff review (modules/diffReview.js — change-tracking bar/highlights).
+/** How long the ⌥↑↓ jump's brief outline flash stays on the target block. */
+export const DIFF_JUMP_FLASH_MS = 1200;
 
 export const HLJS_THEMES = {
     light: '/static/vendor/highlight/github.min.css',

@@ -139,6 +139,31 @@ function search(q, limit, signal) {
   return fetch('/api/search?' + params.toString(), signal ? { signal } : undefined);
 }
 
+/**
+ * GET /api/diff?path=&from= — change-tracking line diff against a baseline
+ * content hash (src/api/diff.js, backed by src/utils/lineDiff.js /
+ * src/services/changeJournal.js). Returns the raw Response (not parsed,
+ * mirrors search()/fetchTree()/fetchFile()) so the caller inspects
+ * `.ok`/`.status` and parses `{ available, identical, currentHash, added,
+ * changed, removedAt, reason? }` itself.
+ *
+ * `from` is optional — when falsy (missing/empty), the request omits the
+ * query param entirely and the server treats it as "no known baseline"
+ * (reports `unknown-baseline`, but still returns `currentHash`). Callers
+ * (modules/diffReview.js) rely on that to learn a file's current content
+ * hash the first time they see a path, since GET /api/file itself only
+ * computes an `etag` for Marp decks — see modules/renderedFile.js's
+ * docstring.
+ * @param {string} path
+ * @param {string} [from] - baseline content hash (`sha256:<hex>`)
+ * @returns {Promise<Response>}
+ */
+function diff(path, from) {
+  const params = new URLSearchParams({ path });
+  if (from) params.set('from', from);
+  return fetch('/api/diff?' + params.toString());
+}
+
 const api = {
   getDeck,
   saveMarpNote,
@@ -154,7 +179,8 @@ const api = {
   deleteFile,
   shutdown,
   fetchRawCss,
-  search
+  search,
+  diff
 };
 
 export {
@@ -173,6 +199,7 @@ export {
   shutdown,
   fetchRawCss,
   search,
+  diff,
   api as MDVApi
 };
 

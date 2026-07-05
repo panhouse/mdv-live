@@ -443,15 +443,16 @@ export const ContentRenderer = {
             const video = elements.content.querySelector('.video-preview video');
             const source = elements.content.querySelector('.video-preview source');
 
+            // No download button here either (owner decision 2026-07-05):
+            // the sidebar context menu covers downloading.
             const showFallback = () => {
                 if (!container) return;
                 container.innerHTML = `
                     <div class="binary-preview video-fallback">
                         <div class="video-fallback-message">
                             この動画はブラウザで再生できない形式です（例: MPEG-4 Part 2, HEVC）。
-                            ダウンロードして QuickTime 等でご覧ください。
+                            サイドバーで右クリック → ダウンロードして QuickTime 等でご覧ください。
                         </div>
-                        <a class="preview-download-btn" href="${mediaUrl}" download="${safeName}">ダウンロード</a>
                     </div>
                 `;
             };

@@ -24,12 +24,14 @@ import { InlineNotesPanel } from './modules/inlineNotes.js';
 import { PresenterView } from './modules/presenterView.js';
 import { ContentRenderer } from './modules/contentRenderer.js';
 import { TabManager } from './modules/tabs.js';
+import { applyRenderedFile } from './modules/renderedFile.js';
 import { EditorManager } from './modules/editor.js';
 import { PrintManager } from './modules/print.js';
 import { ContextMenuManager } from './modules/contextMenu.js';
 import { DragDropManager } from './modules/dragDrop.js';
 import { KeyboardManager } from './modules/keyboard.js';
 import { SearchPalette } from './modules/searchPalette.js';
+import { DiffReviewManager } from './modules/diffReview.js';
 import { MDVApi } from './lib/apiClient.js';
 
 // ============================================================
@@ -82,14 +84,45 @@ async function refreshCurrentTab() {
     try {
         const response = await MDVApi.fetchFile(tab.path);
         const data = await response.json();
-        if (data.content && data.content !== tab.content) {
-            tab.content = data.content;
-            if (data.raw) {
-                tab.raw = data.raw;
-            }
+        // Compare by content hash, not rendered HTML: a source-only change
+        // (equivalent markdown, whitespace) can render identically while
+        // the raw text — and therefore the review baseline — moved
+        // (codex round-8). etag is universal on text envelopes as of 0.6.4.
+        // Hash comparison only when the envelope HAS a hash — html previews
+        // (and any future non-text type) carry no etag, and undefined !==
+        // null would otherwise force a spurious re-render through the wrong
+        // renderer on every focus (codex round-10).
+        const changed = data.content
+            && ((data.etag && data.etag !== tab.etag) || data.content !== tab.content);
+        if (changed) {
+            // Full rendered-file contract via the SSOT helper — hand-copying
+            // only content/raw left tab.etag stale, which tricked
+            // DiffReviewManager's fast path into hiding a real change
+            // (codex round-6).
+            applyRenderedFile(tab, data);
             const currentScroll = saveScrollPosition(elements.content);
-            ContentRenderer.render(data.content, data.fileType || tab.fileType);
+            if (tab.isMarp) {
+                // Marp decks must repaint through the Marp renderer — the
+                // generic render() would replace the split/notes/navigation
+                // UI with plain HTML (codex round-9). Same call the WS
+                // file_update path uses — including notifying an open
+                // presenter window, which otherwise kept the old slides
+                // when the change arrived via this path (codex round-14).
+                ContentRenderer.renderMarp(data.content, tab.css);
+                PresenterView.broadcastSlides();
+            } else {
+                ContentRenderer.render(data.content, data.fileType || tab.fileType);
+            }
             restoreScrollPosition(elements.content, currentScroll);
+            // This render path bypasses the renderActive() wrapper and the
+            // WS onFileRendered seam — refresh the diff bar here too or a
+            // focus/reconnect repaint leaves it stale (codex round-2).
+            DiffReviewManager.refresh();
+        } else {
+            // Even with nothing to repaint, run the diff refresh: after a
+            // server restart the fast path must get its chance to re-seed
+            // the (now empty) journal with this baseline (codex round-16).
+            DiffReviewManager.refresh();
         }
     } catch (e) {
         console.error('Failed to refresh tab:', e);
@@ -117,7 +150,64 @@ async function init() {
     WebSocketManager.setContentRenderer(ContentRenderer);
     WebSocketManager.setInlineNotesPanel(InlineNotesPanel);
     WebSocketManager.setPresenterView(PresenterView);
-    WebSocketManager.setRefreshCurrentTab(refreshCurrentTab);
+    WebSocketManager.setRefreshCurrentTab(() => {
+        // A reconnect may mean the server (and its in-memory change
+        // journal) restarted — drop the client's seed suppressions so
+        // baselines get re-recorded (codex round-16).
+        DiffReviewManager.resetSeeds();
+        return refreshCurrentTab();
+    });
+    // 0.6.4 (diff review): re-run the active tab's baseline-diff check
+    // after a live file_update actually repaints the content pane — see
+    // modules/websocket.js's docstring.
+    WebSocketManager.setOnFileRendered(() => DiffReviewManager.refresh());
+    DiffReviewManager.setRequestTabRefresh(() => refreshCurrentTab());
+
+    // modules/diffReview.js needs to react to every tab activation (open/
+    // switch/close-then-reselect) and to the theme/PDF-style re-renders
+    // that also funnel through TabManager.renderActive() (see editor.js's
+    // hide() and the ThemeManager/PdfStyleManager wiring above) — but
+    // tabs.js is out of this feature's file scope, so rather than add a
+    // setter inside it, wrap the one method every content re-render already
+    // goes through. This is the same forward-reference idea as
+    // ThemeManager.setRenderActive() above, applied from the opposite
+    // direction (the reactor wraps the trigger instead of the trigger
+    // taking a setter), since tabs.js has no reason to import or know about
+    // diff review. Must happen before anything can call renderActive() —
+    // first possible call is inside TabManager.open() further down.
+    const originalRenderActive = TabManager.renderActive.bind(TabManager);
+    TabManager.renderActive = function () {
+        originalRenderActive();
+        DiffReviewManager.refresh();
+    };
+    // Closing the LAST tab takes ContentRenderer.showWelcome() without
+    // ever calling renderActive(), which would leave a stale diff bar
+    // above the welcome view (codex) — wrap that exit path too.
+    const originalShowWelcome = ContentRenderer.showWelcome.bind(ContentRenderer);
+    ContentRenderer.showWelcome = function () {
+        originalShowWelcome();
+        DiffReviewManager.refresh();
+    };
+    // Entering edit mode swaps the pane to a textarea WITHOUT passing
+    // through renderActive() — refresh here too so the bar hides while
+    // editing (leaving it mounted invites confirming a pre-edit hash).
+    // EVERY Marp repaint funnels through ContentRenderer.renderMarp —
+    // including the deferred blur-path repaint InlineNotesPanel triggers
+    // after a file_update arrived mid-note-edit, which bypasses both the
+    // renderActive wrapper and the WS onFileRendered seam (codex
+    // round-17). Wrapping it here closes all Marp repaint paths at once.
+    const originalRenderMarp = ContentRenderer.renderMarp.bind(ContentRenderer);
+    ContentRenderer.renderMarp = function (...args) {
+        const out = originalRenderMarp(...args);
+        DiffReviewManager.refresh();
+        return out;
+    };
+    const originalEditorShow = EditorManager.show.bind(EditorManager);
+    EditorManager.show = function (...args) {
+        const out = originalEditorShow(...args);
+        DiffReviewManager.refresh();
+        return out;
+    };
 
     // Initialize all managers
     ThemeManager.init();
@@ -131,6 +221,7 @@ async function init() {
     ContextMenuManager.init();
     DragDropManager.init();
     SearchPalette.init();
+    DiffReviewManager.init();
     KeyboardManager.init();
     PresenterView.init();
 
