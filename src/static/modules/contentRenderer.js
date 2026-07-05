@@ -488,14 +488,13 @@ export const ContentRenderer = {
         // server-rendered HTML (src/rendering/office.js) — already escaped
         // there via utils/html.js escapeHtml, same trust posture as the
         // markdown/code render() path above, so it's injected as-is.
-        renderOffice(content, name, downloadUrl) {
-            const safeName = escapeHtml(name);
+        // No download button here (owner decision 2026-07-05): the sidebar
+        // context menu already covers downloading — the button was
+        // redundant chrome under every preview.
+        renderOffice(content) {
             elements.content.innerHTML = `
                 <div class="office-preview-pane">
                     ${content}
-                    <div class="office-preview-actions">
-                        <a class="preview-download-btn" href="${downloadUrl}" download="${safeName}">${safeName} をダウンロード</a>
-                    </div>
                 </div>
             `;
         },
