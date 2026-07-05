@@ -11,6 +11,13 @@ import { PrintManager } from './print.js';
 import { FileOperationsManager } from './fileOperations.js';
 import { SearchPalette } from './searchPalette.js';
 
+// On macOS the shortcut modifier is Cmd ONLY: Ctrl+K/E/A/P are the
+// system-wide readline editing keys inside any text field (Ctrl+K =
+// kill-to-end-of-line), and treating Ctrl as a shortcut modifier hijacked
+// them while editing (owner report, 0.6.7). On Windows/Linux Ctrl is the
+// one and only modifier.
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || '');
+
 export const KeyboardManager = {
     selectedTreePath: null,
 
@@ -54,7 +61,7 @@ export const KeyboardManager = {
 
     init() {
         document.addEventListener('keydown', (e) => {
-            const isMod = e.metaKey || e.ctrlKey;
+            const isMod = IS_MAC ? (e.metaKey && !e.ctrlKey) : e.ctrlKey;
 
             if (isMod && this.handleModShortcut(e.key)) {
                 e.preventDefault();

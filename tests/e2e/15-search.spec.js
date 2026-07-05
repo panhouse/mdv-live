@@ -45,9 +45,10 @@ test('search palette: Cmd/Ctrl+K opens, debounced query renders grouped highligh
 
   // Open via the global keyboard shortcut (metaKey||ctrlKey — see
   // keyboard.js's shortcuts table; existing specs, e.g. 03-edit-save,
-  // establish that 'Meta+<key>' reaches the app's metaKey||ctrlKey check
+  // ControlOrMeta: the app's modifier is platform-split as of 0.6.7
+  // (Cmd-only on macOS so Ctrl+K stays the native kill-line; Ctrl elsewhere)
   // in this CI environment).
-  await page.keyboard.press('Meta+k');
+  await page.keyboard.press('ControlOrMeta+k');
   await expect(overlay).toBeVisible();
 
   const input = page.locator('#searchPaletteInput');
@@ -101,7 +102,7 @@ test('search palette: Cmd/Ctrl+K opens, debounced query renders grouped highligh
   await expect(targetBlock).not.toHaveClass(/search-jump-flash/, { timeout: 3000 });
 
   // Re-open, type a different query, and Esc closes without navigating.
-  await page.keyboard.press('Meta+k');
+  await page.keyboard.press('ControlOrMeta+k');
   await expect(overlay).toBeVisible();
   await page.locator('#searchPaletteInput').fill('見積');
   await expect(page.locator('#searchPaletteResults .search-hit')).toHaveCount(1, { timeout: 5000 });
@@ -128,4 +129,18 @@ test('search palette: toolbar search box also opens the palette, and a short que
 
   await page.keyboard.press('Escape');
   await expect(overlay).toBeHidden();
+});
+
+test('macOS: Ctrl+K inside the editor kills the line instead of opening search (0.6.7)', async ({ page }) => {
+  test.skip(process.platform !== 'darwin', 'Cmd-only modifier split is a macOS behavior');
+  await page.goto(server.baseURL + '/');
+  await page.locator('.tree-item[data-path="01-notes.md"] [data-action="open"]').click();
+  await expect(page.locator('#content')).toBeVisible();
+  await page.keyboard.press('ControlOrMeta+e'); // edit mode
+  const textarea = page.locator('textarea');
+  await expect(textarea).toBeVisible();
+  await textarea.click();
+  await page.keyboard.press('Home');
+  await page.keyboard.press('Control+k'); // native kill-line, NOT search
+  await expect(page.locator('.search-palette, #searchPalette')).toBeHidden();
 });

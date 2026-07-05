@@ -26,7 +26,7 @@ test('edit-save: toggling edit mode, typing, and saving persists to disk', async
   await expect(page.locator('#content h1')).toHaveText('Draft');
 
   // Toggle edit mode via Cmd+E (macOS Chromium uses the Meta modifier).
-  await page.keyboard.press('Meta+e');
+  await page.keyboard.press('ControlOrMeta+e');
   const textarea = page.locator('#editorTextarea');
   await expect(textarea).toBeVisible();
 
@@ -34,7 +34,7 @@ test('edit-save: toggling edit mode, typing, and saving persists to disk', async
   await textarea.fill(newContent);
 
   // Save via Cmd+S and wait for the toolbar to confirm the write.
-  await page.keyboard.press('Meta+s');
+  await page.keyboard.press('ControlOrMeta+s');
   await expect(page.locator('#editorStatus')).toHaveText('Saved!', { timeout: 5000 });
 
   // The file on disk actually contains the new text.
