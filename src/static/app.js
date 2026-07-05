@@ -32,6 +32,7 @@ import { DragDropManager } from './modules/dragDrop.js';
 import { KeyboardManager } from './modules/keyboard.js';
 import { SearchPalette } from './modules/searchPalette.js';
 import { DiffReviewManager } from './modules/diffReview.js';
+import { UnreadBadgesManager } from './modules/unreadBadges.js';
 import { MDVApi } from './lib/apiClient.js';
 
 // ============================================================
@@ -162,6 +163,9 @@ async function init() {
     // modules/websocket.js's docstring.
     WebSocketManager.setOnFileRendered(() => DiffReviewManager.refresh());
     DiffReviewManager.setRequestTabRefresh(() => refreshCurrentTab());
+    // 0.6.5 (unread tree badges): dispatch files_changed straight to
+    // modules/unreadBadges.js — see modules/websocket.js's docstring.
+    WebSocketManager.setUnreadBadgesManager(UnreadBadgesManager);
 
     // modules/diffReview.js needs to react to every tab activation (open/
     // switch/close-then-reselect) and to the theme/PDF-style re-renders
@@ -209,6 +213,41 @@ async function init() {
         return out;
     };
 
+    // 0.6.5 (unread tree badges): modules/unreadBadges.js's decorate() must
+    // re-run after every tree DOM mutation so newly-rendered/expanded rows
+    // pick up their badge. fileTree.js has no single post-render callback
+    // (load()/update()/expandDirectory()/loadMore() each mutate the DOM
+    // independently) and stays untouched per this task's file scope —
+    // wrap the four methods instead, same forward-reference idea as the
+    // TabManager.renderActive wrap above. decorate() itself is idempotent
+    // and cheap (bounded by the tree's own 500/dir cap), so redundant
+    // calls across these wraps (e.g. expandToPath -> expandDirectory) are
+    // harmless.
+    const originalTreeLoad = FileTreeManager.load.bind(FileTreeManager);
+    FileTreeManager.load = async function (...args) {
+        const out = await originalTreeLoad(...args);
+        UnreadBadgesManager.decorate();
+        return out;
+    };
+    const originalTreeUpdate = FileTreeManager.update.bind(FileTreeManager);
+    FileTreeManager.update = async function (...args) {
+        const out = await originalTreeUpdate(...args);
+        UnreadBadgesManager.decorate();
+        return out;
+    };
+    const originalExpandDirectory = FileTreeManager.expandDirectory.bind(FileTreeManager);
+    FileTreeManager.expandDirectory = async function (...args) {
+        const out = await originalExpandDirectory(...args);
+        UnreadBadgesManager.decorate();
+        return out;
+    };
+    const originalLoadMore = FileTreeManager.loadMore.bind(FileTreeManager);
+    FileTreeManager.loadMore = async function (...args) {
+        const out = await originalLoadMore(...args);
+        UnreadBadgesManager.decorate();
+        return out;
+    };
+
     // Initialize all managers
     ThemeManager.init();
     PdfStyleManager.init();
@@ -222,6 +261,7 @@ async function init() {
     DragDropManager.init();
     SearchPalette.init();
     DiffReviewManager.init();
+    UnreadBadgesManager.init();
     KeyboardManager.init();
     PresenterView.init();
 

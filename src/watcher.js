@@ -7,10 +7,12 @@ import path from 'path';
 import {
   AWAIT_WRITE_FINISH_POLL_MS,
   AWAIT_WRITE_FINISH_STABILITY_MS,
+  FILES_CHANGED_DEBOUNCE_MS,
   TREE_UPDATE_DEBOUNCE_MS
 } from './config/constants.js';
 import { renderFile } from './rendering/index.js';
 import { makeEtag } from './utils/etag.js';
+import { getFileType } from './utils/fileTypes.js';
 import { CHOKIDAR_IGNORED } from './utils/ignorePatterns.js';
 import { broadcastTreeUpdate as sendTreeUpdate } from './websocket.js';
 
@@ -60,6 +62,31 @@ export function setupWatcher(rootDir, wss, options = {}) {
     }, TREE_UPDATE_DEBOUNCE_MS);
   }
 
+  // Unread/seen tree badges (0.6.5, event-driven per
+  // docs/plan-review-surface-0.6.x.md §③, consumed by
+  // src/static/modules/unreadBadges.js): coalesce filesystem changes into
+  // ONE `files_changed` broadcast per debounce window, same shape as
+  // broadcastTreeUpdate() above but carrying WHICH paths changed (keyed by
+  // path in this Map, so a path touched more than once in one burst
+  // collapses to its latest kind/etag) — the client never hash-scans the
+  // whole tree, it only reacts to this feed plus diffReview.js's
+  // markSeen()/getLastSeen() baseline. Sent to ALL clients (wss.broadcast),
+  // unlike file_update's watch-scoped delivery, since every open client's
+  // tree (not just the active tab) needs the badge.
+  let filesChangedItems = new Map();
+  let filesChangedTimer = null;
+
+  function scheduleFilesChanged(item) {
+    filesChangedItems.set(item.path, item);
+    if (filesChangedTimer) return; // a broadcast is already scheduled for this burst
+    filesChangedTimer = setTimeout(() => {
+      filesChangedTimer = null;
+      const items = Array.from(filesChangedItems.values());
+      filesChangedItems = new Map();
+      wss.broadcast({ type: 'files_changed', items });
+    }, FILES_CHANGED_DEBOUNCE_MS);
+  }
+
   watcher.on('change', async (filePath) => {
     const relativePath = toRelativePath(filePath);
     const relativeDir = path.dirname(relativePath);
@@ -77,6 +104,11 @@ export function setupWatcher(rootDir, wss, options = {}) {
       if (journal) journal.record(relativePath, rendered.raw);
       const etag = makeEtag(rendered.raw);
 
+      // Same raw-content etag file_update carries, reused (not
+      // recomputed) so a hash the badge feed reports is guaranteed to
+      // match the one diffReview.js's baseline comparison sees.
+      scheduleFilesChanged({ path: relativePath, etag, kind: 'changed' });
+
       wss.broadcastFileUpdate(relativePath, {
         type: 'file_update',
         path: relativePath,
@@ -85,6 +117,17 @@ export function setupWatcher(rootDir, wss, options = {}) {
       });
     } catch (err) {
       console.error(`Error rendering ${relativePath}:`, err);
+    }
+  });
+
+  // Brand-new files only (not directories) — text-renderable ones only
+  // (getFileType().binary), matching the set of files that ever get a
+  // rendered pane/etag at all. No etag is computed here (the file isn't
+  // read) — the client treats an 'added' item as unconditionally unread.
+  watcher.on('add', (filePath) => {
+    const relativePath = toRelativePath(filePath);
+    if (!getFileType(relativePath).binary) {
+      scheduleFilesChanged({ path: relativePath, kind: 'added' });
     }
   });
 

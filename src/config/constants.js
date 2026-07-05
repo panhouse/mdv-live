@@ -65,6 +65,16 @@ export const AWAIT_WRITE_FINISH_STABILITY_MS = 100;
 /** chokidar awaitWriteFinish.pollInterval (src/watcher.js). */
 export const AWAIT_WRITE_FINISH_POLL_MS = 50;
 
+/**
+ * Coalescing window for `files_changed` broadcasts (src/watcher.js) — the
+ * event-driven feed behind the 0.6.5 unread/seen tree badges
+ * (docs/plan-review-surface-0.6.x.md §③, src/static/modules/unreadBadges.js).
+ * Same shape as TREE_UPDATE_DEBOUNCE_MS above: a bulk FS operation fires
+ * many change/add events, but at most one files_changed message is sent per
+ * window, carrying every path touched during it.
+ */
+export const FILES_CHANGED_DEBOUNCE_MS = 200;
+
 /** Max slide index accepted by the marpNote PUT route (marpNote/guards.js). */
 export const MAX_SLIDE_INDEX = 1000;
 
