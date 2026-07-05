@@ -46,7 +46,8 @@ test('video-fallback: an undecodable mp4 shows a fallback card with a download l
   await expect(page.locator('#content .video-fallback-message')).toContainText('再生できない形式');
   await expect(page.locator('#content video')).toHaveCount(0);
 
-  const downloadLink = page.locator('#content a.preview-download-btn');
-  await expect(downloadLink).toBeVisible();
-  await expect(downloadLink).toHaveAttribute('href', /\/api\/download\?path=broken\.mp4/);
+  // No download button (owner decision 2026-07-05) — the message points
+  // at the sidebar context menu instead.
+  await expect(page.locator('#content a.preview-download-btn')).toHaveCount(0);
+  await expect(page.locator('#content .video-fallback-message')).toContainText('サイドバー');
 });
