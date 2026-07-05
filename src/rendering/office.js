@@ -587,11 +587,23 @@ function parseSheetRows(xml, sharedStrings, { maxRows, styleFormats = null, date
   const rows = [];
   let totalRows = 0;
   let maxColSeen = -1;
+  let overflowHasContent = false;
   let rowMatch;
 
   while ((rowMatch = rowPattern.exec(xml)) !== null) {
     totalRows++;
-    if (rows.length >= maxRows) continue;
+    if (rows.length >= maxRows) {
+      // Beyond the preview window: only note whether anything DISPLAYABLE
+      // exists out there. A tail of blank/style-only row elements is not a
+      // real truncation — treating it as one would both suppress the
+      // trailing-empty trim and show a misleading notice.
+      if (!overflowHasContent && rowMatch[1]) {
+        overflowHasContent =
+          /<(?:[\w.-]+:)?(?:v|f)\b[^>]*>[^<]/.test(rowMatch[1]) ||
+          /<(?:[\w.-]+:)?t\b[^>]*>[^<]/.test(rowMatch[1]);
+      }
+      continue;
+    }
 
     const inner = rowMatch[1];
     const cells = [];
@@ -671,7 +683,7 @@ function parseSheetRows(xml, sharedStrings, { maxRows, styleFormats = null, date
     rows.push(cells);
   }
 
-  return { rows, totalRows, maxColSeen };
+  return { rows, totalRows, maxColSeen, overflowHasContent };
 }
 
 /**
@@ -790,7 +802,7 @@ export function renderXlsxPreview(buffer, { maxRows = 50, maxCols = 20 } = {}) {
 
   const sharedStrings = parseSharedStrings(readEntry(files, 'xl/sharedStrings.xml'));
   const styleFormats = parseStyleFormats(readEntry(files, 'xl/styles.xml'));
-  const { rows: parsedRows, totalRows } = parseSheetRows(sheetXml, sharedStrings, {
+  const { rows: parsedRows, totalRows, overflowHasContent } = parseSheetRows(sheetXml, sharedStrings, {
     maxRows,
     styleFormats,
     date1904,
@@ -802,7 +814,7 @@ export function renderXlsxPreview(buffer, { maxRows = 50, maxCols = 20 } = {}) {
   // cut boundary are not true trailing rows (real rows follow them in the
   // workbook), so the trim is skipped to keep the advertised first-maxRows
   // window intact.
-  const wasRowTruncated = totalRows > parsedRows.length;
+  const wasRowTruncated = totalRows > parsedRows.length && overflowHasContent;
   const rows = wasRowTruncated ? parsedRows : trimTrailingEmptyRows(parsedRows);
 
   // Column extent from the rows we actually RENDER: trimmed trailing rows

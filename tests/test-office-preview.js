@@ -1051,3 +1051,28 @@ describe('renderXlsxPreview — real-world disambiguation of empty cached formul
     assert.ok(html.includes('=B7*B8'), 'openpyxl uncomputed formula must show, not vanish');
   });
 });
+
+describe('renderXlsxPreview — codex round-11 fix (all-blank overflow rows)', () => {
+  it('blank/style-only rows beyond maxRows are not "truncation": trims tail, no notice', () => {
+    const dataRows = Array.from({ length: 10 }, (_, i) =>
+      `<row r="${i + 1}"><c r="A${i + 1}" t="inlineStr"><is><t>行${i + 1}</t></is></c></row>`).join('');
+    const blankRows = Array.from({ length: 45 }, (_, i) =>
+      `<row r="${i + 11}"><c r="A${i + 11}" s="1" t="n"></c></row>`).join('');
+    const buffer = buildXlsxBuffer({
+      sheetNames: ['Sheet1'],
+      sheetXmlBody: dataRows + blankRows,
+    });
+    const { html } = renderXlsxPreview(buffer, { maxRows: 50 });
+    const rowCount = (html.match(/<tr>/g) || []).length;
+    assert.strictEqual(rowCount, 10, 'blank in-window tail must be trimmed');
+    assert.ok(!html.includes('行数が多いため'), 'no misleading truncation notice');
+  });
+
+  it('real data beyond maxRows still counts as truncation (round-3 behavior kept)', () => {
+    const rows = Array.from({ length: 55 }, (_, i) =>
+      `<row r="${i + 1}"><c r="A${i + 1}" t="inlineStr"><is><t>行${i + 1}</t></is></c></row>`).join('');
+    const buffer = buildXlsxBuffer({ sheetNames: ['Sheet1'], sheetXmlBody: rows });
+    const { html } = renderXlsxPreview(buffer, { maxRows: 50 });
+    assert.ok(html.includes('行数が多いため'));
+  });
+});
