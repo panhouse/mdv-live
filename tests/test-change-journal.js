@@ -188,3 +188,16 @@ describe('changeJournal — re-recording restores LRU-evicted content (codex rou
     assert.strictEqual(journal.get('a.md', hashA), 'AAAAAAA', 'content restored on re-record');
   });
 });
+
+describe('changeJournal — get() refreshes LRU recency (codex round-3)', () => {
+  it('a just-read baseline survives the next eviction over a colder entry', () => {
+    // Budget fits exactly two 7-byte entries.
+    const journal = createChangeJournal({ maxBytesTotal: 14, maxBytesPerFile: 8, maxVersionsPerFile: 4 });
+    const hashA = journal.record('a.md', 'AAAAAAA'); // oldest
+    const hashB = journal.record('b.md', 'BBBBBBB');
+    journal.get('a.md', hashA);                      // touch A -> B becomes coldest
+    journal.record('c.md', 'CCCCCCC');               // evicts ONE entry
+    assert.strictEqual(journal.get('a.md', hashA), 'AAAAAAA', 'recently-read A survives');
+    assert.strictEqual(journal.get('b.md', hashB), null, 'cold B was evicted instead');
+  });
+});
