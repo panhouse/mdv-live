@@ -212,6 +212,238 @@ function parseSharedStrings(xml) {
   return items;
 }
 
+// ============================================================
+// XLSX number-format awareness (styles.xml → date/percent/thousands)
+// ============================================================
+
+// ECMA-376 built-in numFmtId → format code, for the ids this preview cares
+// about (dates 14-22/45-47, percents 9-10, thousands-grouping 3-4/37-40).
+// Builtin ids not listed here (0/General and anything unclassified) fall
+// through to "no special formatting" — same as today's raw display.
+const BUILTIN_FORMAT_CODES = {
+  1: '0',
+  2: '0.00',
+  3: '#,##0',
+  4: '#,##0.00',
+  9: '0%',
+  10: '0.00%',
+  14: 'mm-dd-yy',
+  15: 'd-mmm-yy',
+  16: 'd-mmm',
+  17: 'mmm-yy',
+  18: 'h:mm AM/PM',
+  19: 'h:mm:ss AM/PM',
+  20: 'h:mm',
+  21: 'h:mm:ss',
+  22: 'm/d/yy h:mm',
+  37: '#,##0;(#,##0)',
+  38: '#,##0;(#,##0)',
+  39: '#,##0.00;(#,##0.00)',
+  40: '#,##0.00;(#,##0.00)',
+  45: 'mm:ss',
+  46: '[h]:mm:ss',
+  47: 'mmss.0',
+};
+
+// Builtin numFmtIds 27-36 are the CJK (Japanese/Korean/Chinese) date/time
+// builtins. Their exact format text varies by Excel locale and isn't
+// standardized the way 0-49 are, but the ids themselves are always
+// date-ish — so they're classified directly rather than via a code lookup.
+const BUILTIN_CJK_DATE_NUMFMT_IDS = new Set([27, 28, 29, 30, 31, 32, 33, 34, 35, 36]);
+
+const NO_FORMAT = { isDate: false, hasTime: false, isPercent: false, isThousands: false };
+
+/**
+ * Strip quoted string literals (`"..."`) and bracketed sections (`[Red]`,
+ * `[$-409]`, `[h]`, ...) from a number-format code before scanning it for
+ * date/time/percent/grouping tokens — those sections can contain letters
+ * (locale codes, literal text) that would otherwise be misread as format
+ * tokens.
+ * @param {string} code - Raw numFmt format code
+ * @returns {string}
+ */
+function stripFormatLiterals(code) {
+  return code.replace(/"[^"]*"/g, '').replace(/\[[^\]]*\]/g, '');
+}
+
+/**
+ * Classify a number-format code as date-ish / time-bearing / percent /
+ * thousands-grouped, scanning only outside quoted and bracketed sections.
+ * @param {string} code - Format code (e.g. "yyyy/m/d", "0.00%", "#,##0")
+ * @returns {{ isDate: boolean, hasTime: boolean, isPercent: boolean, isThousands: boolean }}
+ */
+function classifyFormatCode(code) {
+  const stripped = stripFormatLiterals(code);
+  return {
+    isDate: /[ymdh]/i.test(stripped),
+    hasTime: /h/i.test(stripped) && /m/i.test(stripped),
+    isPercent: /%/.test(stripped),
+    isThousands: /[#0],[#0]/.test(stripped),
+  };
+}
+
+/**
+ * Resolve a cell's numFmtId to its format classification.
+ * @param {number} numFmtId - The `<xf numFmtId>` value for a cell's style
+ * @param {Map<number,string>} customNumFmts - parseCustomNumFmts() result
+ * @returns {{ isDate: boolean, hasTime: boolean, isPercent: boolean, isThousands: boolean }}
+ */
+function classifyByNumFmtId(numFmtId, customNumFmts) {
+  if (BUILTIN_CJK_DATE_NUMFMT_IDS.has(numFmtId)) {
+    return { isDate: true, hasTime: false, isPercent: false, isThousands: false };
+  }
+  const code = customNumFmts.get(numFmtId) ?? BUILTIN_FORMAT_CODES[numFmtId];
+  return code === undefined ? NO_FORMAT : classifyFormatCode(code);
+}
+
+/**
+ * Parse `<numFmts><numFmt numFmtId="..." formatCode="..."/>...</numFmts>`
+ * (custom, workbook-defined formats) from styles.xml.
+ * @param {string} xml - styles.xml content
+ * @returns {Map<number,string>} numFmtId -> decoded format code
+ */
+function parseCustomNumFmts(xml) {
+  const map = new Map();
+  const pattern = /<numFmt\b([^>]*)\/?>/g;
+  let m;
+  while ((m = pattern.exec(xml)) !== null) {
+    const attrs = m[1];
+    const idMatch = /\bnumFmtId="(\d+)"/.exec(attrs);
+    const codeMatch = /\bformatCode="([^"]*)"/.exec(attrs);
+    if (idMatch && codeMatch) {
+      map.set(parseInt(idMatch[1], 10), decodeXmlEntities(codeMatch[1]));
+    }
+  }
+  return map;
+}
+
+/**
+ * Parse `<cellXfs><xf numFmtId="..."/>...</cellXfs>` from styles.xml into an
+ * ordered list of numFmtIds — array index == cell style index (the `s`
+ * attribute on `<c>`).
+ * @param {string} xml - styles.xml content
+ * @returns {number[]}
+ */
+function parseCellXfsNumFmtIds(xml) {
+  const section = /<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/.exec(xml);
+  if (!section) return [];
+  const pattern = /<xf\b([^>]*?)\/?>/g;
+  const ids = [];
+  let m;
+  while ((m = pattern.exec(section[1])) !== null) {
+    const idMatch = /\bnumFmtId="(\d+)"/.exec(m[1]);
+    ids.push(idMatch ? parseInt(idMatch[1], 10) : 0);
+  }
+  return ids;
+}
+
+/**
+ * Build the style-index -> format-classification lookup used by
+ * {@link parseSheetRows}. Absent or unparseable styles.xml => `null`, which
+ * signals "no styles = no conversion" (identical to pre-0.6.2 behavior).
+ * @param {string|null} stylesXml - xl/styles.xml content, or null if absent
+ * @returns {Array<{isDate:boolean,hasTime:boolean,isPercent:boolean,isThousands:boolean}>|null}
+ */
+function parseStyleFormats(stylesXml) {
+  if (!stylesXml) return null;
+  try {
+    const customNumFmts = parseCustomNumFmts(stylesXml);
+    const numFmtIds = parseCellXfsNumFmtIds(stylesXml);
+    return numFmtIds.map((id) => classifyByNumFmtId(id, customNumFmts));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read the workbook's date system (1900 vs 1904) from
+ * `<workbookPr date1904="1"/>` in xl/workbook.xml.
+ * @param {string} workbookXml - workbook.xml content
+ * @returns {boolean} true if the 1904 date system is in effect
+ */
+function isDate1904(workbookXml) {
+  const m = /<workbookPr\b([^>]*)\/?>/.exec(workbookXml);
+  if (!m) return false;
+  const dateMatch = /\bdate1904="([^"]*)"/.exec(m[1]);
+  if (!dateMatch) return false;
+  const v = dateMatch[1].trim().toLowerCase();
+  return v === '1' || v === 'true';
+}
+
+/**
+ * Convert an Excel date serial number to `YYYY/M/D` (optionally with a
+ * trailing `HH:MM` when the cell's format carries a time component and the
+ * serial has a fractional part).
+ *
+ * Handles both the 1900 date system (with Excel's fictitious 1900-02-29 leap
+ * day: serials > 59 are computed from the 1899-12-30 epoch, exactly
+ * compensating for it) and the 1904 date system (serial 0 = 1904-01-01, no
+ * leap-year quirk).
+ * @param {number} serial - Raw numeric cell value
+ * @param {boolean} hasTime - Whether the cell's format has time tokens
+ * @param {boolean} date1904 - Whether the workbook uses the 1904 date system
+ * @returns {string}
+ */
+function formatExcelDate(serial, hasTime, date1904) {
+  const wholeDays = Math.floor(serial);
+  const fraction = serial - wholeDays;
+
+  const epoch = date1904
+    ? Date.UTC(1904, 0, 1)
+    : (wholeDays > 59 ? Date.UTC(1899, 11, 30) : Date.UTC(1899, 11, 31));
+  const d = new Date(epoch + wholeDays * 86400000);
+
+  let out = `${d.getUTCFullYear()}/${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
+  if (hasTime && fraction > 1e-6) {
+    const totalMinutes = Math.round(fraction * 24 * 60);
+    const hh = Math.floor(totalMinutes / 60) % 24;
+    const mm = totalMinutes % 60;
+    out += ` ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+  }
+  return out;
+}
+
+/**
+ * Format a fractional value as a percent string, e.g. 0.62 -> "62%",
+ * 0.625 -> "62.5%" (up to 2 decimals, trailing zeros trimmed).
+ * @param {number} num - Raw cell value (the fraction, not already *100)
+ * @returns {string}
+ */
+function formatPercent(num) {
+  const str = (num * 100).toFixed(2).replace(/\.?0+$/, '');
+  return `${str}%`;
+}
+
+/**
+ * Format a number with thousands grouping, e.g. 1485000 -> "1,485,000".
+ * No currency symbol is ever added, regardless of the source format code.
+ * @param {number} num - Raw cell value
+ * @returns {string}
+ */
+function formatThousands(num) {
+  return num.toLocaleString('en-US');
+}
+
+/**
+ * Apply a cell's format classification (if any) to its raw numeric text.
+ * Returns the raw text unchanged when there's no format info at all (no
+ * styles.xml), the value isn't a finite number, or the format isn't
+ * date/percent/thousands-classified.
+ * @param {string} raw - Decoded raw `<v>` text
+ * @param {{isDate:boolean,hasTime:boolean,isPercent:boolean,isThousands:boolean}|null} fmt
+ * @param {boolean} date1904
+ * @returns {string}
+ */
+function formatNumericCell(raw, fmt, date1904) {
+  if (!fmt || raw === '' || raw.trim() === '') return raw;
+  const num = Number(raw);
+  if (!Number.isFinite(num)) return raw;
+  if (fmt.isDate) return formatExcelDate(num, fmt.hasTime, date1904);
+  if (fmt.isPercent) return formatPercent(num);
+  if (fmt.isThousands) return formatThousands(num);
+  return raw;
+}
+
 /**
  * Convert a column-letter reference (A, B, ..., Z, AA, ...) to a zero-based
  * column index.
@@ -241,13 +473,14 @@ function parseCellRef(ref) {
  * Parse `xl/worksheets/sheetN.xml` rows/cells, keeping only the first
  * `maxRows` rows (columns are trimmed later once the true max column is
  * known). Shared strings, inline strings, and numeric/plain `<v>` values are
- * all supported.
+ * all supported, plus number-format-aware date/percent/thousands display
+ * and formula-cell text when `styleFormats` is provided.
  * @param {string} xml - sheet XML content
  * @param {string[]} sharedStrings - parseSharedStrings() result
- * @param {{ maxRows: number }} opts
- * @returns {{ rows: Array<Array<{col:number, text:string}>>, totalRows: number, maxColSeen: number }}
+ * @param {{ maxRows: number, styleFormats?: Array|null, date1904?: boolean }} opts
+ * @returns {{ rows: Array<Array<{col:number, text:string, formula?:boolean}>>, totalRows: number, maxColSeen: number }}
  */
-function parseSheetRows(xml, sharedStrings, { maxRows }) {
+function parseSheetRows(xml, sharedStrings, { maxRows, styleFormats = null, date1904 = false }) {
   const rowPattern = /<row\b[^>]*?(?:\/>|>([\s\S]*?)<\/row>)/g;
   const cellPattern = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
   const rows = [];
@@ -277,6 +510,7 @@ function parseSheetRows(xml, sharedStrings, { maxRows }) {
         const typeMatch = /\bt="([^"]+)"/.exec(attrs);
         const type = typeMatch ? typeMatch[1] : null;
         let text;
+        let formula = false;
 
         if (type === 's') {
           const vMatch = /<v[^>]*>([\s\S]*?)<\/v>/.exec(content);
@@ -285,18 +519,70 @@ function parseSheetRows(xml, sharedStrings, { maxRows }) {
         } else if (type === 'inlineStr') {
           const isMatch = /<is>([\s\S]*?)<\/is>/.exec(content);
           text = isMatch ? extractTagTexts(isMatch[1], 't').join('') : '';
-        } else {
+        } else if (type === 'str' || type === 'b' || type === 'e') {
+          // Formula-result string / boolean / error cells: unchanged
+          // (raw decode, no number-format conversion — not in scope).
           const vMatch = /<v[^>]*>([\s\S]*?)<\/v>/.exec(content);
           text = vMatch ? decodeXmlEntities(vMatch[1]) : '';
+        } else {
+          // No type attribute (or "n"): plain numeric value, or a formula
+          // cell (<f> present, with or without a cached <v>).
+          const fMatch = /<f\b[^>]*>([\s\S]*?)<\/f>/.exec(content);
+          const vMatch = /<v[^>]*>([\s\S]*?)<\/v>/.exec(content);
+          const cachedIsEmpty = !vMatch || vMatch[1].trim() === '';
+
+          if (fMatch && cachedIsEmpty) {
+            // No cached value (e.g. openpyxl-generated files): show the
+            // formula text itself so the column doesn't render blank.
+            formula = true;
+            text = `=${decodeXmlEntities(fMatch[1].trim())}`;
+          } else if (vMatch) {
+            const raw = decodeXmlEntities(vMatch[1]);
+            if (fMatch) {
+              // Formula WITH a cached value: keep showing the value as
+              // today — no date/percent/thousands conversion.
+              text = raw;
+            } else {
+              const sMatch = /\bs="(\d+)"/.exec(attrs);
+              const styleIdx = sMatch ? parseInt(sMatch[1], 10) : 0;
+              const fmt = styleFormats ? (styleFormats[styleIdx] || NO_FORMAT) : null;
+              text = formatNumericCell(raw, fmt, date1904);
+            }
+          } else {
+            text = '';
+          }
         }
 
-        cells.push({ col, text });
+        cells.push({ col, text, formula });
       }
     }
     rows.push(cells);
   }
 
   return { rows, totalRows, maxColSeen };
+}
+
+/**
+ * Whether every cell in a row has empty (or whitespace-only) text.
+ * @param {Array<{col:number, text:string}>} cells
+ * @returns {boolean}
+ */
+function isRowEmpty(cells) {
+  return cells.every((c) => !c.text || c.text.trim() === '');
+}
+
+/**
+ * Drop trailing all-empty rows (rows at the very end of the sheet with no
+ * cell text). Mid-table empty rows are preserved — only a contiguous run of
+ * emptiness reaching the last row is removed, so table structure elsewhere
+ * is unaffected.
+ * @param {Array<Array<{col:number, text:string}>>} rows
+ * @returns {Array<Array<{col:number, text:string}>>}
+ */
+function trimTrailingEmptyRows(rows) {
+  let end = rows.length;
+  while (end > 0 && isRowEmpty(rows[end - 1])) end--;
+  return rows.slice(0, end);
 }
 
 /**
@@ -308,10 +594,15 @@ function parseSheetRows(xml, sharedStrings, { maxRows }) {
  */
 function buildTableHtml(rows, colCount) {
   const renderCells = (cells, cellTag) => {
-    const byCol = new Map(cells.map((c) => [c.col, c.text]));
+    const byCol = new Map(cells.map((c) => [c.col, c]));
     let out = '';
     for (let c = 0; c < colCount; c++) {
-      out += `<${cellTag}>${escapeHtml(byCol.get(c) || '')}</${cellTag}>`;
+      const cell = byCol.get(c);
+      const text = cell ? cell.text : '';
+      const escaped = escapeHtml(text || '');
+      out += cell && cell.formula
+        ? `<${cellTag}><span class="office-preview-formula">${escaped}</span></${cellTag}>`
+        : `<${cellTag}>${escaped}</${cellTag}>`;
     }
     return out;
   };
@@ -380,12 +671,24 @@ export function renderXlsxPreview(buffer, { maxRows = 50, maxCols = 20 } = {}) {
   const workbookXml = readEntry(files, 'xl/workbook.xml');
   if (!workbookXml) throw mkOfficeError('Missing xl/workbook.xml');
   const sheetNames = parseSheetNames(workbookXml);
+  const date1904 = isDate1904(workbookXml);
 
   const sheetXml = readFirstSheetXml(files, workbookXml);
   if (!sheetXml) throw mkOfficeError('Missing first worksheet part');
 
   const sharedStrings = parseSharedStrings(readEntry(files, 'xl/sharedStrings.xml'));
-  const { rows, totalRows, maxColSeen } = parseSheetRows(sheetXml, sharedStrings, { maxRows });
+  const styleFormats = parseStyleFormats(readEntry(files, 'xl/styles.xml'));
+  const { rows: parsedRows, totalRows, maxColSeen } = parseSheetRows(sheetXml, sharedStrings, {
+    maxRows,
+    styleFormats,
+    date1904,
+  });
+
+  // Whether maxRows actually truncated the sheet — computed before trailing
+  // all-empty rows are trimmed, so trimming never triggers a false
+  // "too many rows" notice.
+  const wasRowTruncated = totalRows > parsedRows.length;
+  const rows = trimTrailingEmptyRows(parsedRows);
 
   const colCount = maxColSeen < 0 ? 0 : Math.min(maxColSeen + 1, maxCols);
   const table = colCount === 0
@@ -393,7 +696,7 @@ export function renderXlsxPreview(buffer, { maxRows = 50, maxCols = 20 } = {}) {
     : buildTableHtml(rows, colCount);
 
   const notices = [];
-  if (totalRows > rows.length) {
+  if (wasRowTruncated) {
     notices.push(`行数が多いため最初の${maxRows}行のみ表示しています（全${totalRows}行）`);
   }
   if (maxColSeen + 1 > colCount) {

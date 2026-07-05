@@ -27,6 +27,16 @@ function xesc(text) {
   return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/**
+ * XML-escape text for embedding as a double-quoted attribute value (adds
+ * `&quot;` on top of xesc()'s element-content escaping) — needed for numFmt
+ * formatCode strings, which routinely contain literal quoted text literals
+ * (e.g. `yyyy"年"m"月"d"日"`).
+ */
+function xescAttr(text) {
+  return xesc(text).replace(/"/g, '&quot;');
+}
+
 const CONTENT_TYPES_XML = xmlDecl(
   '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
   '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
@@ -44,12 +54,20 @@ function relsXml(target) {
 
 /**
  * Build a minimal valid .xlsx buffer.
- * @param {{ sheetNames?: string[], sheetXmlBody: string, sharedStrings?: string[] }} opts
+ * @param {{ sheetNames?: string[], sheetXmlBody: string, sharedStrings?: string[],
+ *   stylesXml?: string, date1904?: boolean }} opts
  */
-function buildXlsxBuffer({ sheetNames = ['Sheet1'], sheetXmlBody, sharedStrings = [] }) {
+function buildXlsxBuffer({
+  sheetNames = ['Sheet1'],
+  sheetXmlBody,
+  sharedStrings = [],
+  stylesXml,
+  date1904 = false,
+}) {
   const workbookXml = xmlDecl(
     '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
     'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+    (date1904 ? '<workbookPr date1904="1"/>' : '') +
     `<sheets>${sheetNames.map((n, i) => `<sheet name="${xesc(n)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets>` +
     '</workbook>'
   );
@@ -76,7 +94,35 @@ function buildXlsxBuffer({ sheetNames = ['Sheet1'], sheetXmlBody, sharedStrings 
     files['xl/sharedStrings.xml'] = strToU8(sstXml);
   }
 
+  if (stylesXml) {
+    files['xl/styles.xml'] = strToU8(stylesXml);
+  }
+
   return Buffer.from(zipSync(files));
+}
+
+/**
+ * Build a minimal valid xl/styles.xml with a `<cellXfs>` list whose entries
+ * (in order — array index == the `s="N"` style index referenced from a
+ * cell) reference numFmtIds, plus any custom `<numFmts>` definitions those
+ * ids need.
+ * @param {{ numFmts?: {id:number, code:string}[], cellXfsNumFmtIds: number[] }} opts
+ */
+function buildStylesXml({ numFmts = [], cellXfsNumFmtIds }) {
+  const numFmtsXml = numFmts.length
+    ? `<numFmts count="${numFmts.length}">${numFmts.map((f) => `<numFmt numFmtId="${f.id}" formatCode="${xescAttr(f.code)}"/>`).join('')}</numFmts>`
+    : '';
+  const cellXfsXml =
+    `<cellXfs count="${cellXfsNumFmtIds.length}">` +
+    cellXfsNumFmtIds.map((id) => `<xf numFmtId="${id}" fontId="0" fillId="0" borderId="0" applyNumberFormat="1"/>`).join('') +
+    '</cellXfs>';
+
+  return xmlDecl(
+    '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+    numFmtsXml +
+    cellXfsXml +
+    '</styleSheet>'
+  );
 }
 
 /**
@@ -526,5 +572,199 @@ describe('renderXlsxPreview — zip-bomb resistance', () => {
     }));
     const { html } = renderXlsxPreview(buffer);
     assert.ok(html.includes('StillWorks'));
+  });
+});
+
+// ============================================================
+// 0.6.2: number-format awareness (styles.xml → date/percent/thousands)
+// ============================================================
+
+describe('renderXlsxPreview — date-formatted cells (styles.xml numFmt)', () => {
+  it('converts an Excel date serial to YYYY/M/D using a builtin date numFmt (14)', () => {
+    const stylesXml = buildStylesXml({ cellXfsNumFmtIds: [0, 14] });
+    const buf = buildXlsxBuffer({
+      sheetXmlBody:
+        '<row r="1"><c r="A1" t="inlineStr"><is><t>Due</t></is></c></row>' +
+        '<row r="2"><c r="A2" s="1"><v>44197</v></c></row>',
+      stylesXml,
+    });
+
+    const { html } = renderXlsxPreview(buf);
+
+    assert.ok(html.includes('2021/1/1'), 'serial 44197 should render as 2021/1/1');
+    assert.ok(!html.includes('44197'), 'the raw serial must not leak through');
+  });
+
+  it('appends HH:MM when the numFmt has time tokens and the serial has a fractional part', () => {
+    // numFmtId 22 = builtin "m/d/yy h:mm" (date + time).
+    const stylesXml = buildStylesXml({ cellXfsNumFmtIds: [0, 22] });
+    const buf = buildXlsxBuffer({
+      sheetXmlBody:
+        '<row r="1"><c r="A1" t="inlineStr"><is><t>Due</t></is></c></row>' +
+        '<row r="2"><c r="A2" s="1"><v>44197.5</v></c></row>',
+      stylesXml,
+    });
+
+    const { html } = renderXlsxPreview(buf);
+
+    assert.ok(html.includes('2021/1/1 12:00'), 'a half-day fraction should render as noon');
+  });
+
+  it('shifts the epoch for date1904 workbooks (serial 0 = 1904-01-01)', () => {
+    const stylesXml = buildStylesXml({ cellXfsNumFmtIds: [0, 14] });
+    const buf = buildXlsxBuffer({
+      sheetXmlBody:
+        '<row r="1"><c r="A1" t="inlineStr"><is><t>Due</t></is></c></row>' +
+        '<row r="2"><c r="A2" s="1"><v>0</v></c></row>',
+      stylesXml,
+      date1904: true,
+    });
+
+    const { html } = renderXlsxPreview(buf);
+
+    assert.ok(html.includes('1904/1/1'));
+  });
+
+  it('steps correctly over the fictitious 1900-02-29 leap day (1900 system)', () => {
+    const stylesXml = buildStylesXml({ cellXfsNumFmtIds: [0, 14] });
+    const buf = buildXlsxBuffer({
+      sheetXmlBody:
+        '<row r="1"><c r="A1" t="inlineStr"><is><t>Due</t></is></c></row>' +
+        '<row r="2"><c r="A2" s="1"><v>61</v></c></row>',
+      stylesXml,
+    });
+
+    const { html } = renderXlsxPreview(buf);
+
+    assert.ok(html.includes('1900/3/1'), 'serial 61 is the real calendar date 1900-03-01');
+  });
+
+  it('recognizes a custom (non-builtin) numFmt date code from <numFmts>', () => {
+    const stylesXml = buildStylesXml({
+      numFmts: [{ id: 176, code: 'yyyy"年"m"月"d"日"' }],
+      cellXfsNumFmtIds: [0, 176],
+    });
+    const buf = buildXlsxBuffer({
+      sheetXmlBody: '<row r="1"><c r="A1" s="1"><v>44197</v></c></row>',
+      stylesXml,
+    });
+
+    const { html } = renderXlsxPreview(buf);
+
+    assert.ok(html.includes('2021/1/1'), 'quoted literal date tokens must not confuse the parser');
+  });
+});
+
+describe('renderXlsxPreview — formula cells', () => {
+  it('renders the formula text (escaped, muted span) when there is no cached <v>, and the column still appears', () => {
+    const buf = buildXlsxBuffer({
+      sheetXmlBody:
+        '<row r="1"><c r="A1" t="inlineStr"><is><t>Item</t></is></c>' +
+        '<c r="B1" t="inlineStr"><is><t>Qty</t></is></c>' +
+        '<c r="C1" t="inlineStr"><is><t>Total</t></is></c></row>' +
+        '<row r="2"><c r="A2" t="inlineStr"><is><t>Widget</t></is></c>' +
+        '<c r="B2"><v>3</v></c>' +
+        '<c r="C2"><f>IF(B2&lt;10,"low","ok")</f></c></row>',
+    });
+
+    const { html } = renderXlsxPreview(buf);
+
+    assert.match(html, /office-preview-formula/, 'formula cell should get the muted class');
+    assert.ok(html.includes('=IF(B2&lt;10,&quot;low&quot;,&quot;ok&quot;)'), 'formula text should be escaped');
+    assert.ok(!html.includes('<f>'), 'raw <f> markup must never leak into the output');
+
+    const thCount = (html.match(/<th>/g) || []).length;
+    assert.strictEqual(thCount, 3, 'the formula column must still count toward the rendered column total');
+  });
+
+  it('keeps showing the cached value unchanged when <f> has a cached <v> (no format conversion applied)', () => {
+    const buf = buildXlsxBuffer({
+      sheetXmlBody: '<row r="1"><c r="A1"><f>SUM(A2:A3)</f><v>84</v></c></row>',
+    });
+
+    const { html } = renderXlsxPreview(buf);
+
+    assert.ok(html.includes('84'), 'cached value should render');
+    assert.ok(!html.includes('SUM'), 'the formula text itself should not render when a cached value exists');
+    assert.ok(!html.includes('office-preview-formula'), 'no muted-formula span when a cached value is shown');
+  });
+});
+
+describe('renderXlsxPreview — percent and thousands-grouped cells', () => {
+  it('renders a %-formatted cell as a trimmed percent (0.62 -> 62%, 0.625 -> 62.5%)', () => {
+    const stylesXml = buildStylesXml({ cellXfsNumFmtIds: [0, 9] }); // builtin 9 = "0%"
+    const buf = buildXlsxBuffer({
+      sheetXmlBody:
+        '<row r="1"><c r="A1" s="1"><v>0.62</v></c><c r="B1" s="1"><v>0.625</v></c></row>',
+      stylesXml,
+    });
+
+    const { html } = renderXlsxPreview(buf);
+
+    assert.ok(html.includes('62%'));
+    assert.ok(html.includes('62.5%'));
+    assert.ok(!html.includes('0.62<'), 'the raw fraction must not leak through');
+  });
+
+  it('renders a comma-grouped numFmt cell with thousands separators (1485000 -> 1,485,000)', () => {
+    const stylesXml = buildStylesXml({ cellXfsNumFmtIds: [0, 3] }); // builtin 3 = "#,##0"
+    const buf = buildXlsxBuffer({
+      sheetXmlBody: '<row r="1"><c r="A1" s="1"><v>1485000</v></c></row>',
+      stylesXml,
+    });
+
+    const { html } = renderXlsxPreview(buf);
+
+    assert.ok(html.includes('1,485,000'));
+    assert.ok(!html.includes('>1485000<'), 'the ungrouped raw number must not leak through');
+  });
+});
+
+describe('renderXlsxPreview — trailing empty rows', () => {
+  it('suppresses trailing all-empty rows while keeping a mid-table empty row', () => {
+    const buf = buildXlsxBuffer({
+      sheetXmlBody:
+        '<row r="1"><c r="A1" t="inlineStr"><is><t>Header</t></is></c></row>' +
+        '<row r="2"><c r="A2" t="inlineStr"><is><t>Row2</t></is></c></row>' +
+        '<row r="3"/>' + // mid-table empty row — must stay
+        '<row r="4"><c r="A4" t="inlineStr"><is><t>Row4</t></is></c></row>' +
+        '<row r="5"/>' + // trailing empty — must be suppressed
+        '<row r="6"/>', // trailing empty — must be suppressed
+    });
+
+    const { html } = renderXlsxPreview(buf);
+
+    const trCount = (html.match(/<tr>/g) || []).length;
+    assert.strictEqual(trCount, 4, '1 header + Row2 + the mid-table empty row + Row4 (2 trailing rows dropped)');
+    assert.ok(html.includes('Row2'));
+    assert.ok(html.includes('Row4'));
+    assert.ok(!html.includes('行数が多いため'), 'trimming trailing empties must not trigger the maxRows notice');
+  });
+
+  it('does not suppress rows when maxRows truncation is what actually happened', () => {
+    const rows = [];
+    for (let r = 1; r <= 10; r++) rows.push(`<row r="${r}"><c r="A${r}"><v>${r}</v></c></row>`);
+    const buf = buildXlsxBuffer({ sheetXmlBody: rows.join('') });
+
+    const { html } = renderXlsxPreview(buf, { maxRows: 3, maxCols: 20 });
+    const trCount = (html.match(/<tr>/g) || []).length;
+
+    assert.strictEqual(trCount, 3); // unchanged regression: 1 header + 2 body rows
+    assert.match(html, /行数が多いため/);
+  });
+});
+
+describe('renderXlsxPreview — no styles.xml (backward compatibility)', () => {
+  it('leaves a large numeric value raw (no date conversion) when styles.xml is absent', () => {
+    // The exact real-world symptom from the 0.6.2 plan doc: a billing date
+    // rendered as the bare serial "46208" because there was no number-format
+    // awareness at all.
+    const buf = buildXlsxBuffer({
+      sheetXmlBody: '<row r="1"><c r="A1"><v>46208</v></c></row>',
+    });
+
+    const { html } = renderXlsxPreview(buf);
+
+    assert.ok(html.includes('46208'), 'without styles.xml the serial must stay raw, exactly as before');
   });
 });
