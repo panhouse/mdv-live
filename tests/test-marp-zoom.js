@@ -1,32 +1,14 @@
 /**
  * Tests for src/static/lib/marpZoom.js — pure JS, no DOM required.
  *
- * The browser-side library exposes itself on `globalThis.MDVMarpZoom`. We
- * load it into an isolated VM context to exercise the contain/clamp math
- * under Node. The focal-point scrolling and DOM wiring (app.js → MarpZoom)
- * are verified separately via the Playwright dogfood, not here.
+ * The focal-point scrolling and DOM wiring (app.js → MarpZoom) are verified
+ * separately via the Playwright dogfood, not here.
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
-import vm from 'node:vm';
+import * as Z from '../src/static/lib/marpZoom.js';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const code = readFileSync(
-  path.join(here, '..', 'src', 'static', 'lib', 'marpZoom.js'),
-  'utf-8'
-);
-
-function loadModule() {
-  const sandbox = vm.createContext({ console });
-  vm.runInContext(code, sandbox);
-  return sandbox.MDVMarpZoom;
-}
-
-const Z = loadModule();
 const RATIO_16_9 = 720 / 1280; // 0.5625
 
 describe('marpZoom — module surface', () => {

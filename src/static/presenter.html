@@ -248,8 +248,11 @@
     </div>
   </div>
 
-<script src="/static/lib/presenterChannel.js"></script>
-<script>
+<script type="module" src="/static/lib/presenterChannel.js"></script>
+<script type="module">
+import { readEditableText, isNotesEditable } from '/static/lib/notesEditor.js';
+import { ERROR_CODES } from '/static/lib/errorCodes.js';
+import { TYPES } from '/static/lib/presenterChannel.js';
 (function () {
   const channel = (window.MDVPresenterChannel && window.MDVPresenterChannel.create()) || null;
   if (!channel) {
@@ -337,37 +340,26 @@
     notesBody.textContent = text || '';
   }
 
-  // contenteditable inserts <div>/<br> nodes for line breaks, and
-  // textContent flattens those without separators. Walk the DOM and emit
-  // \n at block boundaries so two-line edits arrive as `line1\nline2`.
-  function readEditableText(el) {
-    let out = '';
-    function walk(node) {
-      if (node.nodeType === Node.TEXT_NODE) {
-        out += node.textContent;
-        return;
-      }
-      if (node.nodeType !== Node.ELEMENT_NODE) return;
-      const tag = node.tagName;
-      if (tag === 'BR') { out += '\n'; return; }
-      const isBlock = tag === 'DIV' || tag === 'P' || tag === 'LI';
-      if (isBlock && out && !out.endsWith('\n')) out += '\n';
-      for (const child of node.childNodes) walk(child);
-      if (isBlock && !out.endsWith('\n')) out += '\n';
-    }
-    for (const child of el.childNodes) walk(child);
-    return out.replace(/\n+$/, '');
-  }
+  // readEditableText / isNotesEditable now live in lib/notesEditor.js
+  // (imported above) — they used to be defined independently here and in
+  // app.js's InlineNotesPanel, byte-for-byte identical in the case of
+  // readEditableText (audit P1) and with inverted polarity in the case of
+  // the editable/read-only rule (audit P2).
 
   function getNotesText() {
     return readEditableText(notesBody);
   }
 
   function isReadOnlyForCurrent() {
-    if (!deckEtag) return true; // GET degrade or no etag
-    const m = notesMultiplicity[currentIndex];
-    if (typeof m === 'number' && m > 1) return true;
-    return false;
+    // isNotesEditable(hasEtag, notesMultiplicity) encodes exactly the rule
+    // this function used to inline: `!deckEtag` (no etag / GET degrade) →
+    // not editable, and `multiplicity > 1` → not editable. Negating it
+    // reproduces the original truth table: notesMultiplicity is always a
+    // fully-populated number[] (one entry per slide, defaulting to 0) once
+    // deckEtag is set (see rendering/marpitAdapter.js), so
+    // notesMultiplicity[currentIndex] is never undefined in the branch
+    // where that matters.
+    return !isNotesEditable(!!deckEtag, notesMultiplicity[currentIndex]);
   }
 
   function applyReadOnlyState() {
@@ -460,7 +452,7 @@
     // Commit any pending edit before navigating away.
     flushPendingNoteSave();
     render(index);
-    channel.postMessage({ type: 'goto', index: currentIndex });
+    channel.postMessage({ type: TYPES.GOTO, index: currentIndex });
   }
 
   function setSaveStatus(text, kind) {
@@ -491,7 +483,7 @@
   // if none does within the timeout the deck has no reachable window, so
   // surface an honest error instead of spinning on 保存中… forever.
   function requestSaver(path) {
-    channel.postMessage({ type: 'find-saver', path });
+    channel.postMessage({ type: TYPES.FIND_SAVER, path });
     if (findSaverTimer !== null) clearTimeout(findSaverTimer);
     findSaverTimer = setTimeout(() => {
       findSaverTimer = null;
@@ -570,7 +562,7 @@
     if (saveAckTimer !== null) clearTimeout(saveAckTimer);
     saveAckTimer = setTimeout(onSaveAckTimeout, SAVE_ACK_TIMEOUT_MS);
     channel.postMessage({
-      type: 'edit-note',
+      type: TYPES.EDIT_NOTE,
       path: inflightSave.path,
       etag: inflightSave.etag,
       slideIndex: inflightSave.slideIndex,
@@ -632,16 +624,16 @@
 
   channel.addEventListener('message', (e) => {
     const msg = e.data || {};
-    if (msg.type === 'slides') {
+    if (msg.type === TYPES.SLIDES) {
       loadSlides(msg);
       // Do NOT refresh editingEtag here — `slides` can also originate from
       // a watcher-detected external edit, and adopting that etag would let
       // our debounced write overwrite the external change. editingEtag is
       // only refreshed in `note-saved` handler below, where we can prove
       // the new etag came from our own successful save.
-    } else if (msg.type === 'index') {
+    } else if (msg.type === TYPES.INDEX) {
       render(msg.index);
-    } else if (msg.type === 'saver-here') {
+    } else if (msg.type === TYPES.SAVER_HERE) {
       // A window answered our find-saver query. Pin it and resend the
       // deferred edit — but only if it serves the exact deck that edit
       // targets (find-saver is path-scoped, yet guard defensively). The
@@ -658,7 +650,7 @@
         pendingSave = null;
         postEditNote(queued);
       }
-    } else if (msg.type === 'note-saved') {
+    } else if (msg.type === TYPES.NOTE_SAVED) {
       // Is this the answer to OUR routed save? Match on the unique
       // requestId so an older save's ack can't clear a newer save's
       // failover timer, and a foreign save (e.g. an inline edit) for the
@@ -676,7 +668,7 @@
         // The pinned saver no longer holds this deck (tab closed / switched
         // away). It IS alive, but cannot save — fail over to a window that
         // can, resending the same edit, instead of surfacing an error.
-        if (msg.code === 'NO_DECK') {
+        if (msg.code === ERROR_CODES.NO_DECK) {
           failOver(inflightSave);
           return;
         }
@@ -719,7 +711,7 @@
 
       // STALE: back up the in-progress text to localStorage so the user can
       // recover after reloading the deck.
-      const isStale = !msg.ok && msg.reason && msg.reason.indexOf('STALE') === 0;
+      const isStale = !msg.ok && msg.reason && msg.reason.indexOf(ERROR_CODES.STALE) === 0;
       if (isStale) {
         try {
           const draft = readEditableText(notesBody);
@@ -856,7 +848,7 @@
   window.addEventListener('beforeunload', flushPendingNoteSave);
 
   // Ask main window for slides
-  channel.postMessage({ type: 'request-slides' });
+  channel.postMessage({ type: TYPES.REQUEST_SLIDES });
 })();
 </script>
 </body>

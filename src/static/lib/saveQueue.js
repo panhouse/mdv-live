@@ -21,83 +21,83 @@
  *   COALESCED sentinel). Existing callers that ignore the return value or
  *   skip the origin argument keep working unchanged.
  *
- * Loaded as a classic <script>; exposes window.MDVSaveQueue.
+ * Loaded as a native ES module (`<script type="module">`). Exposes named
+ * exports for direct `import`, and also still sets `window.MDVSaveQueue` for
+ * any not-yet-migrated code that reads the global directly.
  */
-(function () {
-  'use strict';
+function buildKey(slideIndex, origin) {
+  return slideIndex + '|' + (origin || '');
+}
 
-  function buildKey(slideIndex, origin) {
-    return slideIndex + '|' + (origin || '');
-  }
+function createSaveQueue({ saveFn }) {
+  /** @type {Map<string, { pending: Map<string, {slideIndex:number, note:string, etag:string|null, origin:string|undefined, resolve:Function}>, isDraining: boolean }>} */
+  const queue = new Map();
 
-  function createSaveQueue({ saveFn }) {
-    /** @type {Map<string, { pending: Map<string, {slideIndex:number, note:string, etag:string|null, origin:string|undefined, resolve:Function}>, isDraining: boolean }>} */
-    const queue = new Map();
-
-    function enqueue(path, slideIndex, note, etag, origin, requestId) {
-      return new Promise((resolve) => {
-        let entry = queue.get(path);
-        if (!entry) {
-          entry = { pending: new Map(), isDraining: false };
-          queue.set(path, entry);
-        }
-        const key = buildKey(slideIndex, origin);
-        const existing = entry.pending.get(key);
-        if (existing) {
-          existing.resolve({ ok: false, reason: 'COALESCED' });
-        }
-        entry.pending.set(key, { slideIndex, note, etag, origin, requestId, resolve });
-        if (!entry.isDraining) drain(path);
-      });
-    }
-
-    async function drain(path) {
-      const entry = queue.get(path);
-      if (!entry || entry.isDraining) return;
-      entry.isDraining = true;
-      try {
-        while (entry.pending.size > 0) {
-          const it = entry.pending.entries().next();
-          if (it.done) break;
-          const [key, payload] = it.value;
-          entry.pending.delete(key);
-          let result;
-          try {
-            result = await saveFn(
-              path, payload.slideIndex, payload.note, payload.etag,
-              payload.origin, payload.requestId
-            );
-          } catch (err) {
-            console.error('saveQueue saveFn error', err);
-            result = { ok: false, reason: String(err && err.message || err) };
-          }
-          payload.resolve(result);
-        }
-      } finally {
-        entry.isDraining = false;
-        if (entry.pending.size === 0) queue.delete(path);
+  function enqueue(path, slideIndex, note, etag, origin, requestId) {
+    return new Promise((resolve) => {
+      let entry = queue.get(path);
+      if (!entry) {
+        entry = { pending: new Map(), isDraining: false };
+        queue.set(path, entry);
       }
-    }
-
-    /** Drop all pending edits for a path (e.g. when its tab is closed). */
-    function dropPath(path) {
-      const entry = queue.get(path);
-      if (!entry) return;
-      entry.pending.forEach((payload) => {
-        payload.resolve({ ok: false, reason: 'DROPPED' });
-      });
-      entry.pending.clear();
-      // If a drain is in-flight, it will exit cleanly once the map is empty.
-      if (!entry.isDraining) queue.delete(path);
-    }
-
-    /** Test/observation helper. */
-    function _size() { return queue.size; }
-
-    return { enqueue, drain, dropPath, _size };
+      const key = buildKey(slideIndex, origin);
+      const existing = entry.pending.get(key);
+      if (existing) {
+        existing.resolve({ ok: false, reason: 'COALESCED' });
+      }
+      entry.pending.set(key, { slideIndex, note, etag, origin, requestId, resolve });
+      if (!entry.isDraining) drain(path);
+    });
   }
 
-  if (typeof globalThis !== 'undefined') {
-    globalThis.MDVSaveQueue = { createSaveQueue };
+  async function drain(path) {
+    const entry = queue.get(path);
+    if (!entry || entry.isDraining) return;
+    entry.isDraining = true;
+    try {
+      while (entry.pending.size > 0) {
+        const it = entry.pending.entries().next();
+        if (it.done) break;
+        const [key, payload] = it.value;
+        entry.pending.delete(key);
+        let result;
+        try {
+          result = await saveFn(
+            path, payload.slideIndex, payload.note, payload.etag,
+            payload.origin, payload.requestId
+          );
+        } catch (err) {
+          console.error('saveQueue saveFn error', err);
+          result = { ok: false, reason: String(err && err.message || err) };
+        }
+        payload.resolve(result);
+      }
+    } finally {
+      entry.isDraining = false;
+      if (entry.pending.size === 0) queue.delete(path);
+    }
   }
-})();
+
+  /** Drop all pending edits for a path (e.g. when its tab is closed). */
+  function dropPath(path) {
+    const entry = queue.get(path);
+    if (!entry) return;
+    entry.pending.forEach((payload) => {
+      payload.resolve({ ok: false, reason: 'DROPPED' });
+    });
+    entry.pending.clear();
+    // If a drain is in-flight, it will exit cleanly once the map is empty.
+    if (!entry.isDraining) queue.delete(path);
+  }
+
+  /** Test/observation helper. */
+  function _size() { return queue.size; }
+
+  return { enqueue, drain, dropPath, _size };
+}
+
+export { createSaveQueue };
+
+if (typeof globalThis !== 'undefined') {
+  globalThis.MDVSaveQueue = { createSaveQueue };
+}

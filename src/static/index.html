@@ -16,6 +16,10 @@
     <link rel="stylesheet" href="/static/styles.css">
 
     <!-- Theme initialization (FOUC prevention) -->
+    <!-- KEEP IN SYNC: 'mdv-theme' literal below === modules/constants.js
+         STORAGE_KEYS.THEME. This has to be a plain synchronous classic
+         script (not type="module") so it runs before first paint; it
+         can't import the constant, so the string is duplicated by hand. -->
     <script>
         (function() {
             var theme = localStorage.getItem('mdv-theme') || 'light';
@@ -177,11 +181,6 @@
     <!-- Hidden File Input -->
     <input type="file" id="fileInput" multiple hidden>
 
-    <script src="/static/lib/presenterChannel.js"></script>
-    <script src="/static/lib/apiClient.js"></script>
-    <script src="/static/lib/saveQueue.js"></script>
-    <script src="/static/lib/tabRegistry.js"></script>
-    <script src="/static/lib/marpZoom.js"></script>
-    <script src="/static/app.js"></script>
+    <script type="module" src="/static/app.js"></script>
 </body>
 </html>

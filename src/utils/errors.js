@@ -4,6 +4,11 @@
  *
  * Replaces the four duplicated `mkError` helpers and the scattered
  * status-code logic that the audit flagged.
+ *
+ * KEEP IN SYNC with src/static/lib/errorCodes.js ERROR_CODES — that file
+ * mirrors every key below (plus a few client-only codes) so frontend
+ * modules can compare against `ERROR_CODES.X` instead of hand-typing the
+ * string. If you add/rename a code here, update the other file too.
  */
 
 export const ERROR_STATUS = Object.freeze({

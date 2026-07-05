@@ -1,9 +1,11 @@
 import js from '@eslint/js';
 
 // Minimal drift-catching config: no-undef + no-unused-vars only.
-// The frontend (src/static/) is classic scripts sharing globals; the
-// cross-file contract is declared here so accidental global creation
-// or typo'd references fail lint instead of failing at runtime.
+// The frontend (src/static/) is native ES modules that still share some
+// cross-file globals (via globalThis, for presenter.html's inline script
+// and not-yet-migrated code); the cross-file contract is declared here so
+// accidental global creation or typo'd references fail lint instead of
+// failing at runtime.
 export default [
   {
     ignores: [
@@ -65,11 +67,11 @@ export default [
     },
   },
   {
-    // Frontend: classic scripts (IIFEs) sharing globals via globalThis.
+    // Frontend: native ES modules (zero-build, <script type="module">).
     files: ['src/static/**/*.js'],
     languageOptions: {
       ecmaVersion: 2024,
-      sourceType: 'script',
+      sourceType: 'module',
       globals: {
         window: 'readonly',
         document: 'readonly',
@@ -121,7 +123,9 @@ export default [
         mermaid: 'readonly',
         tailwind: 'readonly',
         html2pdf: 'readonly',
-        // mdv-live cross-file contract (src/static/lib/*.js IIFEs)
+        // mdv-live cross-file contract (src/static/lib/*.js globalThis.MDVXxx
+        // transition compat; app.js reads these as bare globals rather than
+        // named imports, and presenter.html's inline script reads them too)
         MDVApi: 'readonly',
         MDVSaveQueue: 'readonly',
         MDVPresenterChannel: 'readonly',
