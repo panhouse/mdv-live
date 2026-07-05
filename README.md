@@ -21,7 +21,8 @@
 - ✅ タスクリスト（チェックボックス）対応
 - 📥 PDF出力（Cmd+P / CLI convert）
 - 🎛️ PDF用CSS・PDF options指定（CLI / Web UI）
-- 🎬 動画/音声ストリーミング再生（Range Request対応）
+- 🎬 動画/音声ストリーミング再生（Range Request対応・非対応コーデックは案内+ダウンロードにフォールバック）
+- 📊 **Office 雰囲気プレビュー** — `.xlsx`/`.pptx`/`.docx` の中身をレイアウト再現なしで素早く確認（0.6.0+）
 - 📤 ファイルアップロード（ドラッグ&ドロップ）
 - 🔒 セキュリティ強化（パストラバーサル防止 + ETag 楽観ロック + CSRF 防御）
 
@@ -155,6 +156,38 @@ $ mdv -p 8642
 ポート 8642 は使用中です。8643 を試します...
 MDV server running at http://localhost:8643
 ```
+
+## Office 雰囲気プレビュー & 動画フォールバック
+
+- **Office 雰囲気プレビュー**: `.xlsx` / `.pptx` / `.docx`（20MB以下）を開くと、レイアウトそのままの完全再現ではなく「中身の雰囲気」だけを素早く確認できるプレビューを表示します（xlsx = 先頭シートの表、pptx = スライドごとのタイトル+箇条書き、docx = 段落の羅列）。行・列・スライド・段落が多い場合は自動的に先頭のみ表示し、省略した旨を通知します。常にダウンロードリンクを表示するので、正確なレイアウトは元アプリ（Excel/PowerPoint/Word）で確認してください。20MB超のファイルや破損ファイル、旧形式（`.doc`/`.xls`/`.ppt`）は従来通りダウンロードカードのみの表示です。
+- **動画フォールバック**: MPEG-4 Part 2 や HEVC など、ブラウザが再生できない形式の動画ファイルを開くと、これまでは真っ黒な再生不可プレイヤーが表示されるだけでしたが、「この動画はブラウザで再生できない形式です」という案内とダウンロードボタンに自動的に切り替わります。QuickTime 等の外部プレイヤーでご覧ください。再生可能な動画（h264 等）の挙動は変わりません。
+
+## Config File (mdv.config.json)
+
+サーブ対象のディレクトリ（`mdv convert` の場合はカレントディレクトリ）に
+`mdv.config.json` を置くと、毎回 CLI 引数を打たなくてもデフォルト値を
+プロジェクトごとに固定できます。
+
+```json
+{
+  "port": 3000,
+  "depth": 5,
+  "open": false,
+  "css": "./styles/report.css",
+  "pdfOptions": "./styles/report.pdf-options.json"
+}
+```
+
+| キー | 型 | 対応する CLI フラグ |
+|---|---|---|
+| `port` | number | `-p, --port` |
+| `depth` | number | `-d, --depth` |
+| `open` | boolean | `--no-browser` の逆 |
+| `css` | string（`mdv.config.json` からの相対パス） | `-s, --style` (`mdv convert`) |
+| `pdfOptions` | string（同上） | `--pdf-options` (`mdv convert`) |
+
+**優先順位: CLI 引数 > `mdv.config.json` > 組み込みデフォルト**。未知のキーは
+警告を出して無視されます（エラーにはなりません）。
 
 ## macOS Finder Integration
 
@@ -350,16 +383,30 @@ npm install
 # Start development server
 npm run dev
 
-# Run tests
+# Run unit/integration tests (must be all-PASS)
 npm test
+
+# Run Playwright E2E smoke suite (must be all-PASS)
+npm run test:e2e
+
+# Lint (must be clean)
+npm run lint
 ```
 
 ## Project Structure
 
 ```
 mdv/
-├── bin/mdv.js                    # CLI entry point
+├── bin/mdv.js                    # Thin CLI entry point (parses argv, exits)
 ├── src/
+│   ├── cli/                      # CLI subcommand logic (unit-testable)
+│   │   ├── registry.js           # Subcommand table + dispatch
+│   │   ├── config.js             # mdv.config.json loader
+│   │   ├── convert.js            # `mdv convert` subcommand
+│   │   ├── resolveTarget.js      # Positional path → { rootDir, initialFile }
+│   │   └── serverRegistry.js     # `mdv -l` / `mdv -k`
+│   ├── config/
+│   │   └── constants.js          # Cross-module constants (port, depth, caps)
 │   ├── server.js                 # Express server setup
 │   ├── watcher.js                # File watching (chokidar)
 │   ├── websocket.js              # WebSocket setup
@@ -369,44 +416,65 @@ mdv/
 │   │   ├── tree.js               # File tree API
 │   │   ├── upload.js             # Upload API
 │   │   ├── marpNote.js           # Marp note autosave routes (orchestration)
-│   │   └── marpNote/
-│   │       ├── guards.js         # Origin / Host / Content-Type / If-Match guards
-│   │       ├── readDeck.js       # Path-safe deck reader (O_NOFOLLOW + realpath)
-│   │       ├── handleGet.js      # GET /api/marp/decks/:path
-│   │       └── handlePut.js      # PUT /api/marp/decks/:path/slides/:N/note
+│   │   ├── marpNote/
+│   │   │   ├── guards.js         # Content-Type / If-Match / note guards
+│   │   │   ├── readDeck.js       # Path-safe deck reader (realpath)
+│   │   │   ├── handleGet.js      # GET /api/marp/decks/:path
+│   │   │   └── handlePut.js      # PUT /api/marp/decks/:path/slides/:N/note
+│   │   └── middleware/
+│   │       └── originGuard.js    # Origin / Host (CSRF) guard — SSOT
 │   ├── rendering/
 │   │   ├── index.js              # Rendering entry
 │   │   ├── markdown.js           # Markdown rendering
 │   │   ├── marp.js               # Marp rendering (delegates to adapter)
 │   │   ├── marpitAdapter.js      # Marpit token adapter (SSOT)
 │   │   └── marpNoteWriter.js     # Pure-function note splice
+│   ├── services/
+│   │   └── pdf.js                # PDF generation, shared by API + CLI
 │   ├── concurrency/
 │   │   └── pathLock.js           # Promise-chain mutex (per-path serialization)
 │   ├── utils/
 │   │   ├── errors.js             # Error codes / status mapping (SSOT)
 │   │   ├── etag.js               # sha256 ETag (SSOT)
+│   │   ├── html.js               # HTML escaping (SSOT)
+│   │   ├── ignorePatterns.js     # Ignored files/dirs (tree + watcher, SSOT)
 │   │   ├── lineMath.js           # BOM / CRLF / line ↔ byte conversion
 │   │   ├── atomicWrite.js        # Atomic file write (O_EXCL + EXDEV fallback)
 │   │   ├── fileTypes.js          # File type detection
+│   │   ├── version.js            # package.json version reader
 │   │   └── path.js               # Path security (validatePath / validatePathReal)
-│   ├── static/                   # Frontend files
+│   ├── static/                   # Frontend — zero-build, native ES modules
 │   │   ├── index.html
-│   │   ├── app.js
+│   │   ├── app.js                # Bootstrap entry (imports + init())
 │   │   ├── presenter.html        # Presenter View (3-pane + autosave)
 │   │   ├── styles.css
-│   │   └── lib/
-│   │       ├── apiClient.js      # HTTP client wrapper
-│   │       ├── presenterChannel.js # BroadcastChannel SSOT
-│   │       ├── saveQueue.js      # Per-deck save queue + per-slide coalesce
-│   │       └── tabRegistry.js    # Tab life-cycle hooks
+│   │   ├── modules/              # One manager per module (~25 files)
+│   │   ├── lib/
+│   │   │   ├── apiClient.js      # HTTP client wrapper
+│   │   │   ├── presenterChannel.js # BroadcastChannel SSOT
+│   │   │   ├── saveQueue.js      # Per-deck save queue + per-slide coalesce
+│   │   │   ├── tabRegistry.js    # Tab life-cycle hooks
+│   │   │   ├── errorCodes.js     # Error code names (mirrors utils/errors.js)
+│   │   │   ├── debounce.js       # Debounced-action factory
+│   │   │   ├── marpZoom.js       # Pure zoom math (DOM-free)
+│   │   │   └── notesEditor.js    # Shared speaker-notes editor helpers
+│   │   └── vendor/               # Offline-vendored highlight.js/mermaid/
+│   │                              #   tailwind/html2pdf + versions.json
+│   │                              #   (tracked by scripts/sync-vendor.js)
 │   └── styles/
 │       ├── index.js
 │       ├── report.example.css
 │       └── report.pdf-options.example.json
 ├── scripts/
-│   └── setup-macos-app.sh        # macOS app setup
-└── tests/                        # Test files (236 件、全 PASS)
+│   ├── setup-macos-app.sh        # macOS app setup
+│   └── sync-vendor.js            # Re-populates src/static/vendor/
+└── tests/
+    ├── *.js                      # Unit/integration tests (node --test)
+    └── e2e/                      # Playwright E2E smoke suite
 ```
+
+See `docs/ARCHITECTURE.md` for the full module inventory and request/data-flow
+maps, and `CLAUDE.md` for the coding conventions.
 
 ## Requirements
 
