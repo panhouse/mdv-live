@@ -312,6 +312,14 @@ export const DiffReviewManager = {
         let data;
         try {
             const res = await MDVApi.diff(tab.path, lastSeen.hash);
+            if (!res.ok) {
+                // Controlled error envelope (file deleted/unreadable): NOT
+                // a diff result. Treating it as one made _applyResponse
+                // read undefined hunks and markSeen(undefined) — deleting
+                // the baseline (codex round-17). Leave the baseline alone.
+                if (mySeq === this._reviewSeq) this._hide();
+                return;
+            }
             data = await res.json();
         } catch (e) {
             console.error('diff review: /api/diff request failed:', e);
@@ -358,6 +366,7 @@ export const DiffReviewManager = {
     async _resolveCurrentHash(tab) {
         try {
             const res = await MDVApi.diff(tab.path, '');
+            if (!res.ok) return tab.etag || null;
             const data = await res.json();
             return data.currentHash || tab.etag || null;
         } catch (e) {

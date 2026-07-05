@@ -191,6 +191,17 @@ async function init() {
     // Entering edit mode swaps the pane to a textarea WITHOUT passing
     // through renderActive() — refresh here too so the bar hides while
     // editing (leaving it mounted invites confirming a pre-edit hash).
+    // EVERY Marp repaint funnels through ContentRenderer.renderMarp —
+    // including the deferred blur-path repaint InlineNotesPanel triggers
+    // after a file_update arrived mid-note-edit, which bypasses both the
+    // renderActive wrapper and the WS onFileRendered seam (codex
+    // round-17). Wrapping it here closes all Marp repaint paths at once.
+    const originalRenderMarp = ContentRenderer.renderMarp.bind(ContentRenderer);
+    ContentRenderer.renderMarp = function (...args) {
+        const out = originalRenderMarp(...args);
+        DiffReviewManager.refresh();
+        return out;
+    };
     const originalEditorShow = EditorManager.show.bind(EditorManager);
     EditorManager.show = function (...args) {
         const out = originalEditorShow(...args);
