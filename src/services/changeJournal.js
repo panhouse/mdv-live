@@ -153,14 +153,12 @@ export function createChangeJournal({
     if (!oversized) {
       lru.set(cellKey(path, hash), bytes);
       totalBytes += bytes;
-      while (totalBytes > maxBytesTotal) {
-        if (!evictOldestCell()) break;
-      }
     }
 
-    // Per-file version cap (independent of the byte budget above): drop the
-    // oldest version record(s) for this path once it holds more than
-    // maxVersionsPerFile.
+    // Per-file version cap FIRST (codex round-6): dropping this path's
+    // over-cap version often brings the journal back under budget on its
+    // own — running the global eviction before it could sacrifice another
+    // file's baseline for a transient overage.
     while (versions.length > maxVersionsPerFile) {
       const dropped = versions.shift();
       const key = cellKey(path, dropped.hash);
@@ -168,6 +166,10 @@ export function createChangeJournal({
         totalBytes -= lru.get(key);
         lru.delete(key);
       }
+    }
+
+    while (totalBytes > maxBytesTotal) {
+      if (!evictOldestCell()) break;
     }
 
     return hash;

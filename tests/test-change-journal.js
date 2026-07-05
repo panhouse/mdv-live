@@ -201,3 +201,15 @@ describe('changeJournal — get() refreshes LRU recency (codex round-3)', () => 
     assert.strictEqual(journal.get('b.md', hashB), null, 'cold B was evicted instead');
   });
 });
+
+describe('changeJournal — per-file cap runs before global eviction (codex round-6)', () => {
+  it('a transient overage resolved by the version cap does not evict another file', () => {
+    // Budget 21 fits three 7-byte entries. a.md holds 2 versions (cap=2).
+    const journal = createChangeJournal({ maxBytesTotal: 21, maxBytesPerFile: 8, maxVersionsPerFile: 2 });
+    journal.record('a.md', 'A1A1A1A');
+    const hashB = journal.record('b.md', 'BBBBBBB');
+    journal.record('a.md', 'A2A2A2A');       // budget now exactly 21
+    journal.record('a.md', 'A3A3A3A');       // transient 28 -> version cap drops A1 -> 21
+    assert.strictEqual(journal.get('b.md', hashB), 'BBBBBBB', "b.md must survive a's version churn");
+  });
+});
