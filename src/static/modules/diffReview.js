@@ -226,7 +226,12 @@ export const DiffReviewManager = {
         const mySeq = ++this._reviewSeq;
         const tab = state.tabs[state.activeTabIndex];
 
-        if (!tab || !DIFFABLE_FILE_TYPES.has(tab.fileType)) {
+        if (!tab || state.isEditMode || !DIFFABLE_FILE_TYPES.has(tab.fileType)) {
+            // Edit mode: the textarea replaces the rendered blocks, so
+            // highlights/jump have no targets and a confirm click could
+            // acknowledge a pre-edit hash (codex round-5) — hide until
+            // the editor closes (EditorManager.hide() re-renders through
+            // renderActive(), which brings the bar back if still relevant).
             this._hide();
             return;
         }
@@ -255,7 +260,9 @@ export const DiffReviewManager = {
             data = await res.json();
         } catch (e) {
             console.error('diff review: /api/diff request failed:', e);
-            this._hide();
+            // Same supersession rule as the success path: a stale request's
+            // failure must not clear the UI a newer refresh() just rendered.
+            if (mySeq === this._reviewSeq) this._hide();
             return;
         }
         if (mySeq !== this._reviewSeq) return; // a newer refresh() superseded this one

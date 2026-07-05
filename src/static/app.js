@@ -153,6 +153,15 @@ async function init() {
         originalShowWelcome();
         DiffReviewManager.refresh();
     };
+    // Entering edit mode swaps the pane to a textarea WITHOUT passing
+    // through renderActive() — refresh here too so the bar hides while
+    // editing (leaving it mounted invites confirming a pre-edit hash).
+    const originalEditorShow = EditorManager.show.bind(EditorManager);
+    EditorManager.show = function (...args) {
+        const out = originalEditorShow(...args);
+        DiffReviewManager.refresh();
+        return out;
+    };
 
     // Initialize all managers
     ThemeManager.init();
