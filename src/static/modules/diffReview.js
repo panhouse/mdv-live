@@ -185,6 +185,7 @@ export const DiffReviewManager = {
     _jumpIndex: -1,
     _reviewSeq: 0,
     _seededPaths: new Set(),
+    _lastPath: null,
 
     init() {
         this._buildDom();
@@ -247,13 +248,22 @@ export const DiffReviewManager = {
             return;
         }
 
+        // The fast path below is only sound while this tab has been the
+        // WS-watched active path — an INACTIVE tab's file can change with
+        // no event reaching us, leaving tab.etag stale. So the first
+        // refresh after switching paths always asks the server
+        // (codex round-11); same-path re-renders (theme toggle, PDF style)
+        // may use the cached hash.
+        const pathChanged = tab.path !== this._lastPath;
+        this._lastPath = tab.path;
+
         // Fast path: no network call needed when we already know the
         // current hash and it matches the baseline. One catch: after a
         // server restart the in-memory journal is empty even though
         // localStorage remembers this hash — seed it (fire-and-forget,
         // once per path per page load) so the NEXT edit produces real
         // counts instead of unknown-baseline (codex round-8).
-        if (tab.etag && tab.etag === lastSeen.hash) {
+        if (!pathChanged && tab.etag && tab.etag === lastSeen.hash) {
             if (!this._seededPaths.has(tab.path)) {
                 this._seededPaths.add(tab.path);
                 MDVApi.diff(tab.path, '').catch(() => {});
