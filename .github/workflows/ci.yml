@@ -34,14 +34,6 @@ jobs:
         # 起動できない。Playwright は自前で回避するが puppeteer は不可。
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
-      - name: Debug PDF tooling (temporary)
-        run: |
-          node -e "console.log('puppeteer', require('puppeteer/package.json').version)" || true
-          ls ~/.cache/puppeteer 2>/dev/null || echo "no puppeteer cache"
-          echo '# debug' > /tmp/dbg.md
-          node node_modules/md-to-pdf/dist/cli.js /tmp/dbg.md 2>&1 | tail -20 || true
-          ls -la /tmp/dbg.pdf 2>/dev/null || echo "no pdf produced"
-
       - name: Unit / API tests
         run: npm test
 

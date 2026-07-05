@@ -30,7 +30,16 @@ test('inline-notes: editing a speaker note autosaves to disk inside an HTML comm
   await expect(editor).toHaveAttribute('contenteditable', 'true');
 
   await editor.click();
-  await page.keyboard.press('Meta+A');
+  // Select-all via the DOM Selection API: Meta+A is macOS-only and
+  // Control+A is Linux/Windows-only — a modifier-keyed select-all makes
+  // this spec pass locally (mac) and fail in CI (ubuntu) or vice versa.
+  await editor.evaluate((el) => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  });
   await page.keyboard.press('Backspace');
   await page.keyboard.type('Updated note text for slide one');
 
