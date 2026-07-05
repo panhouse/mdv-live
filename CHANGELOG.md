@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.9] - 2026-07-06
+
+### Documentation
+
+4視点監査（README・エージェント向けマップ・リリースメタデータ・
+初見ユーザー再現テスト）で見つかった17件のズレをすべて修正。
+キーボード表のOS別修飾キー注記、API表への /api/search・/api/diff 追加、
+ARCHITECTURE の WSメッセージ仕様更新（removed種別・✓廃止反映）、
+npm の description/keywords を検収ビュー軸に更新など。コード変更なし。
+
 ## [0.6.8] - 2026-07-06
 
 ### Changed — Word風に引き算（オーナー指摘によるリデザイン）
