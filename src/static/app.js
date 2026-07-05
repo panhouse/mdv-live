@@ -30,6 +30,7 @@ import { ContextMenuManager } from './modules/contextMenu.js';
 import { DragDropManager } from './modules/dragDrop.js';
 import { KeyboardManager } from './modules/keyboard.js';
 import { SearchPalette } from './modules/searchPalette.js';
+import { DiffReviewManager } from './modules/diffReview.js';
 import { MDVApi } from './lib/apiClient.js';
 
 // ============================================================
@@ -118,6 +119,28 @@ async function init() {
     WebSocketManager.setInlineNotesPanel(InlineNotesPanel);
     WebSocketManager.setPresenterView(PresenterView);
     WebSocketManager.setRefreshCurrentTab(refreshCurrentTab);
+    // 0.6.4 (diff review): re-run the active tab's baseline-diff check
+    // after a live file_update actually repaints the content pane — see
+    // modules/websocket.js's docstring.
+    WebSocketManager.setOnFileRendered(() => DiffReviewManager.refresh());
+
+    // modules/diffReview.js needs to react to every tab activation (open/
+    // switch/close-then-reselect) and to the theme/PDF-style re-renders
+    // that also funnel through TabManager.renderActive() (see editor.js's
+    // hide() and the ThemeManager/PdfStyleManager wiring above) — but
+    // tabs.js is out of this feature's file scope, so rather than add a
+    // setter inside it, wrap the one method every content re-render already
+    // goes through. This is the same forward-reference idea as
+    // ThemeManager.setRenderActive() above, applied from the opposite
+    // direction (the reactor wraps the trigger instead of the trigger
+    // taking a setter), since tabs.js has no reason to import or know about
+    // diff review. Must happen before anything can call renderActive() —
+    // first possible call is inside TabManager.open() further down.
+    const originalRenderActive = TabManager.renderActive.bind(TabManager);
+    TabManager.renderActive = function () {
+        originalRenderActive();
+        DiffReviewManager.refresh();
+    };
 
     // Initialize all managers
     ThemeManager.init();
@@ -131,6 +154,7 @@ async function init() {
     ContextMenuManager.init();
     DragDropManager.init();
     SearchPalette.init();
+    DiffReviewManager.init();
     KeyboardManager.init();
     PresenterView.init();
 

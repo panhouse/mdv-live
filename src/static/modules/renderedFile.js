@@ -9,10 +9,22 @@
  *   lineEnding, hasBom
  *
  * (see src/rendering/index.js renderFile()/renderMarkdownFile(): css/
- * notes/notesMultiplicity/etag/lineEnding/hasBom are present ONLY when the
- * file is a Marp deck; isMarp is present only for markdown files at all;
+ * notes/notesMultiplicity/lineEnding/hasBom are present ONLY when the file
+ * is a Marp deck; isMarp is present only for markdown files at all;
  * content/raw/fileType are absent from the binary-file JSON shape built by
  * src/api/file.js buildBinaryFileResponse()).
+ *
+ * `etag` used to be on that Marp-only list too, but is NOT anymore as of
+ * 0.6.3 — src/watcher.js now stamps a raw-content-hash `etag` onto EVERY
+ * text-renderable file's `file_update` broadcast, not just Marp decks (see
+ * that module's docstring). GET /api/file itself is unchanged though:
+ * renderMarkdownFile() above still only computes `etag` for Marp decks, so
+ * a freshly-opened non-Marp tab's `tab.etag` stays at its `null` fallback
+ * (see the FIELDS table below) until the first live `file_update` for that
+ * path arrives. **Never use etag-presence as a Marp-detection proxy** —
+ * check `isMarp` instead. (modules/diffReview.js's baseline-hash lookup
+ * falls back to `MDVApi.diff(path, '')`'s `currentHash` for exactly this
+ * gap, rather than trusting `tab.etag` to always be populated.)
  *
  * Before this module, 4 call sites re-destructured this envelope onto a
  * `tab` object with 4 subtly different truthy/typeof/Array.isArray guards:
