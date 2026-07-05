@@ -104,15 +104,23 @@ export function setupWatcher(rootDir, wss, options = {}) {
       filesChangedTimer = null;
       const flushed = filesChangedItems;
       filesChangedItems = new Map();
-      // Sequence-table hygiene (codex round-7): entries whose seq is
-      // still the path's newest claim are fully consumed by this flush —
-      // drop them so pathEventSeq doesn't grow one entry per unique path
-      // forever. A path with a NEWER in-flight claim keeps its entry (the
-      // in-flight handler still needs to win its seq check).
-      for (const [p, { seq: flushedSeq }] of flushed) {
-        if (pathEventSeq.get(p) === flushedSeq) pathEventSeq.delete(p);
+      // Two rules per flushed path (codex rounds 7-8):
+      // 1. Superseded items are NOT broadcast: if the path's newest claim
+      //    belongs to a still-in-flight handler (its render/hash outlived
+      //    the debounce window), this queued item is stale — the in-flight
+      //    handler will schedule the fresh one when it finishes.
+      // 2. Hygiene: items that ARE the newest claim are fully consumed —
+      //    drop their pathEventSeq entry so the table doesn't grow one
+      //    entry per unique path forever.
+      const items = [];
+      for (const [p, { item, seq: flushedSeq }] of flushed) {
+        if (flushedSeq !== undefined && pathEventSeq.get(p) !== flushedSeq) {
+          continue; // rule 1: superseded — a newer handler owns this path
+        }
+        if (flushedSeq !== undefined) pathEventSeq.delete(p); // rule 2
+        items.push(item);
       }
-      const items = Array.from(flushed.values(), (v) => v.item);
+      if (items.length === 0) return;
       wss.broadcast({ type: 'files_changed', items });
     }, FILES_CHANGED_DEBOUNCE_MS);
   }
