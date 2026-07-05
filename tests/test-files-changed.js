@@ -147,7 +147,7 @@ describe('watcher.js — files_changed broadcast', () => {
     assert.strictEqual(aItems[aItems.length - 1].etag, makeEtag(v3), 'last-observed etag for a.md is the final write');
   });
 
-  it('adding a new text file broadcasts kind: added with no etag', async () => {
+  it('adding a new text file broadcasts kind: added carrying the content etag', async () => {
     const { ws, messages } = await connectClient(ctx);
     const from = messages.length;
 
@@ -160,7 +160,9 @@ describe('watcher.js — files_changed broadcast', () => {
 
     const item = msg.items.find((it) => it.path === 'new-note.md');
     assert.strictEqual(item.kind, 'added');
-    assert.ok(!item.etag, 'added items carry no etag');
+    // codex rounds 2-3: the etag lets the client hash-compare added items
+    // like changed ones (late-add and recreation races both resolve).
+    assert.strictEqual(item.etag, makeEtag('# New\n'));
   });
 
   it('deleting a text file broadcasts kind: removed (codex round-1)', async () => {

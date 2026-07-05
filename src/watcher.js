@@ -3,11 +3,13 @@
  */
 
 import chokidar from 'chokidar';
+import fs from 'node:fs/promises';
 import path from 'path';
 import {
   AWAIT_WRITE_FINISH_POLL_MS,
   AWAIT_WRITE_FINISH_STABILITY_MS,
   FILES_CHANGED_DEBOUNCE_MS,
+  JOURNAL_MAX_FILE_BYTES,
   TREE_UPDATE_DEBOUNCE_MS
 } from './config/constants.js';
 import { renderFile } from './rendering/index.js';
@@ -133,14 +135,33 @@ export function setupWatcher(rootDir, wss, options = {}) {
     }
   });
 
-  // Brand-new files only (not directories). No etag is computed here (the
-  // file isn't read) — the client treats an 'added' item as
-  // unconditionally unread.
-  watcher.on('add', (filePath) => {
+  // Brand-new files only (not directories). The etag lets the client
+  // judge 'added' exactly like 'changed' (compare vs its baseline) —
+  // without it, a late-arriving add after create+open flipped a just-seen
+  // file back to unread, while skipping those flips left recreated files
+  // wearing a stale ✓ (codex 0.6.5 rounds 2-3; the hash resolves both
+  // directions of that race). Oversized files ship without an etag and
+  // the client falls back to unconditionally-unread.
+  watcher.on('add', async (filePath) => {
     const relativePath = toRelativePath(filePath);
-    if (isTrackable(relativePath)) {
-      scheduleFilesChanged({ path: relativePath, kind: 'added' });
+    if (!isTrackable(relativePath)) return;
+    let etag;
+    try {
+      const stat = await fs.stat(filePath);
+      if (stat.size <= JOURNAL_MAX_FILE_BYTES) {
+        const raw = await fs.readFile(filePath, 'utf-8');
+        etag = makeEtag(raw);
+        if (journal) journal.record(relativePath, raw);
+      }
+    } catch {
+      // Unreadable/vanished before we got to it — fall through etag-less;
+      // an unlink event will clean up if it's really gone.
     }
+    scheduleFilesChanged(
+      etag
+        ? { path: relativePath, etag, kind: 'added' }
+        : { path: relativePath, kind: 'added' }
+    );
   });
 
   // Deleted files leave the badge feed too, or the client's unread map

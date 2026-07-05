@@ -121,20 +121,22 @@ export const UnreadBadgesManager = {
                 continue;
             }
 
-            if (item.kind === 'added') {
-                // Newly-arrived file: unread — UNLESS this client already
-                // confirmed a version of it. The debounced 'added' can land
-                // AFTER a create-via-API + open (markSeen) sequence, and
-                // flipping a just-seen file back to unread is wrong; real
-                // subsequent edits arrive as 'changed' items with an etag
-                // and are judged properly there (codex round-2).
+            if (item.kind === 'added' && !item.etag) {
+                // Etag-less add (oversized/unreadable at add time): no way
+                // to compare — unconditionally unread unless this client
+                // already confirmed some version (best effort; a real edit
+                // arrives as 'changed' and is judged properly).
                 if (getLastSeen(item.path)) continue;
-                this._unreadEtag.set(item.path, item.etag || null);
+                this._unreadEtag.set(item.path, null);
                 this._seenKnown.delete(item.path);
                 continue;
             }
 
-            if (item.kind === 'changed') {
+            if (item.kind === 'added' || item.kind === 'changed') {
+                // 'added' now carries an etag too (codex rounds 2-3): the
+                // hash comparison resolves BOTH races — a late add after
+                // create+open matches the baseline (stays ✓), a recreated
+                // file with different content mismatches (goes unread).
                 const lastSeen = getLastSeen(item.path);
                 if (!lastSeen || lastSeen.hash !== item.etag) {
                     this._unreadEtag.set(item.path, item.etag || null);
