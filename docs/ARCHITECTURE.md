@@ -55,6 +55,7 @@ For refactor history/rationale (why things are split the way they are), see
 | `src/rendering/marp.js` | Thin compatibility wrapper — delegates to `marpitAdapter.renderDeck`. Do not modify Marp's HTML output structure; the CSS depends on the exact `div.marpit > svg > foreignObject > section` shape. |
 | `src/rendering/marpitAdapter.js` | **SSOT** for all Marp/Marpit parsing. Normalizes slide-range and speaker-note-position token output. Contract is snapshot-frozen by `tests/test-marpit-adapter.js` — do not call `marp.markdown.parse()`/`marp.render()` directly from anywhere else. |
 | `src/rendering/marpNoteWriter.js` | Pure function: splices a speaker-note comment into raw markdown at the right line range (or appends one). At most one auto-saved note per slide (Multi-note Guard). |
+| `src/rendering/office.js` | xlsx/pptx/docx "vibe preview" (雰囲気プレビュー, 0.6.0): unzips OOXML with `fflate`, extracts text via tolerant regex (not a full XML parser — namespace-prefix- and attribute-order-agnostic). Returns an escaped `<div class="office-preview">` fragment; throws a coded `OFFICE_PREVIEW_FAILED` error on any parse failure (corrupt zip, missing part, password-protected, oversized), which `src/api/file.js` catches and falls back to the plain binary response for. |
 
 ### Services, styles, concurrency, utils
 
@@ -112,7 +113,9 @@ from `app.js`).
 | `keyboard.js` | Global keyboard shortcuts. |
 | `print.js` | `Cmd+P` → either `window.print()` or a styled PDF download, depending on whether PDF options are set (see README "PDF Export"). |
 | `renderedFile.js` | `applyRenderedFile(tab, data)` — the one place that applies the server's "rendered file" envelope fields (content/raw/fileType/isMarp/css/notes/notesMultiplicity/etag/lineEnding/hasBom) onto a tab object, with consistent per-field fallback rules. Used by `tabs.js`, `websocket.js`, and `editor.js`. |
-| `unreadBadges.js` | 0.6.5 unread ●/seen ✓ tree badges + per-directory unread counts + sidebar header chip ("next unread"). Event-driven off the `files_changed` WS feed (§2.2) and `diffReview.js`'s `onSeen()` seam — never hash-scans the tree. Decorates `[data-path]` rows in place after every tree render (wrapped from `app.js`, same pattern as `TabManager.renderActive`). |
+| `diffReview.js` | Change-tracking review UI (0.6.4-0.6.8) built on `GET /api/diff` + a localStorage baseline (`getLastSeen`/`markSeen`, namespaced by served root). Drives the toolbar's "変更 N" highlight-toggle + "✓ 確認" buttons (0.6.8 replaced the old standalone `#diffReviewBar` row between the tab bar and content pane with these two static toolbar buttons — see this module's docstring) and, for non-Marp markdown, `.diff-added`/`.diff-changed`/`.diff-removed-after` line highlighting plus ⌥↑↓ jump. `onSeen()` is the subscription seam `unreadBadges.js` uses to clear a path's unread dot the moment it's confirmed seen. |
+| `searchPalette.js` | Cmd/Ctrl+K full-text search overlay backed by `GET /api/search` (`src/services/search.js`). Builds its own DOM subtree in `document.body` (unlike `dialog.js`, which reuses static markup). Enter jumps to the hit: `data-source-line`-based scroll for markdown, proportional scroll for code/text, or just opens the deck for Marp (no per-line mapping yet). |
+| `unreadBadges.js` | 0.6.5 unread ● tree badge (the 0.6.5 seen-✓ badge was removed in 0.6.8 — a file that isn't unread now shows no badge at all) + per-directory unread counts + sidebar header chip ("next unread"). Event-driven off the `files_changed` WS feed (§2.2) and `diffReview.js`'s `onSeen()` seam — never hash-scans the tree. Decorates `[data-path]` rows in place after every tree render (wrapped from `app.js`, same pattern as `TabManager.renderActive`). |
 
 | Module (`src/static/lib/`) | Role |
 |---|---|
@@ -189,7 +192,7 @@ Produced by the server (`src/websocket.js`, `src/watcher.js`), consumed by
   describes `etag` as Marp-only — out of date as of 0.6.3, pending a 0.6.4
   frontend update.
 - **`files_changed`** (0.6.5) — `{ type: 'files_changed', items: [{ path,
-  etag?, kind: 'changed'|'added' }...] }`. Broadcast to *all* clients
+  etag?, kind: 'changed'|'added'|'removed' }...] }`. Broadcast to *all* clients
   (`wss.broadcast`, NOT watch-scoped like `file_update`) by `src/watcher.js`,
   coalesced per burst over `FILES_CHANGED_DEBOUNCE_MS` (200ms,
   `src/config/constants.js`) so a bulk FS operation collapses into one
@@ -207,10 +210,17 @@ Produced by the server (`src/websocket.js`, `src/watcher.js`), consumed by
     `!binary`) — a binary addition (image, pdf, ...) never gets a rendered
     pane/etag at all, so there is nothing to track as unread here (it still
     gets the existing `tree_update`).
+  - `kind: 'removed'` (chokidar `unlink`) carries no `etag` and is only sent
+    for trackable (markdown/code/text) paths — the client forgets the path
+    outright (`UnreadBadgesManager` deletes it from its unread map) rather
+    than marking it unread, so a deleted file's ghost never lingers in the
+    header chip count or `⌥⇧↓` next-unread cycling.
   - Client reaction: `UnreadBadgesManager.handleFilesChanged()` — a
-    `changed` item is unread unless `diffReview.js`'s `getLastSeen(path).hash`
-    already equals its `etag` (in which case it's marked seen-known, ✓); an
-    `added` item is always unread.
+    `changed`/`added` item is unread unless `diffReview.js`'s
+    `getLastSeen(path).hash` already equals its `etag`, in which case it is
+    simply not-unread (0.6.8 removed the separate seen-✓ badge — there is no
+    "confirmed" visual state to paint); an `added` item with no `etag` at
+    all is unconditionally unread.
 
 Client → server: only `{ type: 'watch', path }` (replaces, not adds to, that
 client's single watched path — see `clientWatches` in `src/websocket.js`).

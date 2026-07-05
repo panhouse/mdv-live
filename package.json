@@ -1,7 +1,7 @@
 {
   "name": "mdv-live",
   "version": "0.6.8",
-  "description": "Markdown Viewer - File tree + Live preview + Marp support + Hot reload",
+  "description": "Markdown Viewer - File tree + Live preview + Marp support + Hot reload + change-review surface (full-text search, diff highlighting, unread tracking)",
   "main": "src/server.js",
   "bin": {
     "mdv": "./bin/mdv.js"
@@ -22,7 +22,10 @@
     "preview",
     "live-reload",
     "hot-reload",
-    "file-tree"
+    "file-tree",
+    "diff",
+    "search",
+    "review"
   ],
   "author": "PanHouse <hirono.okamoto@panhouse.jp>",
   "license": "MIT",

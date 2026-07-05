@@ -54,6 +54,8 @@ src/
 │   ├── tree.js              # /api/tree, /api/tree/expand, /api/tree/page
 │   ├── upload.js            # POST /api/upload (multer, disk storage)
 │   ├── pdf.js                # POST /api/pdf/export
+│   ├── diff.js                # GET /api/diff (change-tracking line diff; read-only, no Origin guard)
+│   ├── search.js              # GET /api/search (full-text search; read-only, no Origin guard)
 │   ├── marpNote.js           # /api/marp/decks/:path routing (orchestration only)
 │   ├── marpNote/
 │   │   ├── guards.js         #   Content-Type / If-Match / slide-index / note validation
@@ -67,9 +69,12 @@ src/
 │   ├── markdown.js             # markdown-it (CJK emphasis fix, task lists, mermaid guard)
 │   ├── marp.js                 # thin compat wrapper over marpitAdapter.renderDeck
 │   ├── marpitAdapter.js        # SSOT Marp/Marpit wrapper (slide/notes token normalization)
-│   └── marpNoteWriter.js       # pure function: splice a speaker note into raw markdown
+│   ├── marpNoteWriter.js       # pure function: splice a speaker note into raw markdown
+│   └── office.js               # xlsx/pptx/docx "vibe preview": OOXML unzip (fflate) + tolerant-regex text extraction
 ├── services/
-│   └── pdf.js                  # PDF generation (marp-cli / md-to-pdf); shared by API + CLI
+│   ├── pdf.js                  # PDF generation (marp-cli / md-to-pdf); shared by API + CLI
+│   ├── changeJournal.js         # in-memory raw-content snapshot store keyed by content hash; backs /api/diff
+│   └── search.js                # full-text search implementation; backs /api/search
 ├── styles/                      # PDF style presets + resolution + example CSS/JSON
 ├── concurrency/
 │   └── pathLock.js              # withLock(): promise-chain mutex keyed by path
@@ -77,7 +82,7 @@ src/
 └── static/                      # Frontend. Zero-build, native ESM.
     ├── index.html / presenter.html / styles.css
     ├── app.js                    # bootstrap entry (~250 lines): imports + init()
-    ├── modules/                  # ~25 files, one manager per module
+    ├── modules/                  # ~28 files, one manager per module
     ├── lib/                      # DOM-free / cross-cutting: apiClient, saveQueue,
     │                             #   tabRegistry, presenterChannel, errorCodes,
     │                             #   debounce, marpZoom, notesEditor
@@ -212,4 +217,7 @@ unknown keys warn and are ignored, not a hard error).
 - `@marp-team/marp-core` — Marp slide rendering
 - `multer` (2.x) — file uploads
 - `mime-types` — MIME type detection
+- `fflate` — OOXML unzip for the Office "vibe preview" (`src/rendering/office.js`)
+- `highlight.js` — server-side theme lookup for PDF export syntax highlighting (`src/services/pdf.js`, `src/styles/index.js`); also vendored separately for the browser (see `src/static/vendor/`)
+- `open` — auto-launches the browser on `mdv` startup (disabled by `--no-browser`)
 - Optional (PDF export): `@marp-team/marp-cli`, `md-to-pdf`
