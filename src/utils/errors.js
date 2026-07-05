@@ -38,6 +38,7 @@ export const ERROR_STATUS = Object.freeze({
   NO_FILES_UPLOADED: 400, // "No files uploaded" (POST /api/upload)
   PDF_TOOL_UNAVAILABLE: 503, // services/pdf.js throws err.code === this
   PDF_EXPORT_FAILED: 500, // generic PDF export failure
+  SEARCH_QUERY_REQUIRED: 400, // GET /api/search: `q` missing/empty, or exceeds SEARCH_QUERY_MAX_LENGTH
   // client-only codes (do not produce HTTP responses)
   NETWORK_ERROR: 0,
   DEGRADED: 0

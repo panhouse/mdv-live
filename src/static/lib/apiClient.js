@@ -125,6 +125,20 @@ function fetchRawCss(path) {
   return fetch('/raw/' + path);
 }
 
+/**
+ * GET /api/search?q=&limit= — full-text search across the tree
+ * (src/services/search.js). Returns the raw Response (not parsed, mirrors
+ * fetchFile/fetchTree) so the caller can inspect `.ok`/`.status` and parse
+ * `{ results, truncated, stats }` itself. `signal` is optional (mirrors
+ * saveFile's abort-support) — modules/searchPalette.js aborts the previous
+ * in-flight request when a newer keystroke supersedes it.
+ */
+function search(q, limit, signal) {
+  const params = new URLSearchParams({ q });
+  if (limit) params.set('limit', String(limit));
+  return fetch('/api/search?' + params.toString(), signal ? { signal } : undefined);
+}
+
 const api = {
   getDeck,
   saveMarpNote,
@@ -139,7 +153,8 @@ const api = {
   moveItem,
   deleteFile,
   shutdown,
-  fetchRawCss
+  fetchRawCss,
+  search
 };
 
 export {
@@ -157,6 +172,7 @@ export {
   deleteFile,
   shutdown,
   fetchRawCss,
+  search,
   api as MDVApi
 };
 

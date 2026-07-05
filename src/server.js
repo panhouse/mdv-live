@@ -12,6 +12,7 @@ import { setupFileRoutes } from './api/file.js';
 import { setupMarpNoteRoutes } from './api/marpNote.js';
 import { makeOriginGuard, buildAllowedHosts } from './api/middleware/originGuard.js';
 import { setupPdfRoutes } from './api/pdf.js';
+import { setupSearchRoutes } from './api/search.js';
 import { setupTreeRoutes } from './api/tree.js';
 import { setupUploadRoutes } from './api/upload.js';
 import { DEFAULT_PORT, DEFAULT_DEPTH, JSON_BODY_LIMIT } from './config/constants.js';
@@ -34,6 +35,7 @@ function setupApiRoutes(app, options) {
   setupFileRoutes(app);
   setupUploadRoutes(app);
   setupPdfRoutes(app);
+  setupSearchRoutes(app);
   setupMarpNoteRoutes(app, { port: options.port });
 
   app.get('/api/info', (req, res) => {

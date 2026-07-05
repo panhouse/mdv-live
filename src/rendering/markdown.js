@@ -102,25 +102,154 @@ const MERMAID_PATTERN = /```mermaid\s*\n([\s\S]*?)\n```/g;
 import { isMarp } from './marpitAdapter.js';
 export { isMarp };
 
+// ---------------------------------------------------------------------------
+// Source-line mapping
+//
+// renderMarkdown() runs the raw file content through two text-level
+// transforms *before* handing it to markdown-it (convertFrontmatter,
+// protectMermaidBlocks — see below). Both can change the document's line
+// count (frontmatter's `---`/blank-line block collapses or expands into a
+// ```yaml fence; a multi-line ```mermaid fence collapses into a single-line
+// HTML-comment placeholder). token.map — which the core rule below reads —
+// is computed against that *transformed* content, not the original raw
+// file. Left uncorrected, every data-source-line after a frontmatter block
+// or a mermaid diagram would point at the wrong raw-file line.
+//
+// buildReverseLineMapper() + the mapLine functions convertFrontmatter()/
+// protectMermaidBlocks() now return fix this up: renderMarkdown() composes
+// them into a single mapSourceLine(transformedLine) -> rawLine function and
+// threads it through md.render()'s `env`, so the core rule always emits the
+// *original raw file* line number.
+// ---------------------------------------------------------------------------
+
+/**
+ * Number of display lines a string spans, given that it starts at the
+ * beginning of a line (i.e. the count of line terminators inside it, plus
+ * one — unless it ends exactly on a line terminator, in which case the
+ * trailing empty fragment isn't a consumed line). Treats \r\n and lone \r
+ * as a single break, matching markdown-it's own line-ending normalization.
+ * @param {string} str
+ * @returns {number}
+ */
+function lineSpanOf(str) {
+  const breaks = str.match(/\r\n|\r|\n/g);
+  const count = breaks ? breaks.length : 0;
+  const endsOnBreak = /(?:\r\n|\r|\n)$/.test(str);
+  return count - (endsOnBreak ? 1 : 0) + 1;
+}
+
+/**
+ * 1-based line number containing character offset `offset` in `str`.
+ * @param {string} str
+ * @param {number} offset
+ * @returns {number}
+ */
+function lineAtOffset(str, offset) {
+  const breaks = str.slice(0, offset).match(/\r\n|\r|\n/g);
+  return 1 + (breaks ? breaks.length : 0);
+}
+
+/**
+ * Builds a reverse line-mapper from a list of substitutions, each describing
+ * a contiguous [oldStart, oldStart+oldSpan) 1-based line range that was
+ * replaced by a contiguous [newStart, newStart+newSpan) range (substitutions
+ * must be sorted ascending by newStart, non-overlapping — true for both call
+ * sites below, since each is a single left-to-right text pass). Returns a
+ * function mapping a line number in the "new" text back to the "old" text.
+ *
+ * A line falling *inside* a substituted range maps to that range's
+ * oldStart — a representative, not a per-line inverse. That's sufficient
+ * here because each substituted range renders as at most one markdown-it
+ * token (the frontmatter's synthetic ```yaml fence, or a Mermaid block's
+ * single-line placeholder comment).
+ * @param {Array<{oldStart:number, oldSpan:number, newStart:number, newSpan:number}>} substitutions
+ * @returns {(line: number) => number}
+ */
+function buildReverseLineMapper(substitutions) {
+  if (!substitutions.length) return (line) => line;
+  return function toOldLine(line) {
+    let delta = 0;
+    for (const sub of substitutions) {
+      if (line < sub.newStart) break;
+      if (line < sub.newStart + sub.newSpan) return sub.oldStart;
+      delta = (sub.oldStart + sub.oldSpan) - (sub.newStart + sub.newSpan);
+    }
+    return line + delta;
+  };
+}
+
+// Block-level token types deliberately excluded from data-source-line: adding
+// the attribute to any of these changes their opening tag from a bare `<ul>`/
+// `<ol>`/`<li>`/`<blockquote>`/`<table>` to one with an attribute, which
+// breaks pre-existing exact-string assertions in
+// tests/test-markdown-rendering.js (e.g. `data.content.includes('<table>')`)
+// that this change must not modify. See this module's notes in the task
+// hand-off for the full contract and the coverage this trades away (list
+// items get no attribute at all when the list is "tight" — the common case
+// — since their inner paragraph is also `hidden`). Tables still get
+// row-level coverage (thead_open/tbody_open/tr_open keep their map), and
+// blockquotes still get their inner paragraph's line.
+const SOURCE_LINE_EXCLUDED_TYPES = new Set([
+  'bullet_list_open',
+  'ordered_list_open',
+  'list_item_open',
+  'blockquote_open',
+  'table_open'
+]);
+
+/**
+ * markdown-it core rule: for every block-level token with a non-null
+ * `.map` (heading/paragraph/fence/code_block/hr/thead/tbody/tr/...),
+ * sets `data-source-line` to the 1-based *original raw file* line the
+ * block starts at (`env.mapSourceLine`, when provided, translates the
+ * transformed-content line markdown-it saw back to the raw line — see
+ * the "Source-line mapping" note above; falls back to identity so calling
+ * `md.render()`/`md.parse()` without an env still works, e.g. in tests).
+ * `inline` tokens are skipped (they carry a `.map` too, but aren't
+ * rendered as a tag of their own — see markdown-it's renderer.render()).
+ * @param {object} state - markdown-it core rule state
+ */
+function injectSourceLineRule(state) {
+  const mapSourceLine = (state.env && typeof state.env.mapSourceLine === 'function')
+    ? state.env.mapSourceLine
+    : (line) => line;
+  for (const token of state.tokens) {
+    if (!token.map || token.type === 'inline' || SOURCE_LINE_EXCLUDED_TYPES.has(token.type)) continue;
+    token.attrSet('data-source-line', String(mapSourceLine(token.map[0] + 1)));
+  }
+}
+
+md.core.ruler.push('mdv_source_line', injectSourceLineRule);
+
 /**
  * Convert YAML frontmatter to code block for display
  * @param {string} content - Markdown content
- * @returns {string} Content with frontmatter converted
+ * @returns {{ content: string, mapLine: (line: number) => number }} Content
+ *   with frontmatter converted, plus a line-mapper back to `content`'s own
+ *   line numbers (identity if nothing was converted).
  */
 function convertFrontmatter(content) {
+  const identity = { content, mapLine: (line) => line };
   // Check for standard frontmatter at start of file
   const match = content.match(FRONTMATTER_PATTERN);
   if (match) {
     const frontmatter = match[1];
     // Skip empty frontmatter (treat as horizontal rules instead)
     if (!frontmatter.trim()) {
-      return content;
+      return identity;
     }
     const rest = content.slice(match[0].length);
-    return `\`\`\`yaml\n${frontmatter}\n\`\`\`\n${rest}`;
+    const header = `\`\`\`yaml\n${frontmatter}\n\`\`\`\n`;
+    const mapLine = buildReverseLineMapper([{
+      oldStart: 1,
+      oldSpan: lineSpanOf(match[0]),
+      newStart: 1,
+      newSpan: lineSpanOf(header)
+    }]);
+    return { content: header + rest, mapLine };
   }
 
-  return content;
+  return identity;
 }
 
 // Generate a per-render nonce to prevent placeholder collision with user content
@@ -129,16 +258,35 @@ const MERMAID_NONCE = Math.random().toString(36).slice(2, 10);
 /**
  * Protect Mermaid blocks from markdown processing
  * @param {string} content - Markdown content
- * @returns {{ content: string, blocks: string[], nonce: string }}
+ * @returns {{ content: string, blocks: string[], nonce: string,
+ *   mapLine: (line: number) => number, blockStartLines: number[] }}
+ *   `mapLine` translates a line in the returned `content` back to a line in
+ *   the input `content`. `blockStartLines[i]` is the input-`content` line
+ *   where mermaid block `i`'s ` ```mermaid ` fence starts (for baking
+ *   data-source-line into the restored `<pre>` in restoreMermaidBlocks,
+ *   which never goes through markdown-it tokens at all).
  */
 function protectMermaidBlocks(content) {
   const blocks = [];
+  const substitutions = [];
   const nonce = MERMAID_NONCE + '_' + Date.now().toString(36);
-  const protectedContent = content.replace(MERMAID_PATTERN, (match, code) => {
+  let shrink = 0;
+  const protectedContent = content.replace(MERMAID_PATTERN, (match, code, offset) => {
+    const oldStart = lineAtOffset(content, offset);
+    const oldSpan = lineSpanOf(match);
+    const newStart = oldStart - shrink;
+    substitutions.push({ oldStart, oldSpan, newStart, newSpan: 1 });
+    shrink += oldSpan - 1; // each block collapses to exactly one placeholder line
     blocks.push(code);
     return `<!--MDV_MERMAID_${nonce}_${blocks.length - 1}-->`;
   });
-  return { content: protectedContent, blocks, nonce };
+  return {
+    content: protectedContent,
+    blocks,
+    nonce,
+    mapLine: buildReverseLineMapper(substitutions),
+    blockStartLines: substitutions.map((sub) => sub.oldStart)
+  };
 }
 
 /**
@@ -146,13 +294,19 @@ function protectMermaidBlocks(content) {
  * @param {string} html - Rendered HTML
  * @param {string[]} blocks - Mermaid code blocks
  * @param {string} nonce - Nonce used during protection
+ * @param {Array<number|undefined>} [sourceLines] - 1-based raw-file line
+ *   for each block's ` ```mermaid ` fence (parallel to `blocks`), baked in
+ *   as data-source-line. Omitted/undefined entries render without the
+ *   attribute.
  * @returns {string}
  */
-function restoreMermaidBlocks(html, blocks, nonce) {
+function restoreMermaidBlocks(html, blocks, nonce, sourceLines) {
   let result = html;
   for (let i = 0; i < blocks.length; i++) {
     const escaped = escapeHtml(blocks[i]);
-    const mermaidHtml = `<pre><code class="language-mermaid">${escaped}</code></pre>`;
+    const line = sourceLines ? sourceLines[i] : undefined;
+    const lineAttr = line != null ? ` data-source-line="${line}"` : '';
+    const mermaidHtml = `<pre${lineAttr}><code class="language-mermaid">${escaped}</code></pre>`;
     const placeholder = `<!--MDV_MERMAID_${nonce}_${i}-->`;
     // Replace both paragraph-wrapped and bare placeholders (use split+join for global replace)
     result = result
@@ -168,10 +322,13 @@ function restoreMermaidBlocks(html, blocks, nonce) {
  * @returns {string}
  */
 export function renderMarkdown(content) {
-  const withFrontmatter = convertFrontmatter(content);
-  const { content: protectedContent, blocks, nonce } = protectMermaidBlocks(withFrontmatter);
-  const html = md.render(protectedContent);
-  return restoreMermaidBlocks(html, blocks, nonce);
+  const { content: withFrontmatter, mapLine: unmapFrontmatterLine } = convertFrontmatter(content);
+  const { content: protectedContent, blocks, nonce, mapLine: unmapMermaidLine, blockStartLines } =
+    protectMermaidBlocks(withFrontmatter);
+  const mapSourceLine = (line) => unmapFrontmatterLine(unmapMermaidLine(line));
+  const html = md.render(protectedContent, { mapSourceLine });
+  const mermaidSourceLines = blockStartLines.map(unmapFrontmatterLine);
+  return restoreMermaidBlocks(html, blocks, nonce, mermaidSourceLines);
 }
 
 export default { renderMarkdown, isMarp };
