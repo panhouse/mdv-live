@@ -24,6 +24,7 @@ import { InlineNotesPanel } from './modules/inlineNotes.js';
 import { PresenterView } from './modules/presenterView.js';
 import { ContentRenderer } from './modules/contentRenderer.js';
 import { TabManager } from './modules/tabs.js';
+import { applyRenderedFile } from './modules/renderedFile.js';
 import { EditorManager } from './modules/editor.js';
 import { PrintManager } from './modules/print.js';
 import { ContextMenuManager } from './modules/contextMenu.js';
@@ -84,10 +85,11 @@ async function refreshCurrentTab() {
         const response = await MDVApi.fetchFile(tab.path);
         const data = await response.json();
         if (data.content && data.content !== tab.content) {
-            tab.content = data.content;
-            if (data.raw) {
-                tab.raw = data.raw;
-            }
+            // Full rendered-file contract via the SSOT helper — hand-copying
+            // only content/raw left tab.etag stale, which tricked
+            // DiffReviewManager's fast path into hiding a real change
+            // (codex round-6).
+            applyRenderedFile(tab, data);
             const currentScroll = saveScrollPosition(elements.content);
             ContentRenderer.render(data.content, data.fileType || tab.fileType);
             restoreScrollPosition(elements.content, currentScroll);
