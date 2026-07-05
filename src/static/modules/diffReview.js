@@ -85,12 +85,21 @@
  *      past its own tagged first line, a range that's entirely a blank
  *      *separator* line between two blocks (that separator doesn't belong
  *      to either block's visible content, so pass 1 correctly finds
- *      nothing there), or a range inside an untagged tight-list item
- *      (SOURCE_LINE_EXCLUDED_TYPES, see markdown.js) — fall back to the
- *      nearest PRECEDING tagged block, or the first block if the range is
- *      before all of them. Same fallback convention removedAt markers use
- *      below, and the one searchPalette.js's _scrollToSourceLine() uses
- *      for search-jump.
+ *      nothing there), or a range inside one of the wrapper tags markdown.js
+ *      still leaves untagged on purpose (SOURCE_LINE_EXCLUDED_TYPES — the
+ *      `<ul>`/`<ol>`/`<blockquote>`/`<table>` opening tag itself, NOT their
+ *      `<li>`/row contents, which have carried their own data-source-line
+ *      since 0.6.6) — fall back to the nearest PRECEDING tagged block, or
+ *      the first block if the range is before all of them. Same fallback
+ *      convention removedAt markers use below, and the one
+ *      searchPalette.js's _scrollToSourceLine() uses for search-jump.
+ *      (Before 0.6.6, list items fell into this fallback constantly — a
+ *      tight list's own `<li>` had no data-source-line anywhere inside it,
+ *      so a changed 議事録 decision bullet always highlighted whatever
+ *      heading/paragraph preceded the list instead of the bullet itself.
+ *      Tagging `list_item_open` closed that gap; pass 1 now matches
+ *      bullets directly, and this fallback is back to covering only
+ *      genuine gaps like blank separator lines.)
  * (An earlier version of this matched ranges against each block's
  * *coverage* — its own line up to the next block's line minus one — but
  * that misattributed a newly-inserted blank separator line to whichever

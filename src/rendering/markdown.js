@@ -180,26 +180,41 @@ function buildReverseLineMapper(substitutions) {
 
 // Block-level token types deliberately excluded from data-source-line: adding
 // the attribute to any of these changes their opening tag from a bare `<ul>`/
-// `<ol>`/`<li>`/`<blockquote>`/`<table>` to one with an attribute, which
-// breaks pre-existing exact-string assertions in
-// tests/test-markdown-rendering.js (e.g. `data.content.includes('<table>')`)
-// that this change must not modify. See this module's notes in the task
-// hand-off for the full contract and the coverage this trades away (list
-// items get no attribute at all when the list is "tight" — the common case
-// — since their inner paragraph is also `hidden`). Tables still get
-// row-level coverage (thead_open/tbody_open/tr_open keep their map), and
-// blockquotes still get their inner paragraph's line.
+// `<ol>`/`<blockquote>`/`<table>` to one with an attribute, which breaks
+// pre-existing exact-string assertions in tests/test-markdown-rendering.js
+// (e.g. `data.content.includes('<table>')`) that this change must not modify.
+// Tables still get row-level coverage (thead_open/tbody_open/tr_open keep
+// their map), and blockquotes still get their inner paragraph's line.
+//
+// `list_item_open` (<li>) is intentionally NOT in this set (0.6.6 — see
+// tests/test-source-line-mapping.js's "List items" describe block for the
+// contract this establishes). It used to be excluded for the same
+// bare-opening-tag reason as its siblings, but that traded away the single
+// most user-visible mapping gap: a tight list (the common case — no blank
+// line between items, so the item's inner paragraph is `hidden` and carries
+// no rendered tag of its own) left every bullet with NO data-source-line
+// anywhere inside it, so a changed 議事録 decision bullet fell through to
+// diffReview.js's/searchPalette.js's nearest-PRECEDING-block fallback and
+// highlighted/jumped-to whatever heading or paragraph came before it
+// instead of the bullet itself. `list_item_open` always carries its own
+// `.map` — tight or loose, nested or not, task-list or not (the
+// markdown-it-task-lists plugin's `class="task-list-item"` attrSet on this
+// same token, in its own core rule registered earlier, composes fine with
+// ours since each just appends its own attribute) — so tagging it directly
+// costs nothing structurally and only touches the tests that asserted a
+// bare `<li>` on purpose (updated deliberately alongside this change, not
+// worked around). `<ul>`/`<ol>` themselves stay bare; only the `<li>`s
+// inside them gain the attribute.
 const SOURCE_LINE_EXCLUDED_TYPES = new Set([
   'bullet_list_open',
   'ordered_list_open',
-  'list_item_open',
   'blockquote_open',
   'table_open'
 ]);
 
 /**
  * markdown-it core rule: for every block-level token with a non-null
- * `.map` (heading/paragraph/fence/code_block/hr/thead/tbody/tr/...),
+ * `.map` (heading/paragraph/fence/code_block/hr/thead/tbody/tr/li/...),
  * sets `data-source-line` to the 1-based *original raw file* line the
  * block starts at (`env.mapSourceLine`, when provided, translates the
  * transformed-content line markdown-it saw back to the raw line — see

@@ -165,6 +165,51 @@ test('diff bar disappears when the last tab is closed (welcome view)', async ({ 
   await expect(page.locator('#diffReviewBar')).toBeHidden();
 });
 
+test('diff review: a TIGHT LIST bullet change highlights the <li> itself, not the preceding heading (0.6.6 list-item mapping)', async ({ page }) => {
+  const p = 'bullets.md';
+  const original = [
+    '# 議事録',
+    '',
+    '- 決定事項A',
+    '- 決定事項B',
+    '- 決定事項C'
+  ].join('\n') + '\n';
+  await writeFile(path.join(fixtureDir, p), original);
+  await page.goto(server.baseURL + '/');
+  await expect(page.locator(`.tree-item[data-path="${p}"] .name`)).toBeVisible();
+  await page.locator(`.tree-item[data-path="${p}"] [data-action="open"]`).click();
+  await expect(page.locator('#content h1')).toHaveText('議事録');
+  await waitForBaseline(page, p);
+
+  // Externally edit ONLY the middle bullet — this is a tight list (no blank
+  // lines between items), the exact case that used to have no
+  // data-source-line anywhere inside the <li> and so fell back to
+  // highlighting the nearest preceding block (the <h1>) instead.
+  const edited = [
+    '# 議事録',
+    '',
+    '- 決定事項A',
+    '- 決定事項Bを修正した',
+    '- 決定事項C'
+  ].join('\n') + '\n';
+  await writeFile(path.join(fixtureDir, p), edited);
+  await expect(page.locator('#content')).toContainText('決定事項Bを修正した', { timeout: 3000 });
+
+  const bar = page.locator('#diffReviewBar');
+  await expect(bar).toBeVisible({ timeout: 3000 });
+
+  // The changed bullet's own <li> gets .diff-changed directly (pass 1 of
+  // diffReview.js's range-intersection match) — not the <h1>, which would
+  // only happen via the nearest-preceding-block fallback (pass 2).
+  const changedLi = page.locator('#content li.diff-changed');
+  await expect(changedLi).toHaveCount(1);
+  await expect(changedLi).toContainText('決定事項Bを修正した');
+  await expect(page.locator('#content h1')).not.toHaveClass(/diff-changed/);
+  // The untouched sibling bullets must not be flagged either.
+  await expect(page.locator('#content li', { hasText: '決定事項A' })).not.toHaveClass(/diff-changed/);
+  await expect(page.locator('#content li', { hasText: '決定事項C' })).not.toHaveClass(/diff-changed/);
+});
+
 test('Marp decks get real change counts (baseline seeded on first sight, codex)', async ({ page }) => {
   const p = 'seeded-deck.md';
   const deck = '---\nmarp: true\n---\n\n# 一枚目\n\n<!-- note -->\n';
