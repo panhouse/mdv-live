@@ -127,6 +127,24 @@ body {
     flex-shrink: 0;
 }
 
+/* Unread-count chip (0.6.5, modules/unreadBadges.js) — click to jump to
+   the next unread file. */
+.unread-chip {
+    margin-left: auto;
+    flex-shrink: 0;
+    border: none;
+    border-radius: 9px;
+    padding: 2px 8px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.5;
+    cursor: pointer;
+}
+.unread-chip:hover { filter: brightness(1.1); }
+.unread-chip.hidden { display: none; }
+
 /* ============================================================
    File Tree
    ============================================================ */
@@ -166,6 +184,31 @@ body {
 .tree-item-content .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-children { padding-left: 16px; }
 .tree-children.collapsed { display: none; }
+
+/* Unread/seen tree badges (0.6.5, modules/unreadBadges.js) */
+.tree-badge-status {
+    flex: none;
+    margin-left: auto;
+    padding-left: 8px;
+    font-size: 11px;
+    line-height: 1;
+}
+.tree-badge-status.is-unread { color: var(--accent); }
+.tree-badge-status.is-seen { color: var(--success); font-weight: 700; }
+
+.tree-badge-count {
+    flex: none;
+    margin-left: auto;
+    min-width: 15px;
+    text-align: center;
+    background: var(--accent);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.5;
+    border-radius: 9px;
+    padding: 1px 6px;
+}
 
 /* "Load more" row for directories with more children than the per-dir cap */
 .tree-more {

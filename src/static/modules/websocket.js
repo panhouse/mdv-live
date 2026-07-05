@@ -37,6 +37,15 @@
  * returns above them (image reload, no-content, or the "deferred render
  * while mid-edit of inline notes" branch, none of which touch the DOM
  * diffReview.js reads data-source-line out of).
+ *
+ * 0.6.5 (unread tree badges): a fifth forward reference, same setter
+ * pattern — the new `files_changed` message type (docs/ARCHITECTURE.md
+ * §2.2) has nothing to do with the active tab/content pane at all, so it
+ * is dispatched straight to modules/unreadBadges.js via
+ * setUnreadBadgesManager() rather than growing this module's own state.
+ * Unlike file_update, files_changed is broadcast to every client
+ * regardless of `watch` — no `state.activeTabIndex >= 0` gate on this
+ * branch.
  */
 import { state } from './state.js';
 import { elements } from './dom.js';
@@ -50,6 +59,7 @@ export const WebSocketManager = {
     _presenterView: null,
     _refreshCurrentTab: null,
     _onFileRendered: null,
+    _unreadBadgesManager: null,
 
     // Called once from app.js at bootstrap to wire the forward references
     // into managers/functions that still live in the app.js monolith.
@@ -75,6 +85,12 @@ export const WebSocketManager = {
         this._onFileRendered = fn;
     },
 
+    // 0.6.5: files_changed dispatch seam for modules/unreadBadges.js — see
+    // this module's docstring above.
+    setUnreadBadgesManager(manager) {
+        this._unreadBadgesManager = manager;
+    },
+
     connect() {
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
         state.ws = new WebSocket(`${protocol}//${location.host}/ws`);
@@ -98,6 +114,12 @@ export const WebSocketManager = {
                 // emit hundreds of tree_update frames. Schedule a single
                 // refresh instead of refreshing once per frame.
                 FileTreeManager.scheduleRefresh();
+            } else if (data.type === 'files_changed') {
+                // Broadcast to every client (no watch/active-tab gate,
+                // unlike file_update above) — see this module's docstring.
+                if (this._unreadBadgesManager) {
+                    this._unreadBadgesManager.handleFilesChanged(data.items || []);
+                }
             }
         };
 

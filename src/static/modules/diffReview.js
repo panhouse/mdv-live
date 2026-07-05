@@ -21,8 +21,14 @@
  * explicit 確認済み click — see markSeen()).
  *
  * getLastSeen(path) / markSeen(path, hash) are the ONLY functions that
- * touch this storage key — 0.6.5 (未読●/✓/フォルダバッジ) imports both
- * directly from this module rather than re-deriving the schema.
+ * touch this storage key — 0.6.5 (未読●/✓/フォルダバッジ,
+ * modules/unreadBadges.js) imports both directly from this module rather
+ * than re-deriving the schema. It also needs to know the MOMENT a path
+ * becomes seen (first-sight, 確認済み, or 0.6.5's own フォルダ内を
+ * 確認済みにする, which calls markSeen() per-path) so its unread map can
+ * flip that path to ✓ without polling — onSeen(fn) below is the tiny
+ * subscription seam for that, rather than duplicating the "what does
+ * seen mean" logic in a second module.
  *
  * ---------------------------------------------------------------------
  * Why this module does NOT trust `tab.etag` as "always populated"
@@ -153,6 +159,25 @@ export function getLastSeen(path) {
     return entry && typeof entry === 'object' ? entry : null;
 }
 
+// 0.6.5 subscription seam (see this module's docstring) — subscribers are
+// notified synchronously, in registration order, every time markSeen()
+// actually runs (including the delete-baseline branch, with hash `null`).
+// A listener throwing must not break markSeen() for the others, or for the
+// caller that triggered it.
+const seenListeners = [];
+
+/**
+ * Register a callback invoked as `fn(path, hash)` every time markSeen()
+ * runs — `hash` is `null` when markSeen() cleared the baseline instead of
+ * setting one. There is no unsubscribe: every current caller
+ * (modules/unreadBadges.js) subscribes once at bootstrap, for the app's
+ * lifetime.
+ * @param {(path: string, hash: string|null) => void} fn
+ */
+export function onSeen(fn) {
+    seenListeners.push(fn);
+}
+
 /**
  * Record `path` as confirmed-seen at `hash` (now).
  * @param {string} path
@@ -171,6 +196,13 @@ export function markSeen(path, hash) {
         store[key] = { hash, ts: Date.now() };
     }
     writeStore(store);
+    for (const fn of seenListeners) {
+        try {
+            fn(path, hash || null);
+        } catch (e) {
+            console.error('diffReview: onSeen listener failed:', e);
+        }
+    }
 }
 
 function formatHHMM(ts) {
@@ -505,7 +537,10 @@ export const DiffReviewManager = {
     },
 
     _handleJumpKey(e) {
-        if (!e.altKey || e.metaKey || e.ctrlKey) return;
+        // Shift excluded: Alt+Shift+ArrowDown belongs to unreadBadges.js's
+        // 次の未読へ shortcut — without this both handlers fired (codex
+        // 0.6.5 round-7).
+        if (!e.altKey || e.shiftKey || e.metaKey || e.ctrlKey) return;
         if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
         if (!this._current || this._current.kind !== 'full' || !this._highlightsOn) return;
 

@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.5] - 2026-07-06
+
+### Added — 未読●/✓バッジ（検収ビュー第2弾）
+
+ファイルツリーに「まだ見ていない変更」が見えるようになった:
+
+- 外部で変更/新規作成されたファイルの行に **青●**、確認済みに **緑✓**
+- フォルダ行に配下の未読数バッジ、サイドバーヘッダに合計チップ
+- チップクリック / ⌥⇧↓ で「次の未読へ」ジャンプ
+- フォルダ右クリック →「フォルダ内を確認済みにする」で一括確認
+- 完全イベント駆動（`files_changed` WS ブロードキャスト・200ms合流）。
+  ツリーのハッシュ走査はしない。基準は 0.6.4 の確認基準と同一（SSOT）
+
+### Internal
+
+GPT-5.5 クロスレビュー8周（10指摘修正: 削除ゴースト・再作成レース・
+イベント順序逆転・シーケンス表リーク・ショートカット衝突ほか）。
+
 ## [0.6.4] - 2026-07-05
 
 ### Added — 変更ハイライト（AIエージェント時代の検収ビュー第1弾）

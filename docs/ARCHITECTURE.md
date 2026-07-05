@@ -27,7 +27,7 @@ For refactor history/rationale (why things are split the way they are), see
 | Module | Role |
 |---|---|
 | `src/server.js` | `createMdvServer(options)`: builds the Express app, wires all API route setup functions, the body-size error handler, the SPA catch-all, WebSocket server, and file watcher. Owns the `app.locals.allowedHosts` contract (see §3). |
-| `src/watcher.js` | chokidar wrapper. On `change`, re-renders the file and broadcasts `file_update` to clients watching that path. On add/unlink (file or dir), debounces and broadcasts `tree_update`. |
+| `src/watcher.js` | chokidar wrapper. On `change`, re-renders the file and broadcasts `file_update` to clients watching that path. On add/unlink (file or dir), debounces and broadcasts `tree_update`. Since 0.6.5, `change` and text-file `add` events also coalesce into a `files_changed` broadcast (all clients) — see §2.2. |
 | `src/websocket.js` | `ws` server setup: per-client "watch" registry (`clientWatches`), `wss.broadcast()` (all clients), `wss.broadcastFileUpdate()` (only clients watching that path), and `broadcastTreeUpdate()` (the one place the `tree_update` payload is constructed). |
 
 ### API routes (`src/api/`)
@@ -112,6 +112,7 @@ from `app.js`).
 | `keyboard.js` | Global keyboard shortcuts. |
 | `print.js` | `Cmd+P` → either `window.print()` or a styled PDF download, depending on whether PDF options are set (see README "PDF Export"). |
 | `renderedFile.js` | `applyRenderedFile(tab, data)` — the one place that applies the server's "rendered file" envelope fields (content/raw/fileType/isMarp/css/notes/notesMultiplicity/etag/lineEnding/hasBom) onto a tab object, with consistent per-field fallback rules. Used by `tabs.js`, `websocket.js`, and `editor.js`. |
+| `unreadBadges.js` | 0.6.5 unread ●/seen ✓ tree badges + per-directory unread counts + sidebar header chip ("next unread"). Event-driven off the `files_changed` WS feed (§2.2) and `diffReview.js`'s `onSeen()` seam — never hash-scans the tree. Decorates `[data-path]` rows in place after every tree render (wrapped from `app.js`, same pattern as `TabManager.renderActive`). |
 
 | Module (`src/static/lib/`) | Role |
 |---|---|
@@ -187,6 +188,29 @@ Produced by the server (`src/websocket.js`, `src/watcher.js`), consumed by
   renderedFile.js`'s field-presence doc comment predates this and still
   describes `etag` as Marp-only — out of date as of 0.6.3, pending a 0.6.4
   frontend update.
+- **`files_changed`** (0.6.5) — `{ type: 'files_changed', items: [{ path,
+  etag?, kind: 'changed'|'added' }...] }`. Broadcast to *all* clients
+  (`wss.broadcast`, NOT watch-scoped like `file_update`) by `src/watcher.js`,
+  coalesced per burst over `FILES_CHANGED_DEBOUNCE_MS` (200ms,
+  `src/config/constants.js`) so a bulk FS operation collapses into one
+  message — `items` is keyed by path internally, so a path touched more
+  than once in one window keeps only its latest kind/etag. This is the
+  event-driven feed behind the unread/seen tree badges
+  (docs/plan-review-surface-0.6.x.md §③,
+  `src/static/modules/unreadBadges.js`) — the client never hash-scans the
+  whole tree, it only reacts to this feed plus `diffReview.js`'s
+  `getLastSeen()`/`markSeen()` baseline (`onSeen()` subscription seam).
+  - `kind: 'changed'` (chokidar `change`) always carries `etag` — the exact
+    same raw-content hash that change's `file_update` computes.
+  - `kind: 'added'` (chokidar `add`) carries no `etag` and is only sent for
+    text-renderable files (`src/utils/fileTypes.js`'s `getFileType()`,
+    `!binary`) — a binary addition (image, pdf, ...) never gets a rendered
+    pane/etag at all, so there is nothing to track as unread here (it still
+    gets the existing `tree_update`).
+  - Client reaction: `UnreadBadgesManager.handleFilesChanged()` — a
+    `changed` item is unread unless `diffReview.js`'s `getLastSeen(path).hash`
+    already equals its `etag` (in which case it's marked seen-known, ✓); an
+    `added` item is always unread.
 
 Client → server: only `{ type: 'watch', path }` (replaces, not adds to, that
 client's single watched path — see `clientWatches` in `src/websocket.js`).

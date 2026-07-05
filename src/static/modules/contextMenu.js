@@ -6,6 +6,7 @@ import { state } from './state.js';
 import { elements } from './dom.js';
 import { TabManager } from './tabs.js';
 import { FileOperationsManager } from './fileOperations.js';
+import { UnreadBadgesManager } from './unreadBadges.js';
 
 export const ContextMenuManager = {
     currentPath: null,
@@ -42,6 +43,8 @@ export const ContextMenuManager = {
                 { label: '新規フォルダ', action: 'newFolder' },
                 { label: 'アップロード', action: 'upload' },
                 { separator: true },
+                { label: 'フォルダ内を確認済みにする', action: 'markFolderSeen' },
+                { separator: true },
                 { label: '名前を変更', action: 'rename' },
                 { label: 'パスをコピー', action: 'copyPath' },
                 { separator: true },
@@ -77,6 +80,8 @@ export const ContextMenuManager = {
         } else if (action === 'upload') {
             state.uploadTargetPath = path;
             elements.fileInput.click();
+        } else if (action === 'markFolderSeen') {
+            UnreadBadgesManager.markFolderSeen(path);
         } else if (action === 'copyPath') {
             const fullPath = state.rootPath ? `${state.rootPath}/${path}` : path;
             navigator.clipboard.writeText(fullPath).catch(err => {
