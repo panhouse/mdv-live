@@ -311,3 +311,37 @@ describe('GET /api/diff — baseline lookup happens before recording (codex P2)'
     }
   });
 });
+
+describe('GET /api/diff — identical response still seeds the journal (codex round-4)', () => {
+  it('a baseline confirmed via the identical path is diffable after a later edit', async () => {
+    const ctx = await startTestServer({ files: { 'seed.md': 'v1\n' } });
+    try {
+      const journal = ctx.server.app.locals.changeJournal;
+      // Client gets the current hash from elsewhere (e.g. /api/file etag)
+      // — compute it directly here without a prior /api/diff call.
+      const { makeEtag } = await import('../src/utils/etag.js');
+      const h1 = makeEtag('v1\n');
+
+      // First-ever diff call uses from=<current> -> identical early return.
+      const first = await (await fetch(`${ctx.baseUrl}/api/diff?path=seed.md&from=${encodeURIComponent(h1)}`)).json();
+      assert.strictEqual(first.identical, true);
+
+      // Simulate a later edit WITHOUT the watcher (write straight into the
+      // journal-visible file and bypass the debounce by asking diff.js to
+      // read disk directly).
+      const fs = await import('node:fs/promises');
+      const path = await import('node:path');
+      await fs.writeFile(path.join(ctx.rootDir, 'seed.md'), 'v1\nv2 added\n');
+      // Ensure the watcher did NOT record between write and request: even
+      // if it did, the assertion below only gets easier; the regression
+      // case is when it did not.
+      journal; // (documentational)
+
+      const second = await (await fetch(`${ctx.baseUrl}/api/diff?path=seed.md&from=${encodeURIComponent(h1)}`)).json();
+      assert.strictEqual(second.available, true, `identical path must have seeded v1: ${JSON.stringify(second)}`);
+      assert.deepStrictEqual(second.added, [[2, 2]]);
+    } finally {
+      await ctx.stop();
+    }
+  });
+});

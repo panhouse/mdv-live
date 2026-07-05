@@ -69,11 +69,19 @@ export function setupDiffRoutes(app) {
       const current = await fs.readFile(fullPath, 'utf-8');
       const currentHash = makeEtag(current);
 
-      // Lazy initial snapshot: every diff request seeds the journal with the
-      // CURRENT content, so a later diff against this exact hash is possible
-      // even if the watcher never fired (e.g. this is the first time the
-      // file has been looked at, or it was written outside the watch tree's
-      // debounce window).
+      // Lazy initial snapshot: EVERY diff request (including the identical
+      // early-return below — codex round-4) seeds the journal with the
+      // CURRENT content, so a later diff against this exact hash is
+      // possible even if the watcher never fired. Ordering matters twice
+      // over: the baseline is looked up BEFORE recording (recording first
+      // can evict the very version being asked about at the per-file
+      // version cap — codex round-1), and recording happens BEFORE the
+      // identical return (or a client holding /api/file's etag could
+      // "confirm" a baseline that was never stored).
+      const baseline = from && from !== currentHash
+        ? journal.get(relativePath, from)
+        : null;
+      journal.record(relativePath, current);
 
       if (from === currentHash) {
         return res.json({
@@ -85,13 +93,6 @@ export function setupDiffRoutes(app) {
           removedAt: [],
         });
       }
-
-      const baseline = from ? journal.get(relativePath, from) : null;
-      // Look the baseline up BEFORE recording the current snapshot —
-      // recording first can evict the very version the client is asking
-      // to diff against (per-file version cap), turning a valid request
-      // into unknown-baseline (codex P2).
-      journal.record(relativePath, current);
       if (baseline === null) {
         return res.json({ available: false, reason: 'unknown-baseline', currentHash });
       }
