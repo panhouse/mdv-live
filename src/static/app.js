@@ -97,7 +97,15 @@ async function refreshCurrentTab() {
             // (codex round-6).
             applyRenderedFile(tab, data);
             const currentScroll = saveScrollPosition(elements.content);
-            ContentRenderer.render(data.content, data.fileType || tab.fileType);
+            if (tab.isMarp) {
+                // Marp decks must repaint through the Marp renderer — the
+                // generic render() would replace the split/notes/navigation
+                // UI with plain HTML (codex round-9). Same call the WS
+                // file_update path uses.
+                ContentRenderer.renderMarp(data.content, tab.css);
+            } else {
+                ContentRenderer.render(data.content, data.fileType || tab.fileType);
+            }
             restoreScrollPosition(elements.content, currentScroll);
             // This render path bypasses the renderActive() wrapper and the
             // WS onFileRendered seam — refresh the diff bar here too or a
