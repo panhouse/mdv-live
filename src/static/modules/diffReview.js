@@ -742,7 +742,19 @@ export const DiffReviewManager = {
         if (!this._highlightsOn || !this._current || this._current.kind !== 'full') return;
 
         const blocks = this._collectBlocks();
-        if (!blocks.length) return; // tight-list-only / no-mapping doc — never crash, just skip
+        if (!blocks.length) {
+            // No anchors left (e.g. the whole document was deleted, or a
+            // tight-list-only doc). Range highlights have nothing to paint,
+            // but DELETIONS must still show — inject them straight into
+            // the content container (codex 0.6.10 round-2).
+            if (this._current.removed && this._current.removed.length) {
+                const container = elements.content.querySelector('.markdown-body') || elements.content;
+                const insertAfter = new Map();
+                this._current.removed.forEach((hunk) =>
+                    this._injectRemovedInline([], hunk, insertAfter, container));
+            }
+            return;
+        }
 
         const markRange = ([start, end], cls) => {
             // Pass 1: any block whose own line falls inside the range.
@@ -784,9 +796,9 @@ export const DiffReviewManager = {
      * @param {{afterLine: number, lines: string[]}} hunk
      * @param {Map<Element, Element>} insertAfter - anchor el -> last node inserted after it
      */
-    _injectRemovedInline(blocks, hunk, insertAfter) {
+    _injectRemovedInline(blocks, hunk, insertAfter, fallbackContainer = null) {
         const anchorBlock = this._nearestBlock(blocks, hunk.afterLine);
-        if (!anchorBlock) return;
+        if (!anchorBlock && !fallbackContainer) return;
 
         const shown = hunk.lines.slice(0, DIFF_REMOVED_INLINE_MAX_LINES);
         let html = shown.map((line) => escapeHtml(line)).join('<br>');
@@ -801,6 +813,12 @@ export const DiffReviewManager = {
         div.innerHTML = html; // safe: every line went through escapeHtml() above; <br>/the
         // .diff-removed-inline-more span are the only raw markup, both ours.
 
+        if (!anchorBlock) {
+            // Whole-document deletion: no anchor exists — append into the
+            // content container in hunk order (codex 0.6.10 round-2).
+            fallbackContainer.appendChild(div);
+            return;
+        }
         // afterLine 0 = the deletion happened BEFORE the document's first
         // line — a deleted top heading must appear ABOVE the first block,
         // not below it (codex 0.6.10 round-1).

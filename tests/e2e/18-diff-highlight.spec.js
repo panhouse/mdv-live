@@ -366,3 +366,19 @@ test('0.6.10: a deleted FIRST line appears struck-through ABOVE the first block 
   });
   expect(isAbove).toBe(true);
 });
+
+test('0.6.10: deleting the ENTIRE document still shows the struck-through text (codex round-2)', async ({ page }) => {
+  const p = 'wipeout.md';
+  await writeFile(path.join(fixtureDir, p), '# 全部消える見出し\n\n消える本文。\n');
+  await page.goto(server.baseURL + '/');
+  await page.locator(`.tree-item[data-path="${p}"] [data-action="open"]`).click();
+  await expect(page.locator('#content')).toContainText('全部消える見出し');
+  await waitForBaseline(page, p);
+
+  await writeFile(path.join(fixtureDir, p), '');
+  await expect(page.locator('#diffToggleBtn')).toBeVisible({ timeout: 6000 });
+  await page.locator('#diffToggleBtn').click();
+  const inline = page.locator('.diff-removed-inline');
+  await expect(inline).toBeVisible({ timeout: 6000 });
+  await expect(inline).toContainText('全部消える見出し');
+});
