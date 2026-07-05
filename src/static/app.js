@@ -88,8 +88,12 @@ async function refreshCurrentTab() {
         // (equivalent markdown, whitespace) can render identically while
         // the raw text — and therefore the review baseline — moved
         // (codex round-8). etag is universal on text envelopes as of 0.6.4.
+        // Hash comparison only when the envelope HAS a hash — html previews
+        // (and any future non-text type) carry no etag, and undefined !==
+        // null would otherwise force a spurious re-render through the wrong
+        // renderer on every focus (codex round-10).
         const changed = data.content
-            && (data.etag !== tab.etag || data.content !== tab.content);
+            && ((data.etag && data.etag !== tab.etag) || data.content !== tab.content);
         if (changed) {
             // Full rendered-file contract via the SSOT helper — hand-copying
             // only content/raw left tab.etag stale, which tricked
