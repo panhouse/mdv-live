@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-07-05
+
+### Added — フォルダ横断の全文検索（⌘K / Ctrl+K）
+
+ツリーに表示される markdown/コード/テキストをリテラル検索（smart-case）。
+ファイル別グルーピング・ヒットの <mark> 強調・↑↓/Enter/Esc 操作、Enter で
+該当ファイルを開いて該当ブロックへスクロール+フラッシュ表示する。
+`GET /api/search`（1ファイル1MB・結果500件・走査5,000ファイル上限）。
+
+### Internal — レンダリング HTML にソース行マッピング
+
+markdown-it の token.map からブロック要素へ `data-source-line`（1始まり・
+frontmatter/mermaid 変換分を逆補正済み）を付与。検索ジャンプと 0.6.x 後半の
+変更ハイライトの共通基盤。
+
 ## [0.6.0] - 2026-07-05
 
 ### Added — Office 雰囲気プレビュー（.xlsx / .pptx / .docx）
