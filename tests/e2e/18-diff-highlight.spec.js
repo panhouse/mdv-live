@@ -334,7 +334,35 @@ test('baselines are namespaced by served root (no cross-project bleed)', async (
   await serverB.stop();
   await removeFixtureDir(rootA);
   await removeFixtureDir(rootB);
-  // Restart the shared suite server so later tests in this file (if any
-  // are added) and afterAll teardown find a live instance.
-  server = await startServer(fixtureDir, { port: portToReuse });
+  // Restart the shared suite server so later tests and afterAll find a
+  // live instance. NO port override: the helper's baseURL reflects its
+  // own port pick, so forcing portToReuse here left server.baseURL
+  // pointing at a dead port for every later test (latent until 0.6.10
+  // added one).
+  server = await startServer(fixtureDir);
+});
+
+test('0.6.10: a deleted FIRST line appears struck-through ABOVE the first block (codex)', async ({ page }) => {
+  const p = 'topdel.md';
+  await writeFile(path.join(fixtureDir, p), '一行目の見出し\n\n# 本文の見出し\n\n本文の段落。\n');
+  await page.goto(server.baseURL + '/');
+  await page.locator(`.tree-item[data-path="${p}"] [data-action="open"]`).click();
+  await expect(page.locator('#content')).toContainText('本文の見出し');
+  await waitForBaseline(page, p);
+
+  await writeFile(path.join(fixtureDir, p), '# 本文の見出し\n\n本文の段落。\n');
+  // 既定OFFなのでまずボタンが灯るのを待ち、UI経由でマークアップON
+  // （localStorage直書きは起動時にしか読まれないため効かない）
+  await expect(page.locator('#diffToggleBtn')).toBeVisible({ timeout: 6000 });
+  await page.locator('#diffToggleBtn').click();
+  const inline = page.locator('.diff-removed-inline');
+  await expect(inline).toBeVisible({ timeout: 6000 });
+  await expect(inline).toContainText('一行目の見出し');
+  // 取り消し線ブロックが最初のコンテンツブロックより上にあること
+  const isAbove = await page.evaluate(() => {
+    const del = document.querySelector('.diff-removed-inline');
+    const first = document.querySelector('#content [data-source-line]');
+    return !!(del && first) && !!(del.compareDocumentPosition(first) & 4); // 4 = DOCUMENT_POSITION_FOLLOWING
+  });
+  expect(isAbove).toBe(true);
 });

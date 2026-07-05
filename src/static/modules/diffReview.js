@@ -801,6 +801,13 @@ export const DiffReviewManager = {
         div.innerHTML = html; // safe: every line went through escapeHtml() above; <br>/the
         // .diff-removed-inline-more span are the only raw markup, both ours.
 
+        // afterLine 0 = the deletion happened BEFORE the document's first
+        // line — a deleted top heading must appear ABOVE the first block,
+        // not below it (codex 0.6.10 round-1).
+        if (hunk.afterLine === 0 && !insertAfter.has(anchorBlock.el)) {
+            anchorBlock.el.insertAdjacentElement('beforebegin', div);
+            return;
+        }
         const anchor = insertAfter.get(anchorBlock.el) || anchorBlock.el;
         anchor.insertAdjacentElement('afterend', div);
         insertAfter.set(anchorBlock.el, div);
