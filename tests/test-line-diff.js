@@ -174,3 +174,24 @@ describe('diffLines — DIFF_MAX_LINES cap', () => {
     assert.deepStrictEqual(result, { added: [], changed: [], removedAt: [] });
   });
 });
+
+describe('diffLines — trace memory budget (codex P1)', () => {
+  it('returns { available:false } for two large mostly-different inputs instead of allocating GBs', () => {
+    const oldText = Array.from({ length: 15000 }, (_, i) => `old line ${i}`).join('\n');
+    const newText = Array.from({ length: 15000 }, (_, i) => `new line ${i}`).join('\n');
+    const before = process.memoryUsage().heapUsed;
+    const result = diffLines(oldText, newText);
+    const grewMb = (process.memoryUsage().heapUsed - before) / 1024 / 1024;
+    assert.strictEqual(result.available, false);
+    assert.ok(grewMb < 200, `memory growth should stay bounded, grew ${grewMb.toFixed(0)}MB`);
+  });
+
+  it('still diffs large files with FEW edits (budget scales with edit distance, not size)', () => {
+    const base = Array.from({ length: 15000 }, (_, i) => `line ${i}`);
+    const edited = [...base];
+    edited[7000] = 'edited line';
+    const result = diffLines(base.join('\n'), edited.join('\n'));
+    assert.strictEqual(result.available === false, false);
+    assert.deepStrictEqual(result.changed, [[7001, 7001]]);
+  });
+});

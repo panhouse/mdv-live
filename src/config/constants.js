@@ -114,6 +114,11 @@ export const SEARCH_QUERY_MAX_LENGTH = 256;
  */
 export const DIFF_MAX_LINES = 20000;
 
+// Myers トレースのメモリ予算（バイト）。1ステップあたり (2*(N+M)+1)*4 byte
+// を消費するため、編集距離が大きい（=ほぼ全行が違う）ペアはこの予算で
+// 打ち切り、too-large として返す（ハイライトの用をなさないため）。
+export const DIFF_TRACE_BUDGET_BYTES = 32 * 1024 * 1024;
+
 /**
  * Total in-memory budget (bytes) for src/services/changeJournal.js's raw
  * snapshot store, summed across every path/version it holds. LRU-evicted

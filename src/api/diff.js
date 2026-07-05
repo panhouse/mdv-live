@@ -74,7 +74,6 @@ export function setupDiffRoutes(app) {
       // even if the watcher never fired (e.g. this is the first time the
       // file has been looked at, or it was written outside the watch tree's
       // debounce window).
-      journal.record(relativePath, current);
 
       if (from === currentHash) {
         return res.json({
@@ -88,6 +87,11 @@ export function setupDiffRoutes(app) {
       }
 
       const baseline = from ? journal.get(relativePath, from) : null;
+      // Look the baseline up BEFORE recording the current snapshot —
+      // recording first can evict the very version the client is asking
+      // to diff against (per-file version cap), turning a valid request
+      // into unknown-baseline (codex P2).
+      journal.record(relativePath, current);
       if (baseline === null) {
         return res.json({ available: false, reason: 'unknown-baseline', currentHash });
       }

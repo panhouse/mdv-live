@@ -26,7 +26,7 @@
  *    count.
  */
 
-import { DIFF_MAX_LINES } from '../config/constants.js';
+import { DIFF_MAX_LINES, DIFF_TRACE_BUDGET_BYTES } from '../config/constants.js';
 
 /**
  * Split text into lines, normalizing CRLF/CR to LF first and dropping the
@@ -68,8 +68,18 @@ function buildTrace(a, b) {
   const offset = MAX;
   const v = new Int32Array(2 * MAX + 1);
   const trace = [];
+  // Work/memory budget (codex P1): the trace stores a (2*MAX+1) Int32Array
+  // per edit-distance step, so two mostly-different large files would
+  // allocate gigabytes on an unauthenticated GET. A highlight preview of a
+  // file where hundreds of line-edits happened is "everything changed"
+  // anyway — bail to the same too-large signal the caller already handles.
+  const traceBytesPerStep = (2 * MAX + 1) * 4;
+  const maxSteps = Math.max(64, Math.floor(DIFF_TRACE_BUDGET_BYTES / traceBytesPerStep));
 
   for (let d = 0; d <= MAX; d++) {
+    if (d > maxSteps) {
+      return null; // budget exceeded -> caller reports { available: false }
+    }
     trace.push(v.slice());
     for (let k = -d; k <= d; k += 2) {
       let x;
@@ -214,6 +224,10 @@ export function diffLines(oldText, newText) {
   }
 
   const traceResult = buildTrace(oldLines, newLines);
+  if (traceResult === null) {
+    // Trace budget exceeded — same signal as the line-count cap.
+    return { available: false };
+  }
   const ops = backtrack(traceResult);
   return buildHunks(ops);
 }

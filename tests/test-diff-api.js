@@ -289,3 +289,25 @@ describe('watcher.js — records a change-journal snapshot on every filesystem c
     assert.deepStrictEqual(data.removedAt, []);
   });
 });
+
+describe('GET /api/diff — baseline lookup happens before recording (codex P2)', () => {
+  it('a baseline at the version-cap edge survives the request that would evict it', async () => {
+    const ctx = await startTestServer({ files: { 'cap.md': 'v-current\n' } });
+    try {
+      const journal = ctx.server.app.locals.changeJournal;
+      // Fill the per-file cap (4) with synthetic versions; v1 is oldest.
+      const h1 = journal.record('cap.md', 'v1\n');
+      journal.record('cap.md', 'v2\n');
+      journal.record('cap.md', 'v3\n');
+      journal.record('cap.md', 'v4\n');
+      // Disk content ('v-current') is a NEW 5th version. Recording it
+      // before looking up h1 would evict h1 -> unknown-baseline.
+      const res = await fetch(`${ctx.baseUrl}/api/diff?path=cap.md&from=${encodeURIComponent(h1)}`);
+      const data = await res.json();
+      assert.strictEqual(data.available, true, `expected a real diff, got ${JSON.stringify(data)}`);
+      assert.strictEqual(data.identical, false);
+    } finally {
+      await ctx.stop();
+    }
+  });
+});
