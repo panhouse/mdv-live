@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node bin/mdv.js",
-    "dev": "node bin/mdv.js --dev",
+    "dev": "node bin/mdv.js",
     "test": "node --test tests/*.js",
     "test:e2e": "playwright test",
     "lint": "eslint .",
