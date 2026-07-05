@@ -98,12 +98,21 @@ export function setupWatcher(rootDir, wss, options = {}) {
     if (seq !== undefined && pathEventSeq.get(item.path) !== seq) {
       return; // a newer fs event for this path superseded this work
     }
-    filesChangedItems.set(item.path, item);
+    filesChangedItems.set(item.path, { item, seq });
     if (filesChangedTimer) return; // a broadcast is already scheduled for this burst
     filesChangedTimer = setTimeout(() => {
       filesChangedTimer = null;
-      const items = Array.from(filesChangedItems.values());
+      const flushed = filesChangedItems;
       filesChangedItems = new Map();
+      // Sequence-table hygiene (codex round-7): entries whose seq is
+      // still the path's newest claim are fully consumed by this flush —
+      // drop them so pathEventSeq doesn't grow one entry per unique path
+      // forever. A path with a NEWER in-flight claim keeps its entry (the
+      // in-flight handler still needs to win its seq check).
+      for (const [p, { seq: flushedSeq }] of flushed) {
+        if (pathEventSeq.get(p) === flushedSeq) pathEventSeq.delete(p);
+      }
+      const items = Array.from(flushed.values(), (v) => v.item);
       wss.broadcast({ type: 'files_changed', items });
     }, FILES_CHANGED_DEBOUNCE_MS);
   }
@@ -120,7 +129,10 @@ export function setupWatcher(rootDir, wss, options = {}) {
 
   watcher.on('change', async (filePath) => {
     const relativePath = toRelativePath(filePath);
-    const seq = claimEventSeq(relativePath);
+    // Claim only for badge-feed (trackable) paths — claiming for every
+    // change would grow the sequence table with paths that never enter
+    // the feed (codex round-7).
+    const seq = isTrackable(relativePath) ? claimEventSeq(relativePath) : undefined;
     const relativeDir = path.dirname(relativePath);
 
     try {

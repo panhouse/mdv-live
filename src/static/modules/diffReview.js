@@ -537,7 +537,10 @@ export const DiffReviewManager = {
     },
 
     _handleJumpKey(e) {
-        if (!e.altKey || e.metaKey || e.ctrlKey) return;
+        // Shift excluded: Alt+Shift+ArrowDown belongs to unreadBadges.js's
+        // 次の未読へ shortcut — without this both handlers fired (codex
+        // 0.6.5 round-7).
+        if (!e.altKey || e.shiftKey || e.metaKey || e.ctrlKey) return;
         if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
         if (!this._current || this._current.kind !== 'full' || !this._highlightsOn) return;
 
