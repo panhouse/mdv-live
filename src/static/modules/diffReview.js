@@ -733,7 +733,7 @@ export const DiffReviewManager = {
     _clearHighlightClasses() {
         elements.content.querySelectorAll('.diff-added, .diff-changed')
             .forEach((el) => el.classList.remove('diff-added', 'diff-changed'));
-        elements.content.querySelectorAll('.diff-removed-inline')
+        elements.content.querySelectorAll('.diff-removed-inline[data-mdv-injected]')
             .forEach((el) => el.remove());
     },
 
@@ -814,7 +814,11 @@ export const DiffReviewManager = {
         // the same list (anchor li and the next mapped block's li share a
         // list container), render it as an <li> inside that list;
         // otherwise hoist to the top-level block.
-        const anchorLi = anchorBlock && anchorBlock.el.closest('li');
+        // Never the list-item path for a deletion that belongs ABOVE the
+        // anchor (afterLine < anchor's own line): a heading deleted above
+        // a list must not become a bullet of that list (codex round-6).
+        const beforeAnchor = anchorBlock && hunk.afterLine < anchorBlock.line;
+        const anchorLi = anchorBlock && !beforeAnchor && anchorBlock.el.closest('li');
         let asListItem = false;
         if (anchorLi) {
             const next = blocks.find((b) => b.line > hunk.afterLine);
@@ -824,6 +828,10 @@ export const DiffReviewManager = {
 
         const div = document.createElement(asListItem ? 'li' : 'div');
         div.className = 'diff-removed-inline';
+        // Marker so cleanup removes ONLY nodes WE injected — markdown can
+        // contain user-authored raw HTML with the same class, which must
+        // survive markup-off (codex round-6).
+        div.setAttribute('data-mdv-injected', '1');
         div.setAttribute('aria-hidden', 'true');
         div.innerHTML = html; // safe: every line went through escapeHtml() above; <br>/the
         // .diff-removed-inline-more span are the only raw markup, both ours.
