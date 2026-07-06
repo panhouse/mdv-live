@@ -92,17 +92,6 @@
                     <span id="editLabel">Edit</span>
                 </button>
 
-                <!-- 0.6.8 (modules/diffReview.js): Word's 変更履歴 model — these two
-                     appear ONLY while the active tab has a pending diff AND Review
-                     mode (below) is ON (replaces the removed #diffReviewBar 3rd
-                     band). Hidden by default.
-                     0.6.12: clicking 「変更 N」 now jumps to the next change (same
-                     as ⌥↓) instead of toggling markup on/off — Review ON always
-                     shows highlights/strikethrough now, see modules/reviewMode.js
-                     and modules/diffReview.js's docstrings. -->
-                <button class="toolbar-btn hidden" id="diffToggleBtn" type="button" title="次の変更へジャンプ（⌥↓ でも移動）" aria-label="次の変更へ移動">変更 0</button>
-                <button class="toolbar-btn hidden" id="diffConfirmBtn" type="button" title="最新の内容を確認済みにする" aria-label="確認済みにする">✓ 確認</button>
-
                 <button class="toolbar-btn" id="printBtn" title="Print / Save PDF (Cmd+P)" aria-label="Export to PDF">
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
@@ -119,7 +108,7 @@
 
                 <!-- 0.6.12 (modules/reviewMode.js): Word's 校閲/Review tab mental
                      model — ONE permanent, always-visible button gates the ENTIRE
-                     review surface (unread ●/counts/header chip, 「変更 N」/
+                     review surface (unread ●/counts/header chip, 「次の変更 N」/
                      「✓ 確認」, highlights, strikethrough deletions). Label is the
                      English word "Review" (owner: it sits beside Edit/PDF/Style,
                      which are all English) — the tooltip stays Japanese like every
@@ -133,6 +122,25 @@
                     </svg>
                     Review
                 </button>
+
+                <!-- 0.6.8 (modules/diffReview.js): Word's 変更履歴 model — these two
+                     sit right after the Review button (moved here in 0.6.14, owner
+                     feedback: they belong next to Review, not between Edit/PDF).
+                     0.6.12: clicking 「次の変更 N」 jumps to the next change (same
+                     as ⌥↓) instead of toggling markup on/off — Review ON always
+                     shows highlights/strikethrough now, see modules/reviewMode.js
+                     and modules/diffReview.js's docstrings.
+                     0.6.14 (owner: 「変更」だと何が起きるか分からない/ボタンの
+                     出現でレイアウトがガタつく): label renamed 「次の変更 N」
+                     (it jumps to the next change, so say so), and — instead of
+                     `.hidden` toggling on/off with the diff — BOTH buttons now
+                     stay mounted (never `.hidden`) whenever Review mode is ON,
+                     using the `disabled` attribute (not `.hidden`) when there is
+                     nothing to act on (no pending diff / non-diffable tab / no
+                     tab at all). Only the Review OFF state still hides them
+                     entirely — see modules/diffReview.js's `_syncToolbar()`. -->
+                <button class="toolbar-btn hidden" id="diffToggleBtn" type="button" title="次の変更へジャンプ（⌥↓ でも移動）" aria-label="次の変更へ移動">次の変更 0</button>
+                <button class="toolbar-btn hidden" id="diffConfirmBtn" type="button" title="最新の内容を確認済みにする" aria-label="確認済みにする">✓ 確認</button>
 
                 <button class="search-trigger" id="searchBoxToggle" title="ファイルを横断して検索 (Cmd/Ctrl+K)" aria-label="Search all files">
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">

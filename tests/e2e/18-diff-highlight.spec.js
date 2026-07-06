@@ -6,11 +6,11 @@ import { makeFixtureDir, seedFiles, startServer, removeFixtureDir } from './help
 // modules/diffReview.js — 0.6.4 ハイライト + ジャンプ. Covers the full
 // baseline lifecycle: first open silently records a baseline (no toolbar
 // controls), a later external edit is detected via the live file_update ->
-// GET /api/diff round trip and rendered as the toolbar's 「変更 N」/「✓ 確認」
-// buttons + block highlights (0.6.8: the old standalone #diffReviewBar band
-// is gone, see toggleBtn/confirmBtn below), ⌥↑↓ jump works, and the
-// localStorage baseline (STORAGE_KEYS.LAST_SEEN, 'mdv-last-seen') survives
-// reload whether or not the user confirmed it.
+// GET /api/diff round trip and rendered as the toolbar's 「次の変更 N」/
+// 「✓ 確認」 buttons + block highlights (0.6.8: the old standalone
+// #diffReviewBar band is gone, see toggleBtn/confirmBtn below), ⌥↑↓ jump
+// works, and the localStorage baseline (STORAGE_KEYS.LAST_SEEN,
+// 'mdv-last-seen') survives reload whether or not the user confirmed it.
 //
 // 0.6.12 unified review mode (owner): Word's 校閲/Review tab mental model —
 // ONE permanent toolbar button (`#reviewModeToggle`, label "Review") now
@@ -18,10 +18,19 @@ import { makeFixtureDir, seedFiles, startServer, removeFixtureDir } from './help
 // highlight sub-toggle. Every test below that used to click `#diffToggleBtn`
 // to turn markup ON now clicks `#reviewModeToggle` instead — `#diffToggleBtn`
 // itself no longer toggles anything; clicking it JUMPS to the next change
-// (same as ⌥↓), and it (plus `#diffConfirmBtn`) is only ever visible while
-// Review mode is ON. Every Playwright test gets a fresh browser context (no
+// (same as ⌥↓), and it (plus `#diffConfirmBtn`) is only ever HIDDEN while
+// Review mode is OFF. Every Playwright test gets a fresh browser context (no
 // localStorage carried over), so "fresh profile, Review defaults OFF" needs
 // no special setup — it's just the ambient state.
+//
+// 0.6.14 (owner: labels/placement/layout jitter) — while Review mode is ON,
+// both buttons now stay permanently MOUNTED (never `.hidden`) even with no
+// pending diff to review; "nothing to act on" is expressed via the
+// `disabled` attribute instead, so the toolbar never reflows on tab switch/
+// diff-resolve. Every assertion below that used to expect `toBeHidden()`
+// for these buttons while Review is ON with no diff now expects
+// `toBeVisible()` + `toBeDisabled()`; only the Review OFF transition itself
+// still hides them.
 
 let fixtureDir;
 let server;
@@ -93,7 +102,7 @@ test.afterAll(async () => {
   await removeFixtureDir(fixtureDir);
 });
 
-test('0.6.12 unified review mode (owner): default OFF shows zero review chrome even with a pending diff; one Review click reveals 「変更 N」/「✓ 確認」+ highlights + strikethrough deletion together; ⌥↑↓ AND clicking 「変更 N」 both jump; state survives reload; one Review click disables everything; ✓ 確認 clears the baseline', async ({ page }) => {
+test('0.6.12 unified review mode (owner): default OFF shows zero review chrome even with a pending diff; one Review click reveals 「次の変更 N」/「✓ 確認」+ highlights + strikethrough deletion together; ⌥↑↓ AND clicking 「次の変更 N」 both jump; state survives reload; one Review click disables everything; ✓ 確認 disables the buttons (they stay mounted) and clears the baseline', async ({ page }) => {
   await page.goto(server.baseURL + '/');
   await page.locator(`.tree-item[data-path="${FILE}"] [data-action="open"]`).click();
   await expect(page.locator('#content h1')).toHaveText('Review Doc');
@@ -139,16 +148,19 @@ test('0.6.12 unified review mode (owner): default OFF shows zero review chrome e
   const addedLi = page.locator('#content li.diff-added', { hasText: 'New bullet appended' });
   const removedInline = page.locator('#content .diff-removed-inline');
 
-  // 0.6.12 (b): ONE click on Review reveals 「変更 N」/「✓ 確認」 AND
+  // 0.6.12 (b): ONE click on Review reveals 「次の変更 N」/「✓ 確認」 AND
   // highlights AND the strikethrough deletion, all together — proving the
   // diff was tracked accurately in the background the whole time Review
-  // was OFF (no re-scan needed).
+  // was OFF (no re-scan needed). 0.6.14: a real pending diff means both
+  // buttons are enabled, not just visible.
   await toggleReviewMode(page);
   await expect(reviewToggle).toHaveClass(/active/);
   await expect(reviewToggle).toHaveAttribute('aria-pressed', 'true');
   await expect(toggleBtn).toBeVisible();
-  await expect(toggleBtn).toHaveText('変更 3');
+  await expect(toggleBtn).toBeEnabled();
+  await expect(toggleBtn).toHaveText('次の変更 3');
   await expect(confirmBtn).toBeVisible();
+  await expect(confirmBtn).toBeEnabled();
   await expect(changedLi).toBeVisible();
   await expect(addedLi).toBeVisible();
   await expect(removedInline).toHaveCount(1);
@@ -194,7 +206,7 @@ test('0.6.12 unified review mode (owner): default OFF shows zero review chrome e
   await expect(changedLi).not.toHaveClass(/diff-jump-flash/, { timeout: 3000 });
   await expect(changedLi).toHaveClass(/diff-changed/);
 
-  // 0.6.12: clicking 「変更 N」 no longer toggles markup — Review mode
+  // 0.6.12: clicking 「次の変更 N」 no longer toggles markup — Review mode
   // already implies markup shown, so there's nothing left for it to toggle.
   // It now jumps to the next change instead, same as ⌥↓: the previous ⌥↓
   // landed on the changed bullet (jump index 0), so one more jump lands on
@@ -214,13 +226,15 @@ test('0.6.12 unified review mode (owner): default OFF shows zero review chrome e
   await expect(reviewToggle).toHaveClass(/active/);
   await expect(reviewToggle).toHaveAttribute('aria-pressed', 'true');
   await expect(toggleBtn).toBeVisible({ timeout: 3000 });
-  await expect(toggleBtn).toHaveText('変更 3');
+  await expect(toggleBtn).toBeEnabled();
+  await expect(toggleBtn).toHaveText('次の変更 3');
   await expect(changedLi).toBeVisible();
   await expect(removedInline).toHaveCount(1);
 
   // 0.6.12: disabling Review clears EVERYTHING in one click — toolbar
   // buttons, highlights, and the strikethrough deletion together (still the
   // same open diff underneath — background tracking never forgot it).
+  // 0.6.14: OFF is the one transition that still hides the buttons outright.
   await toggleReviewMode(page);
   await expect(reviewToggle).not.toHaveClass(/active/);
   await expect(reviewToggle).toHaveAttribute('aria-pressed', 'false');
@@ -229,29 +243,38 @@ test('0.6.12 unified review mode (owner): default OFF shows zero review chrome e
   await expect(page.locator('#content .diff-added, #content .diff-changed')).toHaveCount(0);
   await expect(removedInline).toHaveCount(0);
 
-  // Re-enable Review to exercise 「✓ 確認」 (only visible/clickable while
-  // Review is ON, same as 「変更 N」).
+  // Re-enable Review to exercise 「✓ 確認」 (only enabled while there is a
+  // pending diff, same gate as 「次の変更 N」) — the diff was never
+  // confirmed above, so it's still pending.
   await toggleReviewMode(page);
   await expect(toggleBtn).toBeVisible();
+  await expect(toggleBtn).toBeEnabled();
   await expect(confirmBtn).toBeVisible();
+  await expect(confirmBtn).toBeEnabled();
 
-  // 「✓ 確認」 clears the toolbar controls/highlights and updates the
-  // stored baseline hash to the current content. 0.6.8 Word-like declutter
-  // (owner): same action as the old in-bar 「最新を確認済みにする」, now a
-  // plain toolbar button.
+  // 「✓ 確認」 clears the highlights and updates the stored baseline hash to
+  // the current content. 0.6.8 Word-like declutter (owner): same action as
+  // the old in-bar 「最新を確認済みにする」, now a plain toolbar button.
+  // 0.6.14: with nothing left to review, the buttons stay MOUNTED (Review
+  // is still ON) but go `disabled` instead of hiding — no more toolbar
+  // reflow on confirm.
   await confirmBtn.click();
-  await expect(toggleBtn).toBeHidden();
-  await expect(confirmBtn).toBeHidden();
+  await expect(toggleBtn).toBeVisible();
+  await expect(toggleBtn).toBeDisabled();
+  await expect(toggleBtn).toHaveText('次の変更 0');
+  await expect(confirmBtn).toBeVisible();
+  await expect(confirmBtn).toBeDisabled();
   await expect(page.locator('#content .diff-added, #content .diff-changed')).toHaveCount(0);
   await expect(removedInline).toHaveCount(0);
 
-  // Persists: reloading again now shows no toolbar controls, since the
-  // stored baseline matches the current (still-EDITED) content — even with
-  // Review mode still ON.
+  // Persists: reloading again now shows the buttons mounted-but-disabled,
+  // since the stored baseline matches the current (still-EDITED) content —
+  // Review mode itself is still ON.
   await page.reload();
   await expect(page.locator('#content h1')).toHaveText('Review Doc');
   await expect(reviewToggle).toHaveClass(/active/);
-  await expect(toggleBtn).toBeHidden();
+  await expect(toggleBtn).toBeVisible();
+  await expect(toggleBtn).toBeDisabled();
 });
 
 test('0.6.12: Review mode migrates the 0.6.10 REVIEW_MARKUP preference once, then removes the old key', async ({ page }) => {
@@ -287,7 +310,7 @@ test('0.6.12: Review mode migrates the 0.6.10 REVIEW_MARKUP preference once, the
   await expect(reviewToggle).toHaveAttribute('aria-pressed', 'false');
 });
 
-test('toolbar diff controls disappear when the last tab is closed (welcome view)', async ({ page }) => {
+test('toolbar diff controls go disabled (not hidden) when the last tab is closed (welcome view)', async ({ page }) => {
   const p = 'closeme.md';
   await writeFile(path.join(fixtureDir, p), '# Close Me\n\n本文の段落。\n');
   await page.goto(server.baseURL + '/');
@@ -301,13 +324,29 @@ test('toolbar diff controls disappear when the last tab is closed (welcome view)
   // before this visibility check (0.6.8 Word-like declutter, owner: the
   // toolbar's #diffToggleBtn replaces the old #diffReviewBar).
   await toggleReviewMode(page);
-  await expect(page.locator('#diffToggleBtn')).toBeVisible({ timeout: 6000 });
+  const toggleBtn = page.locator('#diffToggleBtn');
+  const confirmBtn = page.locator('#diffConfirmBtn');
+  await expect(toggleBtn).toBeVisible({ timeout: 6000 });
+  await expect(toggleBtn).toBeEnabled();
 
-  // Close the last tab -> welcome view; the controls must not linger (codex).
+  // Close the last tab -> welcome view (no tab at all, `_current` goes
+  // null). 0.6.14 (layout-stability fix, owner): with Review still ON the
+  // buttons stay MOUNTED — they go `disabled` ("次の変更 0"), they don't
+  // vanish (that used to shift the PDF/Style/Review/search controls to
+  // their right every time this happened — codex).
   await page.locator('#tabBar .tab .tab-close').click();
   await expect(page.locator('#content .welcome')).toBeVisible();
-  await expect(page.locator('#diffToggleBtn')).toBeHidden();
-  await expect(page.locator('#diffConfirmBtn')).toBeHidden();
+  await expect(toggleBtn).toBeVisible();
+  await expect(toggleBtn).toBeDisabled();
+  await expect(toggleBtn).toHaveText('次の変更 0');
+  await expect(confirmBtn).toBeVisible();
+  await expect(confirmBtn).toBeDisabled();
+
+  // Disabling Review itself still hides them outright — that's the one
+  // remaining transition allowed to reflow the toolbar.
+  await toggleReviewMode(page);
+  await expect(toggleBtn).toBeHidden();
+  await expect(confirmBtn).toBeHidden();
 });
 
 test('diff review: a TIGHT LIST bullet change highlights the <li> itself, not the preceding heading (0.6.6 list-item mapping)', async ({ page }) => {
@@ -372,14 +411,15 @@ test('Marp decks get real change counts (baseline seeded on first sight, codex)'
 
   await writeFile(path.join(fixtureDir, p), deck + '\n---\n\n# 追加スライド\n');
   // 0.6.12: enable Review mode first — #diffToggleBtn won't show at all
-  // otherwise. 0.6.8 Word-like declutter (owner): the toolbar's 「変更 N」
-  // button replaces the bar; the regression this guards against showed the
-  // unknown-baseline label (「変更 ?」) here instead of a real count.
+  // otherwise. 0.6.8 Word-like declutter (owner): the toolbar's 「次の変更
+  // N」 button replaces the bar; the regression this guards against showed
+  // the unknown-baseline label (「次の変更 ?」) here instead of a real count.
   await toggleReviewMode(page);
   const toggleBtn = page.locator('#diffToggleBtn');
   await expect(toggleBtn).toBeVisible({ timeout: 6000 });
-  await expect(toggleBtn).toHaveText(/^変更 \d+$/);
-  await expect(toggleBtn).not.toHaveText('変更 ?');
+  await expect(toggleBtn).toBeEnabled();
+  await expect(toggleBtn).toHaveText(/^次の変更 \d+$/);
+  await expect(toggleBtn).not.toHaveText('次の変更 ?');
 });
 
 test('baselines are namespaced by served root (no cross-project bleed)', async ({ page }) => {
@@ -417,10 +457,15 @@ test('baselines are namespaced by served root (no cross-project bleed)', async (
   await page.locator('.tree-item[data-path="shared.md"] [data-action="open"]').click();
   await expect(page.locator('#content h1')).toHaveText('Project B');
   await page.waitForTimeout(700);
-  // With the bug, A's hash mismatches B's content -> spurious toolbar
-  // controls. 0.6.8 Word-like declutter (owner): toolbar button replaces
-  // the bar for this assertion.
-  await expect(page.locator('#diffToggleBtn')).toBeHidden();
+  // With the bug, A's hash mismatches B's content -> a spurious pending
+  // diff, i.e. the button would be ENABLED with a nonzero count. Without
+  // the bug, project B has no baseline of its own yet, so first-sight
+  // silently records one and `_current` goes null — 0.6.14: that still
+  // means the button stays MOUNTED (Review is ON) but DISABLED, not hidden.
+  const toggleBtnB = page.locator('#diffToggleBtn');
+  await expect(toggleBtnB).toBeVisible();
+  await expect(toggleBtnB).toBeDisabled();
+  await expect(toggleBtnB).toHaveText('次の変更 0');
   await page.goto('about:blank');
   await serverB.stop();
   await removeFixtureDir(rootA);
@@ -516,4 +561,52 @@ test('0.6.10: a MID-LIST deletion renders between the surviving bullets (codex r
     return items.join('|');
   });
   expect(order).toMatch(/項目1\|.*消える項目.*\|項目3/);
+});
+
+test('0.6.14 (owner: layout jitter) — #diffToggleBtn/#diffConfirmBtn staying mounted while Review is ON means the toolbar controls to their right never shift when switching between a tab with a pending diff and a tab with none', async ({ page }) => {
+  const withDiff = 'jitter-with-diff.md';
+  const noDiff = 'jitter-no-diff.md';
+  await writeFile(path.join(fixtureDir, withDiff), '# Jitter A\n\n本文。\n');
+  await writeFile(path.join(fixtureDir, noDiff), '# Jitter B\n\n変更なし。\n');
+  await page.goto(server.baseURL + '/');
+
+  // Tab 1: give it a genuine pending diff (external edit while open).
+  await page.locator(`.tree-item[data-path="${withDiff}"] [data-action="open"]`).click();
+  await expect(page.locator('#content h1')).toHaveText('Jitter A');
+  await waitForBaseline(page, withDiff);
+  await writeFile(path.join(fixtureDir, withDiff), '# Jitter A\n\n本文を更新した。\n');
+  await expect(page.locator('#content')).toContainText('本文を更新した。', { timeout: 3000 });
+
+  // Tab 2: opened fresh, no external edit since — first-sight records its
+  // own baseline immediately, so it never has a pending diff to show.
+  await page.locator(`.tree-item[data-path="${noDiff}"] [data-action="open"]`).click();
+  await expect(page.locator('#content h1')).toHaveText('Jitter B');
+  await waitForBaseline(page, noDiff);
+
+  await toggleReviewMode(page);
+
+  const searchTrigger = page.locator('#searchBoxToggle');
+  const toggleBtn = page.locator('#diffToggleBtn');
+  const tabWithDiff = page.locator('#tabBar .tab', { hasText: withDiff });
+  const tabNoDiff = page.locator('#tabBar .tab', { hasText: noDiff });
+
+  // Currently on the no-diff tab: button mounted+disabled, not hidden.
+  await expect(toggleBtn).toBeVisible();
+  await expect(toggleBtn).toBeDisabled();
+  const xNoDiff = (await searchTrigger.boundingBox()).x;
+
+  // Switch to the pending-diff tab: button mounted+enabled with a real
+  // count — the search box must not have moved even though the button's
+  // enabled state (and label) just changed.
+  await tabWithDiff.click();
+  await expect(toggleBtn).toBeEnabled();
+  await expect(toggleBtn).toHaveText('次の変更 1');
+  const xWithDiff = (await searchTrigger.boundingBox()).x;
+  expect(xWithDiff).toBe(xNoDiff);
+
+  // ...and back again — still no movement.
+  await tabNoDiff.click();
+  await expect(toggleBtn).toBeDisabled();
+  const xBack = (await searchTrigger.boundingBox()).x;
+  expect(xBack).toBe(xNoDiff);
 });
