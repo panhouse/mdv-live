@@ -6,8 +6,17 @@
  * Contract: diffLines(oldText, newText) ->
  *   { added: [[startLine,endLine], ...],   // pure insertions (no old lines replaced)
  *     changed: [[startLine,endLine], ...], // replace hunks (old lines swapped for new)
- *     removedAt: [lineNumber, ...] }       // pure deletions: the NEW-text line
+ *     removedAt: [lineNumber, ...],        // pure deletions: the NEW-text line
  *                                          // AFTER which they occurred (0 = before line 1)
+ *     removed: [{ afterLine, lines }, ...] } // same pure-deletion hunks as removedAt,
+ *                                          // carrying the deleted OLD-text lines too
+ *                                          // (0.6.10, Word-style strikethrough display) —
+ *                                          // `afterLine` uses the exact same NEW-text
+ *                                          // position semantics as removedAt (in fact
+ *                                          // removedAt[i] === removed[i].afterLine for
+ *                                          // every i; removedAt is kept verbatim for
+ *                                          // callers that only need positions), `lines`
+ *                                          // is the deleted OLD-text lines in order.
  * — or `{ available: false }` if either side exceeds DIFF_MAX_LINES lines.
  *
  * All line numbers are 1-based positions in the NEW text, and `[start,end]`
@@ -157,14 +166,17 @@ function backtrack({ trace, N, M, MAX }) {
 
 /**
  * Group the forward edit script into hunks and translate them into the
- * public { added, changed, removedAt } shape.
+ * public { added, changed, removedAt, removed } shape.
  * @param {Array<{type: string, oldIndex?: number, newIndex?: number}>} ops
- * @returns {{ added: number[][], changed: number[][], removedAt: number[] }}
+ * @param {string[]} oldLines - needed to look up the actual text of deleted
+ *   lines for the `removed` field (0.6.10) — `ops` only carries indices.
+ * @returns {{ added: number[][], changed: number[][], removedAt: number[], removed: {afterLine: number, lines: string[]}[] }}
  */
-function buildHunks(ops) {
+function buildHunks(ops, oldLines) {
   const added = [];
   const changed = [];
   const removedAt = [];
+  const removed = [];
 
   let consumedNewLines = 0; // new-text lines emitted so far (equal + insert)
   let i = 0;
@@ -182,11 +194,17 @@ function buildHunks(ops) {
     let insertCount = 0;
     let insertMin = Infinity;
     let insertMax = -Infinity;
+    // oldIndex of every 'delete' op in this run, in forward (increasing)
+    // order — backtrack() already reverses the script into forward order,
+    // so a delete-only run's indices are the deleted lines in original
+    // top-to-bottom order (0.6.10 — feeds `removed[].lines` below).
+    const deletedIndices = [];
 
     while (i < ops.length && ops[i].type !== 'equal') {
       const op = ops[i];
       if (op.type === 'delete') {
         deleteCount++;
+        deletedIndices.push(op.oldIndex);
       } else {
         insertCount++;
         if (op.newIndex < insertMin) insertMin = op.newIndex;
@@ -199,6 +217,10 @@ function buildHunks(ops) {
     if (insertCount === 0) {
       // Pure deletion: no new-text line was produced for this hunk.
       removedAt.push(beforeCount);
+      removed.push({
+        afterLine: beforeCount,
+        lines: deletedIndices.map((idx) => oldLines[idx]),
+      });
     } else if (deleteCount === 0) {
       added.push([insertMin + 1, insertMax + 1]);
     } else {
@@ -206,14 +228,14 @@ function buildHunks(ops) {
     }
   }
 
-  return { added, changed, removedAt };
+  return { added, changed, removedAt, removed };
 }
 
 /**
  * Compute a line-level diff between two full-text versions of a file.
  * @param {string} oldText
  * @param {string} newText
- * @returns {{ added: number[][], changed: number[][], removedAt: number[] } | { available: false }}
+ * @returns {{ added: number[][], changed: number[][], removedAt: number[], removed: {afterLine: number, lines: string[]}[] } | { available: false }}
  */
 export function diffLines(oldText, newText) {
   const oldLines = splitLines(typeof oldText === 'string' ? oldText : '');
@@ -229,7 +251,7 @@ export function diffLines(oldText, newText) {
     return { available: false };
   }
   const ops = backtrack(traceResult);
-  return buildHunks(ops);
+  return buildHunks(ops, oldLines);
 }
 
 export default diffLines;

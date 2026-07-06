@@ -21,7 +21,14 @@ export const STORAGE_KEYS = {
     // 0.6.5's unread/checked-off tree state builds on (see
     // docs/plan-review-surface-0.6.x.md §③): diffReview.js's exported
     // getLastSeen()/markSeen() are the one place that reads/writes it.
-    LAST_SEEN: 'mdv-last-seen'
+    LAST_SEEN: 'mdv-last-seen',
+    // Diff review markup toggle (modules/diffReview.js, 0.6.10). A single
+    // GLOBAL boolean ('true'/'false' string) — the toolbar's 「変更 N」
+    // button's on/off state, Word's 変更履歴の表示 toggle. Applies to every
+    // file (not namespaced per-path or per-served-root, unlike LAST_SEEN
+    // above) and survives reload. Owner: 「デフォルトはオフでok」 — absent/
+    // unparsable reads as OFF.
+    REVIEW_MARKUP: 'mdv-review-markup'
 };
 
 export const NOTES_AUTOSAVE_DEBOUNCE_MS = 800;

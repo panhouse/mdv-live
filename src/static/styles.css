@@ -1081,43 +1081,58 @@ body {
    0.6.8: the standalone #diffReviewBar band is REMOVED — the toolbar's
    #diffToggleBtn/#diffConfirmBtn reuse the existing .toolbar-btn/.hidden/
    .toolbar-btn.active rules (see styles.css's Toolbar section), so there
-   is no dedicated CSS for them here.)
+   is no dedicated CSS for them here.
+   0.6.10 (owner: 「追加も変更も黄色で良い気がする」「削除行がwordみたいに
+   横棒線がでるといいよね」): .diff-added and .diff-changed now share ONE
+   yellow tint (the green .diff-added tint is gone) — see
+   modules/diffReview.js's docstring's "0.6.10" section. The removedAt tick
+   (.diff-removed-after) is replaced by an injected .diff-removed-inline
+   block showing the actual deleted text, struck through.)
    ============================================================ */
 
 /* Block-level change highlights, applied to the SAME [data-source-line]
    elements search-jump uses. `:not(tr)` keeps table rows (the only
    data-source-line'd element that can't take a left border/padding
    without breaking table layout — see markdown.js's
-   SOURCE_LINE_EXCLUDED_TYPES) to a plain background tint. */
-[data-source-line].diff-added {
-    background: color-mix(in srgb, var(--success) 16%, transparent);
-}
-[data-source-line].diff-added:not(tr) {
-    border-left: 3px solid var(--success);
-    padding-left: 9px;
-}
-
+   SOURCE_LINE_EXCLUDED_TYPES) to a plain background tint. Added and
+   changed are visually identical on purpose (0.6.10) — kept as two
+   classes for structure (tests, the ⌥↑↓ jump query), not for color. */
+[data-source-line].diff-added,
 [data-source-line].diff-changed {
     background: color-mix(in srgb, var(--warning) 18%, transparent);
 }
+[data-source-line].diff-added:not(tr),
 [data-source-line].diff-changed:not(tr) {
     border-left: 3px solid var(--warning);
     padding-left: 9px;
 }
 
-/* removedAt: a small tick (not a full-width border) on the block right
-   after/at which a deletion happened — there is no "old" content to show
-   here, just a marker that something was removed at this position. */
-[data-source-line].diff-removed-after { position: relative; }
-[data-source-line].diff-removed-after::before {
-    content: "";
-    position: absolute;
-    top: -1px;
-    left: 0;
-    width: 28px;
-    height: 3px;
-    border-radius: 2px;
-    background: var(--danger);
+/* Deleted lines (0.6.10, Word-style): a presentational block injected
+   right after the same nearest-block anchor the old removedAt tick used
+   (see diffReview.js's _injectRemovedInline()), showing the deleted text
+   itself — struck through, red-tinted and muted, with a thin red left
+   border echoing the added/changed border-left above. `aria-hidden` on
+   the element (set by diffReview.js) keeps assistive tech from reading
+   throwaway deleted text as if it were live document content. */
+li.diff-removed-inline { list-style: none; }
+
+.diff-removed-inline {
+    display: block;
+    margin: 2px 0 8px 3px;
+    padding-left: 9px;
+    border-left: 3px solid var(--danger);
+    color: var(--danger);
+    opacity: 0.75;
+    text-decoration: line-through;
+    font-size: 0.94em;
+    line-height: 1.5;
+}
+/* The "…（あと N 行削除）" truncation note (>8 deleted lines, see
+   DIFF_REMOVED_INLINE_MAX_LINES) is metadata, not deleted text — no
+   strikethrough on it even though it inherits the parent's muted color. */
+.diff-removed-inline .diff-removed-inline-more {
+    display: block;
+    text-decoration: none;
 }
 
 /* Temporary (~1.2s, see DIFF_JUMP_FLASH_MS) outline flash applied to the
@@ -1190,8 +1205,8 @@ body {
     }
 
     /* Review highlights are screen chrome, not document content — a
-       printed/PDF'd page must not carry the green/yellow diff tints. */
-    .diff-added, .diff-changed, .diff-removed-after {
+       printed/PDF'd page must not carry the yellow diff tints. */
+    .diff-added, .diff-changed {
         background: transparent !important;
         border-left: none !important;
         border-top: none !important;
@@ -1199,7 +1214,12 @@ body {
         padding-left: 0 !important;
         margin-left: 0 !important;
     }
-    .diff-removed-after::before { display: none !important; content: none !important; }
+    /* 0.6.10: the injected .diff-removed-inline block (deleted-text
+       strikethrough display) is equally screen chrome — a printed page
+       must show the CURRENT document, not a record of what was deleted
+       from it — so hide the whole node rather than just stripping its
+       styling. */
+    .diff-removed-inline { display: none !important; }
 
     body {
         height: auto !important;

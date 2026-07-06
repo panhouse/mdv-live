@@ -63,6 +63,10 @@ export default [
         window: 'readonly',
         document: 'readonly',
         localStorage: 'readonly',
+        // 0.6.10 (18-diff-highlight.spec.js): reads computed styles from
+        // inside a page.evaluate() callback to assert added/changed share
+        // one color.
+        getComputedStyle: 'readonly',
       },
     },
   },

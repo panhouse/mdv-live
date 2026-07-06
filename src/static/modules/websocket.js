@@ -146,7 +146,12 @@ export const WebSocketManager = {
             return;
         }
 
-        if (!data.content) return;
+        // Missing content = malformed/non-text message — but an EMPTY
+        // STRING is a legitimate render of a file that was just emptied.
+        // The old truthy check froze the pane on the previous content
+        // whenever a watched file was cleared (found via codex 0.6.10
+        // round-2's whole-document-deletion case).
+        if (typeof data.content !== 'string') return;
 
         // applyRenderedFile() covers content/raw/isMarp here AND the
         // marp-only fields (css/notes/notesMultiplicity/etag/lineEnding/

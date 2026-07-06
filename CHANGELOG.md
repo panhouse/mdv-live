@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.10] - 2026-07-06
+
+### Added — Word風マークアップモード完成（オーナー指示）
+
+- **削除された行が、元あった場所に赤の取り消し線付きで表示される**
+  （Wordの変更履歴と同じ見え方。ファイルには書き込まない・印刷に出ない・
+  8行超は折りたたみ）
+- 「変更 N」トグルは**全ファイル共通・ブラウザに記憶・既定OFF**。
+  OFFでも件数ボタンは灯るので変更があったことはわかる
+- ハイライト色は**黄一色**に統一（追加=緑を廃止）
+
+### Fixed
+
+- 空になったファイルが画面上で古い内容のまま表示され続ける問題
+  （全文削除ケースの検証で発見）
+
 ## [0.6.9] - 2026-07-06
 
 ### Documentation

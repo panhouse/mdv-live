@@ -16,9 +16,14 @@
  *
  * Response shapes (all 200 OK — "no diff available" is data, not an error):
  *   - `from` matches the current content's hash:
- *       { available: true, identical: true, currentHash, added: [], changed: [], removedAt: [] }
+ *       { available: true, identical: true, currentHash, added: [], changed: [], removedAt: [], removed: [] }
  *   - `from` matches an EARLIER hash the journal still has content for:
- *       { available: true, identical: false, currentHash, added, changed, removedAt }
+ *       { available: true, identical: false, currentHash, added, changed, removedAt, removed }
+ *       (`removed`, 0.6.10: [{ afterLine, lines }, ...] — the deleted OLD-text
+ *       lines for each pure-deletion hunk, same positions as `removedAt`,
+ *       straight from src/utils/lineDiff.js's `diffLines()` — see that
+ *       module's docstring. Backs the frontend's Word-style strikethrough
+ *       inline display, modules/diffReview.js.)
  *   - `from` missing, unknown, or its content was evicted/oversized:
  *       { available: false, reason: 'unknown-baseline', currentHash }
  *   - current file content exceeds JOURNAL_MAX_FILE_BYTES (never read/hashed):
@@ -91,6 +96,7 @@ export function setupDiffRoutes(app) {
           added: [],
           changed: [],
           removedAt: [],
+          removed: [],
         });
       }
       if (baseline === null) {

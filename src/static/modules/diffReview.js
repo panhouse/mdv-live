@@ -21,16 +21,12 @@
  * like every other toolbar button) and are shown/hidden per active-tab
  * state by `_syncToolbar()`:
  *   - `#diffToggleBtn` ("変更 N", N = `_current.count`) — Word's 変更内容
- *     の表示 toggle. `aria-pressed` mirrors `_highlightsOn` (default ON
- *     whenever a diff appears); toggling only adds/removes the SAME
- *     .diff-added/.diff-changed/.diff-removed-after marks as before
- *     (_applyHighlightClasses()) — the ⌥↑↓ jump (_handleJumpKey()) is
- *     untouched and keeps working whenever those marks are visible. The
- *     ON/OFF choice is remembered PER PATH (`_highlightsOnByPath`) while
- *     that path's diff stays open, so switching tabs away and back does
- *     not silently flip it back to ON — see markSeen()'s cleanup call for
- *     when that memory is dropped (the diff is resolved, so there is
- *     nothing left to remember).
+ *     の表示 toggle. `aria-pressed` mirrors `_highlightsOn`; toggling only
+ *     adds/removes the SAME .diff-added/.diff-changed marks (plus the
+ *     0.6.10 removed-inline blocks below) as before (_applyHighlightClasses())
+ *     — the ⌥↑↓ jump (_handleJumpKey()) is untouched and keeps working
+ *     whenever those marks are visible. (0.6.8 remembered this choice PER
+ *     PATH; 0.6.10 replaced that — see the "0.6.10" section below.)
  *   - `#diffConfirmBtn` ("✓ 確認") — identical action to the old
  *     0.6.4-0.6.7 「最新を確認済みにする」: adopts `currentHash` as the new
  *     baseline via markSeen(), which clears both buttons AND (via the
@@ -41,6 +37,48 @@
  * Both buttons carry the `.hidden` class (no diff / non-diffable tab /
  * welcome / edit mode) — the toolbar shows NOTHING extra in the normal
  * case; that subtraction is the entire point of this revision.
+ *
+ * ---------------------------------------------------------------------
+ * 0.6.10: global markup toggle (default OFF), inline deletions, one color
+ * ---------------------------------------------------------------------
+ * Three owner requests, all verbatim: 「トグルとかで変更履歴がでるかでない
+ * かを選べるようにしてほしい」「削除行がwordみたいに横棒線がでるといいよ
+ * ね」「デフォルトはオフでok この変更履歴のモードは」「追加も変更も黄色で
+ * 良い気がする」.
+ *
+ * 1. GLOBAL persisted toggle, default OFF. 0.6.8's `_highlightsOnByPath`
+ *    (a Map, reset per-path by markSeen()) is GONE. `_highlightsOn` is now
+ *    backed by ONE localStorage boolean, STORAGE_KEYS.REVIEW_MARKUP
+ *    ('mdv-review-markup', see constants.js) — `readMarkupPref()`/
+ *    `writeMarkupPref()` below are the only functions that touch it. It
+ *    applies to every file (Word's 変更履歴の表示 on/off is a single
+ *    document-wide-feeling setting, not remembered per-document) and
+ *    survives reload. Default OFF means a brand-new diff still shows the
+ *    「変更 N」 count + 「✓ 確認」 (there IS a change to look at — that's
+ *    still worth surfacing) but starts with NO highlights/inline deletions
+ *    painted, until the user clicks 「変更 N」 to turn markup on.
+ * 2. Deleted lines render inline, Word-style. `.diff-removed-after` (a
+ *    small tick on the block after which a deletion happened, with no way
+ *    to see what was actually deleted) is GONE — REPLACED by
+ *    `.diff-removed-inline`, a presentational `<div aria-hidden="true">`
+ *    injected right after the same nearest-block anchor the old tick used,
+ *    showing the deleted OLD-text lines themselves (escaped, line-through,
+ *    red-tinted) — see `_injectRemovedInline()`. Capped at 8 lines +
+ *    「…（あと N 行削除）」. These are throwaway DOM nodes with no
+ *    src-of-truth role: `_clearHighlightClasses()` removes every one of
+ *    them on every re-paint (toggle OFF, ✓ 確認, tab switch/re-render,
+ *    entering edit mode) — never leave a stale one behind. They never
+ *    render in edit mode (refresh() hides everything there) or for Marp
+ *    (canHighlight — and therefore kind:'full' — is never true for Marp,
+ *    so `_injectRemovedInline()` is never called for a Marp tab; see
+ *    styles.css's @media print / body.marp-fullscreen rules for the
+ *    belt-and-suspenders CSS-level exclusion of the classes themselves).
+ * 3. One highlight color. `.diff-added` and `.diff-changed` are still two
+ *    separate CSS classes (kept for structure/tests/the ⌥↑↓ jump query)
+ *    but styles.css now points both at the same yellow (`--warning`) tint
+ *    — the green (`--success`) tint `.diff-added` used is gone. Deletions
+ *    stay red-struck (item 2 above) — that is still a meaningfully
+ *    different kind of change (nothing to show inline for pure adds).
  *
  * ---------------------------------------------------------------------
  * Baseline model (localStorage) — THE SHARED FOUNDATION 0.6.5 builds on
@@ -126,8 +164,12 @@
  *      `<li>`/row contents, which have carried their own data-source-line
  *      since 0.6.6) — fall back to the nearest PRECEDING tagged block, or
  *      the first block if the range is before all of them. Same fallback
- *      convention removedAt markers use below, and the one
- *      searchPalette.js's _scrollToSourceLine() uses for search-jump.
+ *      convention `removed[].afterLine` uses below (0.6.10 — it replaced
+ *      removedAt as the anchor for what's now an injected inline block
+ *      instead of a bare tick, see this docstring's "0.6.10" section; the
+ *      resolved anchor is identical, only what gets attached to it
+ *      changed), and the one searchPalette.js's _scrollToSourceLine() uses
+ *      for search-jump.
  *      (Before 0.6.6, list items fell into this fallback constantly — a
  *      tight list's own `<li>` had no data-source-line anywhere inside it,
  *      so a changed 議事録 decision bullet always highlighted whatever
@@ -145,6 +187,11 @@ import { state } from './state.js';
 import { elements } from './dom.js';
 import { STORAGE_KEYS, DIFF_JUMP_FLASH_MS } from './constants.js';
 import { MDVApi } from '../lib/apiClient.js';
+import { escapeHtml } from './utils.js';
+
+// Deleted-line inline display (0.6.10, Word-style strikethrough) — cap so a
+// huge deleted block doesn't flood the pane; see _injectRemovedInline().
+const DIFF_REMOVED_INLINE_MAX_LINES = 8;
 
 // Tabs the change-tracking toolbar controls apply to at all (matches the
 // plan doc's "共通基盤" scope: non-Marp markdown gets full highlighting;
@@ -189,6 +236,37 @@ function writeStore(store) {
     } catch {
         // Storage full/unavailable (private-browsing quota, etc.) — the
         // toolbar controls just won't persist across reloads; not fatal.
+    }
+}
+
+// ---------------------------------------------------------------------
+// localStorage markup-toggle store (0.6.10) — ONE global boolean, unlike
+// the per-path LAST_SEEN store above. See this module's docstring's
+// "0.6.10" section for why (Word's 変更履歴の表示 is a single on/off, not
+// remembered per-document).
+// ---------------------------------------------------------------------
+
+/**
+ * @returns {boolean} the persisted markup-toggle preference; defaults to
+ *   `false` (owner: 「デフォルトはオフでok」) when unset or unreadable.
+ */
+function readMarkupPref() {
+    try {
+        return localStorage.getItem(STORAGE_KEYS.REVIEW_MARKUP) === 'true';
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * @param {boolean} value
+ */
+function writeMarkupPref(value) {
+    try {
+        localStorage.setItem(STORAGE_KEYS.REVIEW_MARKUP, value ? 'true' : 'false');
+    } catch {
+        // Storage full/unavailable (private-browsing quota, etc.) — the
+        // toggle just won't persist across reloads; not fatal.
     }
 }
 
@@ -240,15 +318,10 @@ export function markSeen(path, hash) {
         store[key] = { hash, ts: Date.now() };
     }
     writeStore(store);
-    // 0.6.8: a resolved baseline means any pending diff for this path is
-    // gone — drop the remembered per-path highlight-toggle preference
-    // (DiffReviewManager._highlightsOnByPath, see this module's docstring)
-    // so a FUTURE diff starts back at the Word-like default (ON) instead of
-    // inheriting a stale OFF from a diff that no longer exists. Safe to
-    // reference DiffReviewManager here even though it's declared further
-    // down this file — by the time anything actually CALLS markSeen() at
-    // runtime, module evaluation has long finished (no TDZ hit).
-    DiffReviewManager._highlightsOnByPath.delete(path);
+    // (0.6.8 used to drop a remembered PER-PATH highlight-toggle preference
+    // here — 0.6.10 replaced that with ONE global preference, see this
+    // module's docstring's "0.6.10" section, so there is nothing per-path
+    // left to clean up on resolution.)
     for (const fn of seenListeners) {
         try {
             fn(path, hash || null);
@@ -260,11 +333,11 @@ export function markSeen(path, hash) {
 
 export const DiffReviewManager = {
     _current: null, // see _applyResponse() for shape
-    _highlightsOn: true,
-    // Per-path remembered ON/OFF for the toolbar's 「変更 N」 toggle (0.6.8)
-    // — see this module's docstring's "0.6.8" section. Entries are dropped
-    // by markSeen() the moment that path's diff is resolved.
-    _highlightsOnByPath: new Map(),
+    // GLOBAL markup-toggle preference (0.6.10), backed by
+    // STORAGE_KEYS.REVIEW_MARKUP — see this module's docstring's "0.6.10"
+    // section. Loaded from localStorage in init(); this field-literal
+    // default (false) only matters for the brief window before init() runs.
+    _highlightsOn: false,
     _jumpIndex: -1,
     _reviewSeq: 0,
     _seededPaths: new Set(),
@@ -286,6 +359,9 @@ export const DiffReviewManager = {
     },
 
     init() {
+        // 0.6.10: load the persisted GLOBAL markup preference (default OFF)
+        // before anything can call refresh()/_syncToolbar().
+        this._highlightsOn = readMarkupPref();
         this._bindToolbarControls();
     },
 
@@ -480,6 +556,7 @@ export const DiffReviewManager = {
         const added = data.added || [];
         const changed = data.changed || [];
         const removedAt = data.removedAt || [];
+        const removed = data.removed || [];
         const canHighlight = tab.fileType === 'markdown' && !tab.isMarp;
 
         const count = added.length + changed.length + removedAt.length;
@@ -499,17 +576,13 @@ export const DiffReviewManager = {
             added,
             changed,
             removedAt,
+            removed,
             count
         };
-        // 0.6.8: remember the toggle's ON/OFF PER PATH while this diff
-        // stays open (this module's docstring's "0.6.8" section) — only
-        // default to ON the first time this path shows a pending diff.
-        if (this._highlightsOnByPath.has(tab.path)) {
-            this._highlightsOn = this._highlightsOnByPath.get(tab.path);
-        } else {
-            this._highlightsOn = true;
-            this._highlightsOnByPath.set(tab.path, true);
-        }
+        // 0.6.10: `_highlightsOn` is the GLOBAL preference (loaded once in
+        // init(), updated by _toggleHighlights()) — a newly-arrived diff
+        // does NOT touch it either way, unlike 0.6.8's per-path default-ON
+        // memory (see this module's docstring's "0.6.10" section).
         this._jumpIndex = -1;
         this._syncToolbar();
         this._applyHighlightClasses();
@@ -560,7 +633,9 @@ export const DiffReviewManager = {
     _toggleHighlights() {
         if (!this._current || this._current.kind !== 'full') return;
         this._highlightsOn = !this._highlightsOn;
-        this._highlightsOnByPath.set(this._current.path, this._highlightsOn);
+        // 0.6.10: persist as the GLOBAL preference — every other diffable
+        // tab/file picks this up the next time refresh() paints it.
+        writeMarkupPref(this._highlightsOn);
         this._applyHighlightClasses();
         this._syncToolbar();
     },
@@ -598,8 +673,11 @@ export const DiffReviewManager = {
         );
         if (isTextInput) return;
 
+        // 0.6.10: .diff-removed-after (a bare tick) is gone — the injected
+        // .diff-removed-inline block is its replacement jump target, so
+        // ⌥↑↓ still cycles through deletions, not just adds/changes.
         const targets = Array.from(
-            elements.content.querySelectorAll('.diff-added, .diff-changed, .diff-removed-after')
+            elements.content.querySelectorAll('.diff-added, .diff-changed, .diff-removed-inline')
         );
         if (!targets.length) return;
 
@@ -625,9 +703,38 @@ export const DiffReviewManager = {
             .sort((a, b) => a.line - b.line);
     },
 
+    /**
+     * Largest data-source-line <= pos, else the first block (covers
+     * pos === 0 "deleted/changed before line 1", and any position that
+     * falls before every tagged block) — same fallback convention as
+     * searchPalette.js's _scrollToSourceLine(). Shared by markRange()'s
+     * pass 2 and _injectRemovedInline()'s anchor lookup below.
+     * @param {{el: Element, line: number}[]} blocks - ascending, from _collectBlocks()
+     * @param {number} pos
+     * @returns {{el: Element, line: number}|null}
+     */
+    _nearestBlock(blocks, pos) {
+        let best = null;
+        for (const b of blocks) {
+            if (b.line <= pos) best = b;
+            else break;
+        }
+        return best || blocks[0] || null;
+    },
+
+    /**
+     * Remove BOTH kinds of diff markup this module ever paints: the
+     * persistent .diff-added/.diff-changed classes, and the injected
+     * .diff-removed-inline elements (0.6.10 — these are throwaway DOM
+     * nodes, not classes on existing blocks, so clearing them means
+     * removing them outright; see this module's docstring's "0.6.10"
+     * section for every path that must call this).
+     */
     _clearHighlightClasses() {
-        elements.content.querySelectorAll('.diff-added, .diff-changed, .diff-removed-after')
-            .forEach((el) => el.classList.remove('diff-added', 'diff-changed', 'diff-removed-after'));
+        elements.content.querySelectorAll('.diff-added, .diff-changed')
+            .forEach((el) => el.classList.remove('diff-added', 'diff-changed'));
+        elements.content.querySelectorAll('.diff-removed-inline[data-mdv-injected]')
+            .forEach((el) => el.remove());
     },
 
     _applyHighlightClasses() {
@@ -635,7 +742,19 @@ export const DiffReviewManager = {
         if (!this._highlightsOn || !this._current || this._current.kind !== 'full') return;
 
         const blocks = this._collectBlocks();
-        if (!blocks.length) return; // tight-list-only / no-mapping doc — never crash, just skip
+        if (!blocks.length) {
+            // No anchors left (e.g. the whole document was deleted, or a
+            // tight-list-only doc). Range highlights have nothing to paint,
+            // but DELETIONS must still show — inject them straight into
+            // the content container (codex 0.6.10 round-2).
+            if (this._current.removed && this._current.removed.length) {
+                const container = elements.content.querySelector('.markdown-body') || elements.content;
+                const insertAfter = new Map();
+                this._current.removed.forEach((hunk) =>
+                    this._injectRemovedInline([], hunk, insertAfter, container));
+            }
+            return;
+        }
 
         const markRange = ([start, end], cls) => {
             // Pass 1: any block whose own line falls inside the range.
@@ -648,30 +767,112 @@ export const DiffReviewManager = {
             // first block if the range is before all of them — see this
             // module's docstring for why a coverage-span match would
             // misattribute blank separator lines to the wrong block.
-            let best = null;
-            for (const b of blocks) {
-                if (b.line <= start) best = b;
-                else break;
-            }
-            if (!best) best = blocks[0];
-            best.el.classList.add(cls);
+            const best = this._nearestBlock(blocks, start);
+            if (best) best.el.classList.add(cls);
         };
 
+        // 0.6.10: added and changed share one (yellow) visual treatment —
+        // see styles.css — but stay two classes for structure/tests/jump.
         this._current.added.forEach((r) => markRange(r, 'diff-added'));
         this._current.changed.forEach((r) => markRange(r, 'diff-changed'));
 
-        this._current.removedAt.forEach((pos) => {
-            // Largest data-source-line <= pos, else the first block
-            // (covers pos === 0 "deleted before line 1", and any position
-            // that falls before every tagged block) — same fallback
-            // convention as searchPalette.js's _scrollToSourceLine().
-            let best = null;
-            for (const b of blocks) {
-                if (b.line <= pos) best = b;
-                else break;
-            }
-            if (!best) best = blocks[0];
-            best.el.classList.add('diff-removed-after');
-        });
+        // insertAfter threads multiple deletions that resolve to the SAME
+        // anchor block into stable top-to-bottom order: insertAdjacentElement
+        // always inserts immediately after its reference node, so without
+        // this a second hunk anchored at the same block would land BETWEEN
+        // the block and the first hunk's already-inserted div instead of
+        // after it.
+        const insertAfter = new Map();
+        this._current.removed.forEach((hunk) => this._injectRemovedInline(blocks, hunk, insertAfter));
+    },
+
+    /**
+     * Inject one presentational, Word-style strikethrough block for a
+     * pure-deletion hunk (0.6.10) — replaces the old .diff-removed-after
+     * tick. Never called for kind !== 'full' (Marp/code/text tabs), edit
+     * mode (refresh() hides everything there before this can run), or when
+     * markup is toggled off (guarded by the caller).
+     * @param {{el: Element, line: number}[]} blocks
+     * @param {{afterLine: number, lines: string[]}} hunk
+     * @param {Map<Element, Element>} insertAfter - anchor el -> last node inserted after it
+     */
+    _injectRemovedInline(blocks, hunk, insertAfter, fallbackContainer = null) {
+        const anchorBlock = this._nearestBlock(blocks, hunk.afterLine);
+        if (!anchorBlock && !fallbackContainer) return;
+
+        const shown = hunk.lines.slice(0, DIFF_REMOVED_INLINE_MAX_LINES);
+        let html = shown.map((line) => escapeHtml(line)).join('<br>');
+        if (hunk.lines.length > DIFF_REMOVED_INLINE_MAX_LINES) {
+            const remaining = hunk.lines.length - DIFF_REMOVED_INLINE_MAX_LINES;
+            html += `<br><span class="diff-removed-inline-more">…（あと ${remaining} 行削除）</span>`;
+        }
+
+        // Placement decision (codex 0.6.10 rounds 4-5, opposing pulls):
+        // a raw <div> inside <ul>/<pre> is invalid — but hoisting a
+        // MID-LIST deletion to after the whole list breaks Word-style
+        // positioning. Resolution: if the deletion sits BETWEEN items of
+        // the same list (anchor li and the next mapped block's li share a
+        // list container), render it as an <li> inside that list;
+        // otherwise hoist to the top-level block.
+        // Never the list-item path for a deletion that belongs ABOVE the
+        // anchor (afterLine < anchor's own line): a heading deleted above
+        // a list must not become a bullet of that list (codex round-6).
+        const beforeAnchor = anchorBlock && hunk.afterLine < anchorBlock.line;
+        const anchorLi = anchorBlock && !beforeAnchor && anchorBlock.el.closest('li');
+        let asListItem = false;
+        if (anchorLi) {
+            const next = blocks.find((b) => b.line > hunk.afterLine);
+            const nextLi = next && next.el.closest('li');
+            asListItem = !!(nextLi && anchorLi.parentElement === nextLi.parentElement);
+        }
+
+        const div = document.createElement(asListItem ? 'li' : 'div');
+        div.className = 'diff-removed-inline';
+        // Marker so cleanup removes ONLY nodes WE injected — markdown can
+        // contain user-authored raw HTML with the same class, which must
+        // survive markup-off (codex round-6).
+        div.setAttribute('data-mdv-injected', '1');
+        div.setAttribute('aria-hidden', 'true');
+        div.innerHTML = html; // safe: every line went through escapeHtml() above; <br>/the
+        // .diff-removed-inline-more span are the only raw markup, both ours.
+
+        if (!anchorBlock) {
+            // Whole-document deletion: no anchor exists — append into the
+            // content container in hunk order (codex 0.6.10 round-2).
+            fallbackContainer.appendChild(div);
+            return;
+        }
+        // Hoist the insertion point to the top-level document block: the
+        // nearest source-line node can be NESTED (a <li> inside <ul>, a
+        // <code data-source-line> inside <pre>) and inserting a <div>
+        // adjacent to it would land inside that structure — invalid HTML
+        // in lists/tables, garbled rendering in code blocks
+        // (codex 0.6.10 round-4).
+        const host = asListItem ? anchorLi : this._topLevelBlock(anchorBlock.el);
+        // A deletion anchored BEFORE the first visible block's own line
+        // (afterLine 0, or any position among leading unmapped lines) must
+        // appear ABOVE that block, not below it (codex 0.6.10 rounds 1+3).
+        if (hunk.afterLine < anchorBlock.line && !insertAfter.has(host)) {
+            host.insertAdjacentElement('beforebegin', div);
+            return;
+        }
+        const anchor = insertAfter.get(host) || host;
+        anchor.insertAdjacentElement('afterend', div);
+        insertAfter.set(host, div);
+    },
+
+    /**
+     * Walk up from a (possibly nested) source-line node to its top-level
+     * block — the direct child of the rendered-content container — so
+     * injected review elements always sit BETWEEN document blocks.
+     */
+    _topLevelBlock(el) {
+        const container = elements.content.querySelector('.markdown-body') || elements.content;
+        let node = el;
+        while (node.parentElement && node.parentElement !== container
+            && node.parentElement !== elements.content) {
+            node = node.parentElement;
+        }
+        return node;
     }
 };
