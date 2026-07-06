@@ -38,6 +38,12 @@ export const SidebarManager = {
 export const ResizeHandler = {
     _rafId: null,
     _pendingX: null,
+    // Tracked SYNCHRONOUSLY on every mousemove (a number assignment is
+    // free): a fast drag can coalesce straight past every expanded
+    // position before one animation frame fires, and the persistence on
+    // mouseup must still know the last expanded width this drag passed
+    // through (codex 0.6.11 round-2).
+    _lastExpandedX: null,
 
     start() {
         state.isResizing = true;
@@ -57,6 +63,7 @@ export const ResizeHandler = {
         // One width write per FRAME, not per mousemove event (which can
         // fire far more often than the display refreshes).
         this._pendingX = clientX;
+        if (clientX >= 50) this._lastExpandedX = clientX;
         if (this._rafId !== null) return;
         this._rafId = requestAnimationFrame(() => {
             this._rafId = null;
@@ -75,11 +82,15 @@ export const ResizeHandler = {
                 SidebarManager.setWidth(this._pendingX, { persist: false });
                 this._pendingX = null;
             }
-            // Persist ONCE per drag, unconditionally: state.sidebarWidth
-            // always holds the last EXPANDED width (the collapsed branch
-            // never overwrites it), so a drag released below the collapse
-            // threshold still saves the width the user dragged through
-            // (codex 0.6.11 round-1).
+            // Persist ONCE per drag, unconditionally. _lastExpandedX (not
+            // state.sidebarWidth) is the source of truth for "the last
+            // expanded width this drag passed through": rAF coalescing can
+            // skip the state update entirely on a fast collapse-release
+            // (codex 0.6.11 rounds 1-2).
+            if (this._lastExpandedX !== null) {
+                state.sidebarWidth = this._lastExpandedX;
+                this._lastExpandedX = null;
+            }
             localStorage.setItem(STORAGE_KEYS.SIDEBAR_WIDTH, state.sidebarWidth);
             elements.resizeHandle.classList.remove('active');
             elements.sidebar.classList.remove('resizing');
