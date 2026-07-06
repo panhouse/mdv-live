@@ -123,8 +123,16 @@
                      「✓ 確認」, highlights, strikethrough deletions). Label is the
                      English word "Review" (owner: it sits beside Edit/PDF/Style,
                      which are all English) — the tooltip stays Japanese like every
-                     other toolbar button. DEFAULT OFF; never carries `.hidden`. -->
-                <button class="toolbar-btn" id="reviewModeToggle" type="button" title="校閲モード: 未読・変更履歴・削除を表示" aria-label="Review mode" aria-pressed="false">Review</button>
+                     other toolbar button. DEFAULT OFF; never carries `.hidden`.
+                     0.6.13: eye icon (Heroicons outline, like its neighbors) —
+                     it was the only toolbar button without one. -->
+                <button class="toolbar-btn" id="reviewModeToggle" type="button" title="校閲モード: 未読・変更履歴・削除を表示" aria-label="Review mode" aria-pressed="false">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 4.5 12 4.5c4.478 0 8.268 3.443 9.542 7.5-1.274 4.057-5.064 7.5-9.542 7.5-4.477 0-8.268-3.443-9.542-7.5z" />
+                    </svg>
+                    Review
+                </button>
 
                 <button class="search-trigger" id="searchBoxToggle" title="ファイルを横断して検索 (Cmd/Ctrl+K)" aria-label="Search all files">
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
