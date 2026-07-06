@@ -269,7 +269,7 @@ const DIFF_REMOVED_INLINE_MAX_LINES = 8;
 
 // Tabs the change-tracking toolbar controls apply to at all (matches the
 // plan doc's "共通基盤" scope: non-Marp markdown gets full highlighting;
-// Marp/code/text get the count-only 「変更 N」 button — no per-line
+// Marp/code/text get the count-only 「次の変更 N」 button — no per-line
 // mapping). Binary/image/pdf/video/audio/office/html tabs never show it.
 const DIFFABLE_FILE_TYPES = new Set(['markdown', 'code', 'text']);
 
@@ -730,7 +730,7 @@ export const DiffReviewManager = {
         // 0.6.12: inert while Review mode is OFF — there is nothing
         // visible on screen for this shortcut to act on (see
         // modules/reviewMode.js's docstring). _jumpChange() re-checks the
-        // same condition (shared with the 「変更 N」 click handler), but
+        // same condition (shared with the 「次の変更 N」 click handler), but
         // checking here too lets us skip preventDefault() when the
         // shortcut has nothing to do.
         if (!isReviewMode() || !this._current || this._current.kind !== 'full') return;
