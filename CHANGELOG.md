@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.11] - 2026-07-06
+
+### Fixed
+
+- サイドバーの幅ドラッグが重く感じる問題（オーナー報告）を修正。
+  原因は3つ: 幅に畳み用の0.2秒アニメーションが掛かったままカーソルを
+  追いかけていた／マウス移動のたびに設定を同期保存していた／描画間隔を
+  超える頻度で幅を書き換えていた。ドラッグ中はアニメーション停止・
+  保存は離した時に1回・幅更新は毎フレーム1回に
+
 ## [0.6.10] - 2026-07-06
 
 ### Added — Word風マークアップモード完成（オーナー指示）
