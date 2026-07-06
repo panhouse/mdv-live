@@ -63,7 +63,7 @@ For refactor history/rationale (why things are split the way they are), see
 |---|---|
 | `src/services/pdf.js` | Actual PDF generation (spawns `marp-cli` / `md-to-pdf`). Shared by `src/api/pdf.js` (HTTP) and `src/cli/convert.js` (CLI) so both paths get the same bug fixes/security checks. Throws `PDF_TOOL_UNAVAILABLE` when an optional dependency is missing. |
 | `src/services/changeJournal.js` | `createChangeJournal()`: pure in-memory store of recent raw-content snapshots per path, keyed by content hash (reuses `makeEtag`). One instance lives at `app.locals.changeJournal` (`src/server.js`); `src/watcher.js` records into it on every filesystem change, `src/api/diff.js` records into it (lazily) and reads from it on every request. Global byte-budget LRU eviction (`JOURNAL_MAX_BYTES`) + a per-file version cap (`JOURNAL_MAX_VERSIONS_PER_FILE`), both from `src/config/constants.js`. |
-| `src/utils/lineDiff.js` | `diffLines(oldText, newText)`: dependency-free line-level diff (Myers O(ND)), pure function. Returns `{ added, changed, removedAt }` (1-based NEW-text line numbers) or `{ available: false }` above `DIFF_MAX_LINES`. Backs `src/api/diff.js`. |
+| `src/utils/lineDiff.js` | `diffLines(oldText, newText)`: dependency-free line-level diff (Myers O(ND)), pure function. Returns `{ added, changed, removedAt, removed }` (1-based NEW-text line numbers; `removed` is `{ afterLine, lines }[]`, the deleted OLD-text lines per pure-deletion hunk, added 0.6.10 for Word-style strikethrough display) or `{ available: false }` above `DIFF_MAX_LINES`. Backs `src/api/diff.js`. |
 | `src/styles/index.js` | PDF style presets (`PRESETS`) + `resolveStyle()`/`resolvePdfOptions()` for the `-s`/`--pdf-options` CLI flags and the Web UI Style panel. |
 | `src/concurrency/pathLock.js` | `withLock(key, fn)` — promise-chain mutex. FIFO per key; replaces a naive Map-based lock that had a thundering-herd race. |
 | `src/utils/errors.js` | `ERROR_STATUS` map, `mkError()`, `sendError()`. The **only** way a route should produce an error response. |
@@ -188,10 +188,9 @@ Produced by the server (`src/websocket.js`, `src/watcher.js`), consumed by
   for every text-renderable file, not just Marp decks — `src/watcher.js` also
   records this raw content into `app.locals.changeJournal` (see §1 Services)
   BEFORE broadcasting, so a hash a client observed here is usable as the
-  `from` param of a later `GET /api/diff` call. `src/static/modules/
-  renderedFile.js`'s field-presence doc comment predates this and still
-  describes `etag` as Marp-only — out of date as of 0.6.3, pending a 0.6.4
-  frontend update.
+  `from` param of a later `GET /api/diff` call. See `src/static/modules/
+  renderedFile.js`'s docstring for the full per-field presence/fallback
+  table (`etag` has been universal, not Marp-only, since 0.6.4).
 - **`files_changed`** (0.6.5) — `{ type: 'files_changed', items: [{ path,
   etag?, kind: 'changed'|'added'|'removed' }...] }`. Broadcast to *all* clients
   (`wss.broadcast`, NOT watch-scoped like `file_update`) by `src/watcher.js`,
@@ -266,6 +265,7 @@ presenter → main:  request-slides, goto, edit-note, find-saver
 | PDF generation | `src/services/pdf.js` | Shared by the HTTP route and the CLI `convert` command. |
 | `tree_update` payload construction | `src/websocket.js`'s `broadcastTreeUpdate()` | Both `watcher.js` and `file.js` call this rather than building the object inline. |
 | Rendered-file envelope → tab object | `src/static/modules/renderedFile.js` | `applyRenderedFile()`, used by 3 call sites (tabs/websocket/editor). |
+| Review-mode on/off (gates unread badges/diff highlights/strikethrough) | `src/static/modules/reviewMode.js` | Single GLOBAL `STORAGE_KEYS.REVIEW_MODE` boolean, default OFF. `isReviewMode()`/`onReviewModeChange()` are the read/subscribe seam `diffReview.js` and `unreadBadges.js` both consult — background tracking keeps running while OFF, only painting is gated. |
 | BroadcastChannel channel name + message types | `src/static/lib/presenterChannel.js` | Mirrored (values only) by `presenter.html`'s inline script. |
 | Marp cluster shared state (`currentSlide`, `keyHandler`) | `src/static/modules/marpState.js` | Get/set accessors, since native ESM can't share a bare `let`. |
 | `mdv.config.json` loading | `src/cli/config.js` | Consumed by `src/cli/registry.js` (viewer) and `src/cli/convert.js`. |

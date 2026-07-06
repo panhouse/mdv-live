@@ -82,7 +82,7 @@ src/
 └── static/                      # Frontend. Zero-build, native ESM.
     ├── index.html / presenter.html / styles.css
     ├── app.js                    # bootstrap entry (~250 lines): imports + init()
-    ├── modules/                  # ~28 files, one manager per module
+    ├── modules/                  # one manager per module, see docs/ARCHITECTURE.md for the full list
     ├── lib/                      # DOM-free / cross-cutting: apiClient, saveQueue,
     │                             #   tabRegistry, presenterChannel, errorCodes,
     │                             #   debounce, marpZoom, notesEditor
@@ -146,6 +146,7 @@ tests/
 | PDF generation (API + CLI share it) | `src/services/pdf.js` |
 | BroadcastChannel message types (main ↔ Presenter) | `src/static/lib/presenterChannel.js` |
 | `mdv.config.json` loading | `src/cli/config.js` |
+| Review-mode on/off (gates unread badges/diff highlights/strikethrough) | `src/static/modules/reviewMode.js` (`STORAGE_KEYS.REVIEW_MODE`) |
 
 See `docs/ARCHITECTURE.md` for the full inventory and request/data-flow maps.
 
