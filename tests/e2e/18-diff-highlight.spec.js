@@ -382,3 +382,22 @@ test('0.6.10: deleting the ENTIRE document still shows the struck-through text (
   await expect(inline).toBeVisible({ timeout: 6000 });
   await expect(inline).toContainText('全部消える見出し');
 });
+
+test('0.6.10: a deletion next to a list lands BETWEEN blocks, not inside the list (codex round-4)', async ({ page }) => {
+  const p = 'nested.md';
+  await writeFile(path.join(fixtureDir, p), '# 見出し\n\n- 項目1\n- 項目2\n\n消える段落。\n');
+  await page.goto(server.baseURL + '/');
+  await page.locator(`.tree-item[data-path="${p}"] [data-action="open"]`).click();
+  await expect(page.locator('#content')).toContainText('項目2');
+  await waitForBaseline(page, p);
+
+  await writeFile(path.join(fixtureDir, p), '# 見出し\n\n- 項目1\n- 項目2\n');
+  await expect(page.locator('#diffToggleBtn')).toBeVisible({ timeout: 6000 });
+  await page.locator('#diffToggleBtn').click();
+  const inline = page.locator('.diff-removed-inline');
+  await expect(inline).toBeVisible({ timeout: 6000 });
+  await expect(inline).toContainText('消える段落');
+  // 取り消し線ブロックが <ul> の中に入っていないこと
+  const insideList = await page.evaluate(() => !!document.querySelector('ul .diff-removed-inline, ol .diff-removed-inline, pre .diff-removed-inline, table .diff-removed-inline'));
+  expect(insideList).toBe(false);
+});

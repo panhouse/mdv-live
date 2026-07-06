@@ -819,15 +819,37 @@ export const DiffReviewManager = {
             fallbackContainer.appendChild(div);
             return;
         }
+        // Hoist the insertion point to the top-level document block: the
+        // nearest source-line node can be NESTED (a <li> inside <ul>, a
+        // <code data-source-line> inside <pre>) and inserting a <div>
+        // adjacent to it would land inside that structure — invalid HTML
+        // in lists/tables, garbled rendering in code blocks
+        // (codex 0.6.10 round-4).
+        const host = this._topLevelBlock(anchorBlock.el);
         // A deletion anchored BEFORE the first visible block's own line
         // (afterLine 0, or any position among leading unmapped lines) must
         // appear ABOVE that block, not below it (codex 0.6.10 rounds 1+3).
-        if (hunk.afterLine < anchorBlock.line && !insertAfter.has(anchorBlock.el)) {
-            anchorBlock.el.insertAdjacentElement('beforebegin', div);
+        if (hunk.afterLine < anchorBlock.line && !insertAfter.has(host)) {
+            host.insertAdjacentElement('beforebegin', div);
             return;
         }
-        const anchor = insertAfter.get(anchorBlock.el) || anchorBlock.el;
+        const anchor = insertAfter.get(host) || host;
         anchor.insertAdjacentElement('afterend', div);
-        insertAfter.set(anchorBlock.el, div);
+        insertAfter.set(host, div);
+    },
+
+    /**
+     * Walk up from a (possibly nested) source-line node to its top-level
+     * block — the direct child of the rendered-content container — so
+     * injected review elements always sit BETWEEN document blocks.
+     */
+    _topLevelBlock(el) {
+        const container = elements.content.querySelector('.markdown-body') || elements.content;
+        let node = el;
+        while (node.parentElement && node.parentElement !== container
+            && node.parentElement !== elements.content) {
+            node = node.parentElement;
+        }
+        return node;
     }
 };
