@@ -114,6 +114,46 @@
  * unaffected.
  *
  * ---------------------------------------------------------------------
+ * 0.6.14: moved next to Review, renamed, and no longer pops in/out
+ * ---------------------------------------------------------------------
+ * Three owner complaints, all verbatim: 「変更N/✓確認がEditとPDFの間にある
+ * のはおかしい。Reviewボタンの右にあるべき」「『変更』というラベルは何が
+ * 起きるか分からない」「ボタンが出たり消えたりするたびに後ろのPDF/Style/
+ * Review/検索ボックスが横にガタガタ動くのがだるい」.
+ *
+ * 1. index.html moved both buttons from between Edit/PDF to right after
+ *    `#reviewModeToggle` (before the search trigger) — pure markup
+ *    reordering, this module doesn't care about DOM position.
+ * 2. `#diffToggleBtn`'s label is now "次の変更 N" ("次の変更 ?" when
+ *    unavailable) — it jumps to the next change, so the label says so.
+ * 3. Layout stability: `_syncToolbar()` used to add/remove `.hidden` on
+ *    BOTH buttons every time `_current` changed (pending diff appears/
+ *    resolves, tab switch, ...), which visibly shifted every toolbar
+ *    control to their right. Now `.hidden` is toggled ONLY by the
+ *    Review-mode ON/OFF transition itself (one deliberate user click,
+ *    acceptable) — while Review is ON, both buttons stay permanently
+ *    MOUNTED and instead flip the `disabled` attribute:
+ *      - `_current` is null (no pending diff / non-diffable tab / no tab
+ *        at all, e.g. via `_hide()`) → both buttons disabled, label
+ *        "次の変更 0" (nothing to jump to, nothing to confirm).
+ *      - `_current.kind === 'unavailable'` → jump button disabled (no
+ *        jump target — see `_jumpChange()`'s early-return), confirm
+ *        button stays ENABLED (`_confirmLatest()` only needs
+ *        `_current.path`/`currentHash`, both present here — confirming
+ *        an unavailable diff is still meaningful).
+ *      - `_current.kind` is `'full'`/`'bar-only'` (real pending diff) →
+ *        both enabled.
+ *    `disabled` (an HTML attribute, not a CSS class) both grays the
+ *    button out (styles.css's `.toolbar-btn:disabled`) and blocks the
+ *    click handler from firing — no extra guard needed in
+ *    `_jumpChange()`/`_confirmLatest()` beyond what they already check.
+ *    Every `_syncToolbar()` call now updates textContent/title/disabled
+ *    on EVERY path (previously the hidden branches returned early without
+ *    touching them, which was fine when hidden also meant "not visible
+ *    to worry about" — now that the buttons can stay mounted, a stale
+ *    label would otherwise flash before the next real update).
+ *
+ * ---------------------------------------------------------------------
  * Baseline model (localStorage) — THE SHARED FOUNDATION 0.6.5 builds on
  * ---------------------------------------------------------------------
  * STORAGE_KEYS.LAST_SEEN ('mdv-last-seen') holds a single JSON object:
@@ -603,13 +643,20 @@ export const DiffReviewManager = {
 
     /**
      * Paint the two static toolbar buttons from `_current` — the 0.6.8
-     * replacement for the old `_renderBar()`'s innerHTML rebuild. See this
-     * module's docstring's "0.6.8" section for the three states this
-     * covers (no diff / pending diff / unavailable). 0.6.12: gated on
-     * `isReviewMode()` FIRST — both buttons stay hidden whenever Review is
-     * OFF, regardless of `_current` (background tracking still computed
-     * it — see this module's docstring's "0.6.12" section — only the
-     * paint is skipped).
+     * replacement for the old `_renderBar()`'s innerHTML rebuild. 0.6.12:
+     * gated on `isReviewMode()` FIRST — both buttons stay hidden whenever
+     * Review is OFF, regardless of `_current` (background tracking still
+     * computed it — see this module's docstring's "0.6.12" section — only
+     * the paint is skipped).
+     * 0.6.14 (layout-stability fix — see this module's docstring's "0.6.14"
+     * section): while Review is ON, `.hidden` is never touched here again —
+     * both buttons stay mounted and only their `disabled` attribute/label
+     * change, so neighboring toolbar controls never shift when a diff
+     * appears/resolves or the active tab switches. Three ON-states:
+     *   - no `_current` (nothing to review) → both disabled, "次の変更 0".
+     *   - `_current.kind === 'unavailable'` → jump disabled (no jump
+     *     target), confirm stays enabled (confirming is still meaningful).
+     *   - a real pending diff (`'full'`/`'bar-only'`) → both enabled.
      */
     _syncToolbar() {
         const toggleBtn = elements.diffToggleBtn;
@@ -617,22 +664,34 @@ export const DiffReviewManager = {
         if (!toggleBtn || !confirmBtn) return;
         const c = this._current;
 
-        if (!c || !isReviewMode()) {
+        if (!isReviewMode()) {
             toggleBtn.classList.add('hidden');
             confirmBtn.classList.add('hidden');
             return;
         }
 
-        confirmBtn.classList.remove('hidden');
         toggleBtn.classList.remove('hidden');
+        confirmBtn.classList.remove('hidden');
+
+        if (!c) {
+            toggleBtn.disabled = true;
+            confirmBtn.disabled = true;
+            toggleBtn.textContent = '次の変更 0';
+            toggleBtn.title = '次の変更へジャンプ（⌥↓ でも移動）';
+            return;
+        }
 
         if (c.kind === 'unavailable') {
-            toggleBtn.textContent = '変更 ?';
+            toggleBtn.disabled = true;
+            confirmBtn.disabled = false;
+            toggleBtn.textContent = '次の変更 ?';
             toggleBtn.title = '差分は取得できませんでした';
             return;
         }
 
-        toggleBtn.textContent = `変更 ${c.count}`;
+        toggleBtn.disabled = false;
+        confirmBtn.disabled = false;
+        toggleBtn.textContent = `次の変更 ${c.count}`;
         toggleBtn.title = '次の変更へジャンプ（⌥↓ でも移動）';
     },
 

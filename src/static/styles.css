@@ -301,6 +301,19 @@ body {
     border-color: var(--accent);
 }
 
+/* 0.6.14 (modules/diffReview.js): #diffToggleBtn/#diffConfirmBtn stay
+   mounted while Review mode is ON even with nothing to act on, so the
+   toolbar never reflows — this is their "nothing to act on" look. */
+.toolbar-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.toolbar-btn:disabled:hover {
+    background: none;
+    color: var(--text-secondary);
+}
+
 .search-trigger {
     display: flex;
     align-items: center;
@@ -1084,8 +1097,8 @@ body {
    Diff Review (modules/diffReview.js — 0.6.4 ハイライト + ジャンプ;
    0.6.8: the standalone #diffReviewBar band is REMOVED — the toolbar's
    #diffToggleBtn/#diffConfirmBtn reuse the existing .toolbar-btn/.hidden/
-   .toolbar-btn.active rules (see styles.css's Toolbar section), so there
-   is no dedicated CSS for them here.
+   .toolbar-btn.active/.toolbar-btn:disabled rules (see styles.css's
+   Toolbar section), so there is no dedicated CSS for them here.
    0.6.10 (owner: 「追加も変更も黄色で良い気がする」「削除行がwordみたいに
    横棒線がでるといいよね」): .diff-added and .diff-changed now share ONE
    yellow tint (the green .diff-added tint is gone) — see

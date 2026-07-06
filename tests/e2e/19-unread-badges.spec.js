@@ -21,6 +21,15 @@ import { makeFixtureDir, seedFiles, startServer, removeFixtureDir } from './help
 // coverage for the OFF state (zero chrome despite genuinely-unread files)
 // and the ON/OFF transition itself (everything appears/disappears together
 // in one click).
+//
+// 0.6.14 (owner: labels/placement/layout jitter, see modules/diffReview.js's
+// docstring's "0.6.14" section): `#diffToggleBtn`'s label is now 「次の変更
+// N」, and while Review mode is ON both toolbar buttons stay permanently
+// MOUNTED (never `.hidden`) — "nothing to review right now" is expressed
+// via `disabled`, not by hiding them. Every assertion below that used to
+// expect `toBeHidden()` for these two buttons while Review is ON with no
+// pending diff now expects `toBeVisible()` + `toBeDisabled()` instead; only
+// the Review OFF transition itself still hides them.
 
 let fixtureDir;
 let server;
@@ -46,7 +55,7 @@ async function waitForBaseline(page, p) {
 
 /**
  * 0.6.12: click the ONE permanent toolbar button that gates the whole
- * review surface (badges/counts/chip, 「変更 N」/「✓ 確認」, highlights,
+ * review surface (badges/counts/chip, 「次の変更 N」/「✓ 確認」, highlights,
  * strikethrough deletions) on or off — see modules/reviewMode.js.
  */
 async function toggleReviewMode(page) {
@@ -149,7 +158,7 @@ test('0.6.12 unified review mode (owner): default OFF hides unread badges/chip/d
     await expect(note1Badge).toHaveCount(0);
     await expect(dirBadge).toHaveCount(0);
     await expect(chip).toBeHidden();
-    await expect(toggleBtn).toBeHidden();
+    await expect(toggleBtn).toBeHidden(); // Review OFF: still hidden outright
     await expect(confirmBtn).toBeHidden();
     await expect(page.locator('#content .diff-added, #content .diff-changed, #content .diff-removed-inline'))
         .toHaveCount(0);
@@ -170,8 +179,10 @@ test('0.6.12 unified review mode (owner): default OFF hides unread badges/chip/d
     await expect(note1Badge).toHaveText('●');
     await expect(dirBadge).toHaveText('1');
     await expect(toggleBtn).toBeVisible();
-    await expect(toggleBtn).toHaveText('変更 2');
+    await expect(toggleBtn).toBeEnabled();
+    await expect(toggleBtn).toHaveText('次の変更 2');
     await expect(confirmBtn).toBeVisible();
+    await expect(confirmBtn).toBeEnabled();
     await expect(page.locator('#content .diff-changed')).toContainText('Top-level file, updated.');
     await expect(page.locator('#content .diff-removed-inline')).toContainText('Second paragraph');
 
@@ -209,6 +220,7 @@ test('0.6.12 unified review mode (owner): default OFF hides unread badges/chip/d
     // diff.
     await toggleReviewMode(page);
     await expect(toggleBtn).toBeVisible();
+    await expect(toggleBtn).toBeEnabled();
     await expect(note1Badge).toHaveClass(/is-unread/);
     await expect(readmeBadge).toHaveClass(/is-unread/);
     await expect(dirBadge).toHaveText('1');
@@ -218,8 +230,11 @@ test('0.6.12 unified review mode (owner): default OFF hides unread badges/chip/d
     // noise for the folder-scoped assertions below. Confirming also clears
     // readme's own unread ● (markSeen() fires the onSeen seam this module
     // subscribes to, same as any other file), dropping the chip back to 1.
+    // 0.6.14: with nothing left to review, the button stays MOUNTED (Review
+    // is still ON) but goes `disabled` instead of hiding.
     await confirmBtn.click();
-    await expect(toggleBtn).toBeHidden();
+    await expect(toggleBtn).toBeVisible();
+    await expect(toggleBtn).toBeDisabled();
     await expect(readmeBadge).toHaveCount(0);
     await expect(chip).toHaveText('1');
 
