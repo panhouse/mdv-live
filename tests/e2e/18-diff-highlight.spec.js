@@ -401,3 +401,25 @@ test('0.6.10: a deletion next to a list lands BETWEEN blocks, not inside the lis
   const insideList = await page.evaluate(() => !!document.querySelector('ul .diff-removed-inline, ol .diff-removed-inline, pre .diff-removed-inline, table .diff-removed-inline'));
   expect(insideList).toBe(false);
 });
+
+test('0.6.10: a MID-LIST deletion renders between the surviving bullets (codex round-5)', async ({ page }) => {
+  const p = 'midlist.md';
+  await writeFile(path.join(fixtureDir, p), '# 見出し\n\n- 項目1\n- 消える項目\n- 項目3\n');
+  await page.goto(server.baseURL + '/');
+  await page.locator(`.tree-item[data-path="${p}"] [data-action="open"]`).click();
+  await expect(page.locator('#content')).toContainText('項目3');
+  await waitForBaseline(page, p);
+
+  await writeFile(path.join(fixtureDir, p), '# 見出し\n\n- 項目1\n- 項目3\n');
+  await expect(page.locator('#diffToggleBtn')).toBeVisible({ timeout: 6000 });
+  await page.locator('#diffToggleBtn').click();
+  const inline = page.locator('ul .diff-removed-inline');
+  await expect(inline).toBeVisible({ timeout: 6000 });
+  await expect(inline).toContainText('消える項目');
+  // 項目1 と 項目3 の間にあること（liとして siblings 順を検証）
+  const order = await page.evaluate(() => {
+    const items = Array.from(document.querySelectorAll('#content ul > li')).map((li) => li.textContent.trim());
+    return items.join('|');
+  });
+  expect(order).toMatch(/項目1\|.*消える項目.*\|項目3/);
+});

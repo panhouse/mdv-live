@@ -807,7 +807,22 @@ export const DiffReviewManager = {
             html += `<br><span class="diff-removed-inline-more">…（あと ${remaining} 行削除）</span>`;
         }
 
-        const div = document.createElement('div');
+        // Placement decision (codex 0.6.10 rounds 4-5, opposing pulls):
+        // a raw <div> inside <ul>/<pre> is invalid — but hoisting a
+        // MID-LIST deletion to after the whole list breaks Word-style
+        // positioning. Resolution: if the deletion sits BETWEEN items of
+        // the same list (anchor li and the next mapped block's li share a
+        // list container), render it as an <li> inside that list;
+        // otherwise hoist to the top-level block.
+        const anchorLi = anchorBlock && anchorBlock.el.closest('li');
+        let asListItem = false;
+        if (anchorLi) {
+            const next = blocks.find((b) => b.line > hunk.afterLine);
+            const nextLi = next && next.el.closest('li');
+            asListItem = !!(nextLi && anchorLi.parentElement === nextLi.parentElement);
+        }
+
+        const div = document.createElement(asListItem ? 'li' : 'div');
         div.className = 'diff-removed-inline';
         div.setAttribute('aria-hidden', 'true');
         div.innerHTML = html; // safe: every line went through escapeHtml() above; <br>/the
@@ -825,7 +840,7 @@ export const DiffReviewManager = {
         // adjacent to it would land inside that structure — invalid HTML
         // in lists/tables, garbled rendering in code blocks
         // (codex 0.6.10 round-4).
-        const host = this._topLevelBlock(anchorBlock.el);
+        const host = asListItem ? anchorLi : this._topLevelBlock(anchorBlock.el);
         // A deletion anchored BEFORE the first visible block's own line
         // (afterLine 0, or any position among leading unmapped lines) must
         // appear ABOVE that block, not below it (codex 0.6.10 rounds 1+3).

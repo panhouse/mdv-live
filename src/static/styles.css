@@ -1114,6 +1114,8 @@ body {
    border echoing the added/changed border-left above. `aria-hidden` on
    the element (set by diffReview.js) keeps assistive tech from reading
    throwaway deleted text as if it were live document content. */
+li.diff-removed-inline { list-style: none; }
+
 .diff-removed-inline {
     display: block;
     margin: 2px 0 8px 3px;
