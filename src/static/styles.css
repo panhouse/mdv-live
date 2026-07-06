@@ -104,6 +104,10 @@ body {
     transition: width 0.2s, background 0.2s;
 }
 
+/* Suspend the width transition while the user is dragging the resize
+   handle — easing toward the cursor reads as heavy lag (0.6.11). */
+.sidebar.resizing { transition: none; }
+
 .sidebar.collapsed {
     width: 0 !important;
     border-right: none;

@@ -15,14 +15,17 @@ export const SidebarManager = {
         }
     },
 
-    setWidth(width) {
+    setWidth(width, { persist = true } = {}) {
         if (width < 50) {
             elements.sidebar.classList.add('collapsed');
         } else {
             elements.sidebar.classList.remove('collapsed');
             elements.sidebar.style.width = width + 'px';
             state.sidebarWidth = width;
-            localStorage.setItem(STORAGE_KEYS.SIDEBAR_WIDTH, width);
+            // During a drag, persisting every mousemove is a synchronous
+            // disk-backed write per event — the caller persists once on
+            // mouseup instead (owner-reported drag lag, 0.6.11).
+            if (persist) localStorage.setItem(STORAGE_KEYS.SIDEBAR_WIDTH, width);
         }
     },
 
@@ -33,24 +36,47 @@ export const SidebarManager = {
 };
 
 export const ResizeHandler = {
+    _rafId: null,
+    _pendingX: null,
+
     start() {
         state.isResizing = true;
         elements.resizeHandle.classList.add('active');
+        // The sidebar's width transition (0.2s, for the collapse animation)
+        // makes every drag update EASE toward the cursor instead of
+        // following it — the whole perceived lag (owner report, 0.6.11).
+        // Suspend it for the duration of the drag.
+        elements.sidebar.classList.add('resizing');
         document.body.style.cursor = 'col-resize';
         document.body.style.userSelect = 'none';
     },
 
     move(clientX) {
         if (!state.isResizing) return;
-        if (clientX >= 0 && clientX <= 500) {
-            SidebarManager.setWidth(clientX);
-        }
+        if (clientX < 0 || clientX > 500) return;
+        // One width write per FRAME, not per mousemove event (which can
+        // fire far more often than the display refreshes).
+        this._pendingX = clientX;
+        if (this._rafId !== null) return;
+        this._rafId = requestAnimationFrame(() => {
+            this._rafId = null;
+            SidebarManager.setWidth(this._pendingX, { persist: false });
+        });
     },
 
     end() {
         if (state.isResizing) {
             state.isResizing = false;
+            if (this._rafId !== null) {
+                cancelAnimationFrame(this._rafId);
+                this._rafId = null;
+            }
+            if (this._pendingX !== null) {
+                SidebarManager.setWidth(this._pendingX); // final width, persisted once
+                this._pendingX = null;
+            }
             elements.resizeHandle.classList.remove('active');
+            elements.sidebar.classList.remove('resizing');
             document.body.style.cursor = '';
             document.body.style.userSelect = '';
         }
