@@ -25,7 +25,7 @@ export const STORAGE_KEYS = {
     // Review mode (modules/reviewMode.js, 0.6.12). A single GLOBAL boolean
     // ('true'/'false' string) — Word's 校閲 tab mental model: ONE toolbar
     // button gates the ENTIRE review surface (unread ●/counts/header chip,
-    // the 「変更 N」/「✓ 確認」 buttons, highlights, strikethrough
+    // the 「次の変更 N」/「✓ 確認」 buttons, highlights, strikethrough
     // deletions), not just markup visibility. Supersedes 0.6.10's
     // REVIEW_MARKUP key (which only gated highlight visibility) — see
     // reviewMode.js's docstring for the one-time migration of that old
