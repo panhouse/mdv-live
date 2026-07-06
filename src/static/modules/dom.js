@@ -21,6 +21,7 @@ export const elements = {
     editToggle: document.getElementById('editToggle'),
     diffToggleBtn: document.getElementById('diffToggleBtn'),
     diffConfirmBtn: document.getElementById('diffConfirmBtn'),
+    reviewModeToggle: document.getElementById('reviewModeToggle'),
     pdfStyleToggle: document.getElementById('pdfStyleToggle'),
     pdfStylePanel: document.getElementById('pdfStylePanel'),
     pdfStylePath: document.getElementById('pdfStylePath'),

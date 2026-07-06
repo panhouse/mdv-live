@@ -33,6 +33,7 @@ import { KeyboardManager } from './modules/keyboard.js';
 import { SearchPalette } from './modules/searchPalette.js';
 import { DiffReviewManager } from './modules/diffReview.js';
 import { UnreadBadgesManager } from './modules/unreadBadges.js';
+import { ReviewModeManager } from './modules/reviewMode.js';
 import { MDVApi } from './lib/apiClient.js';
 
 // ============================================================
@@ -260,6 +261,11 @@ async function init() {
     ContextMenuManager.init();
     DragDropManager.init();
     SearchPalette.init();
+    // 0.6.12: Review mode's manager must init() (migrate the legacy
+    // markup-toggle key, wire the toolbar button) before DiffReviewManager/
+    // UnreadBadgesManager subscribe to its onReviewModeChange() seam — see
+    // modules/reviewMode.js's docstring's "Wiring" section.
+    ReviewModeManager.init();
     DiffReviewManager.init();
     UnreadBadgesManager.init();
     KeyboardManager.init();

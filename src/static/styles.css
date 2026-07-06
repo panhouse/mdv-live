@@ -1091,7 +1091,13 @@ body {
    yellow tint (the green .diff-added tint is gone) — see
    modules/diffReview.js's docstring's "0.6.10" section. The removedAt tick
    (.diff-removed-after) is replaced by an injected .diff-removed-inline
-   block showing the actual deleted text, struck through.)
+   block showing the actual deleted text, struck through.
+   0.6.12 (modules/reviewMode.js — Word's 校閲/Review tab model): whether
+   any of the classes below ever get applied is now gated by the
+   permanent #reviewModeToggle button's ON/OFF state, not a sub-toggle of
+   this feature — see reviewMode.js's docstring. No new CSS needed for
+   that: #reviewModeToggle is plain .toolbar-btn/.toolbar-btn.active, same
+   as #diffToggleBtn/#diffConfirmBtn above.)
    ============================================================ */
 
 /* Block-level change highlights, applied to the SAME [data-source-line]

@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.12] - 2026-07-07
+
+### Changed — 「Review」ボタン1つに統一（Wordの校閲タブ方式・オーナー指示）
+
+ツールバー（Edit/PDF/Styleの右）に常設の **Review** ボタンを追加し、
+検収UI全体をこの1つで ON/OFF する方式に変更:
+
+- **OFF（既定）**: 完全に素のビューア。未読●・件数・変更ボタン・
+  ハイライト・取り消し線は一切出ない（裏では記録が続くので、
+  ONにした瞬間にそれまでの変更が正確に表示される）
+- **ON**: 全部出る。ハイライトは常時表示になり、0.6.10の
+  表示切替サブトグルは廃止（スイッチは1つだけ）。
+  「変更 N」クリックは次の変更へジャンプに変更
+
 ## [0.6.11] - 2026-07-06
 
 ### Fixed
