@@ -819,10 +819,10 @@ export const DiffReviewManager = {
             fallbackContainer.appendChild(div);
             return;
         }
-        // afterLine 0 = the deletion happened BEFORE the document's first
-        // line — a deleted top heading must appear ABOVE the first block,
-        // not below it (codex 0.6.10 round-1).
-        if (hunk.afterLine === 0 && !insertAfter.has(anchorBlock.el)) {
+        // A deletion anchored BEFORE the first visible block's own line
+        // (afterLine 0, or any position among leading unmapped lines) must
+        // appear ABOVE that block, not below it (codex 0.6.10 rounds 1+3).
+        if (hunk.afterLine < anchorBlock.line && !insertAfter.has(anchorBlock.el)) {
             anchorBlock.el.insertAdjacentElement('beforebegin', div);
             return;
         }
