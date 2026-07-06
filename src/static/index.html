@@ -93,13 +93,14 @@
                 </button>
 
                 <!-- 0.6.8 (modules/diffReview.js): Word's 変更履歴 model — these two
-                     appear ONLY while the active tab has a pending diff (replaces the
-                     removed #diffReviewBar 3rd band). Hidden by default.
-                     0.6.10: the toggle's aria-pressed default is "false" — markup is a
-                     GLOBAL preference defaulting OFF (owner: 「デフォルトはオフでok」);
-                     _syncToolbar() overwrites this from the real persisted value on
-                     every paint, so this is only the pre-JS resting state. -->
-                <button class="toolbar-btn hidden" id="diffToggleBtn" type="button" title="変更をハイライト表示/非表示（⌥↑↓ でジャンプ）" aria-label="変更のハイライトを切り替え" aria-pressed="false">変更 0</button>
+                     appear ONLY while the active tab has a pending diff AND Review
+                     mode (below) is ON (replaces the removed #diffReviewBar 3rd
+                     band). Hidden by default.
+                     0.6.12: clicking 「変更 N」 now jumps to the next change (same
+                     as ⌥↓) instead of toggling markup on/off — Review ON always
+                     shows highlights/strikethrough now, see modules/reviewMode.js
+                     and modules/diffReview.js's docstrings. -->
+                <button class="toolbar-btn hidden" id="diffToggleBtn" type="button" title="次の変更へジャンプ（⌥↓ でも移動）" aria-label="次の変更へ移動">変更 0</button>
                 <button class="toolbar-btn hidden" id="diffConfirmBtn" type="button" title="最新の内容を確認済みにする" aria-label="確認済みにする">✓ 確認</button>
 
                 <button class="toolbar-btn" id="printBtn" title="Print / Save PDF (Cmd+P)" aria-label="Export to PDF">
@@ -115,6 +116,15 @@
                     </svg>
                     Style
                 </button>
+
+                <!-- 0.6.12 (modules/reviewMode.js): Word's 校閲/Review tab mental
+                     model — ONE permanent, always-visible button gates the ENTIRE
+                     review surface (unread ●/counts/header chip, 「変更 N」/
+                     「✓ 確認」, highlights, strikethrough deletions). Label is the
+                     English word "Review" (owner: it sits beside Edit/PDF/Style,
+                     which are all English) — the tooltip stays Japanese like every
+                     other toolbar button. DEFAULT OFF; never carries `.hidden`. -->
+                <button class="toolbar-btn" id="reviewModeToggle" type="button" title="校閲モード: 未読・変更履歴・削除を表示" aria-label="Review mode" aria-pressed="false">Review</button>
 
                 <button class="search-trigger" id="searchBoxToggle" title="ファイルを横断して検索 (Cmd/Ctrl+K)" aria-label="Search all files">
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">

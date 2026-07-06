@@ -22,13 +22,18 @@ export const STORAGE_KEYS = {
     // docs/plan-review-surface-0.6.x.md §③): diffReview.js's exported
     // getLastSeen()/markSeen() are the one place that reads/writes it.
     LAST_SEEN: 'mdv-last-seen',
-    // Diff review markup toggle (modules/diffReview.js, 0.6.10). A single
-    // GLOBAL boolean ('true'/'false' string) — the toolbar's 「変更 N」
-    // button's on/off state, Word's 変更履歴の表示 toggle. Applies to every
-    // file (not namespaced per-path or per-served-root, unlike LAST_SEEN
-    // above) and survives reload. Owner: 「デフォルトはオフでok」 — absent/
-    // unparsable reads as OFF.
-    REVIEW_MARKUP: 'mdv-review-markup'
+    // Review mode (modules/reviewMode.js, 0.6.12). A single GLOBAL boolean
+    // ('true'/'false' string) — Word's 校閲 tab mental model: ONE toolbar
+    // button gates the ENTIRE review surface (unread ●/counts/header chip,
+    // the 「変更 N」/「✓ 確認」 buttons, highlights, strikethrough
+    // deletions), not just markup visibility. Supersedes 0.6.10's
+    // REVIEW_MARKUP key (which only gated highlight visibility) — see
+    // reviewMode.js's docstring for the one-time migration of that old
+    // key's value. Applies to every file (not namespaced per-path or
+    // per-served-root, unlike LAST_SEEN above) and survives reload. Owner:
+    // default OFF (same「デフォルトはオフでok」 instinct as 0.6.10, now
+    // scoped to the whole surface) — absent/unparsable reads as OFF.
+    REVIEW_MODE: 'mdv-review-mode'
 };
 
 export const NOTES_AUTOSAVE_DEBOUNCE_MS = 800;

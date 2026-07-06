@@ -81,6 +81,39 @@
  *    different kind of change (nothing to show inline for pure adds).
  *
  * ---------------------------------------------------------------------
+ * 0.6.12: the markup toggle is GONE — Review mode subsumes it
+ * ---------------------------------------------------------------------
+ * Owner's direction (Word's 校閲/Review tab mental model, see
+ * modules/reviewMode.js's docstring): ONE permanent toolbar button
+ * (`#reviewModeToggle`) now gates the entire review surface, not just
+ * highlight visibility. 0.6.10's independent `_highlightsOn` preference
+ * (STORAGE_KEYS.REVIEW_MARKUP, `readMarkupPref()`/`writeMarkupPref()`) is
+ * DELETED — this module now imports `isReviewMode()` from
+ * modules/reviewMode.js and treats it as the sole visibility gate:
+ *   - `_syncToolbar()` hides BOTH toolbar buttons whenever Review is OFF,
+ *     regardless of `_current` (previously only "no diff" hid them).
+ *   - `_applyHighlightClasses()` paints nothing whenever Review is OFF —
+ *     Review ON always shows highlights/strikethrough for a `kind:
+ *     'full'` diff now (no more separate on/off within that).
+ *   - `_handleJumpKey()` (⌥↑↓) is inert while Review is OFF ("shortcuts
+ *     inert while OFF" — nothing is visible to jump between).
+ * `refresh()`'s underlying diff computation is UNCHANGED by any of this
+ * — background tracking (baseline recording, journal seeding, `_current`
+ * itself) keeps running while Review is OFF, so flipping Review ON shows
+ * the accurate current state immediately with no re-scan. See
+ * modules/reviewMode.js's docstring's "Visibility gate, not a tracking
+ * gate" section for the full rationale, shared with modules/
+ * unreadBadges.js.
+ *
+ * `#diffToggleBtn` ("変更 N") also changes ROLE: it no longer toggles
+ * anything (there is nothing left for it to toggle — Review ON already
+ * implies markup shown). Clicking it now JUMPS to the next change, the
+ * same action as ⌥↓ (`_jumpChange(1)`, shared by both the click handler
+ * and `_handleJumpKey()`). `aria-pressed` is gone from this button
+ * accordingly (a jump action isn't a toggle); `#diffConfirmBtn` is
+ * unaffected.
+ *
+ * ---------------------------------------------------------------------
  * Baseline model (localStorage) — THE SHARED FOUNDATION 0.6.5 builds on
  * ---------------------------------------------------------------------
  * STORAGE_KEYS.LAST_SEEN ('mdv-last-seen') holds a single JSON object:
@@ -188,6 +221,7 @@ import { elements } from './dom.js';
 import { STORAGE_KEYS, DIFF_JUMP_FLASH_MS } from './constants.js';
 import { MDVApi } from '../lib/apiClient.js';
 import { escapeHtml } from './utils.js';
+import { isReviewMode, onReviewModeChange } from './reviewMode.js';
 
 // Deleted-line inline display (0.6.10, Word-style strikethrough) — cap so a
 // huge deleted block doesn't flood the pane; see _injectRemovedInline().
@@ -236,37 +270,6 @@ function writeStore(store) {
     } catch {
         // Storage full/unavailable (private-browsing quota, etc.) — the
         // toolbar controls just won't persist across reloads; not fatal.
-    }
-}
-
-// ---------------------------------------------------------------------
-// localStorage markup-toggle store (0.6.10) — ONE global boolean, unlike
-// the per-path LAST_SEEN store above. See this module's docstring's
-// "0.6.10" section for why (Word's 変更履歴の表示 is a single on/off, not
-// remembered per-document).
-// ---------------------------------------------------------------------
-
-/**
- * @returns {boolean} the persisted markup-toggle preference; defaults to
- *   `false` (owner: 「デフォルトはオフでok」) when unset or unreadable.
- */
-function readMarkupPref() {
-    try {
-        return localStorage.getItem(STORAGE_KEYS.REVIEW_MARKUP) === 'true';
-    } catch {
-        return false;
-    }
-}
-
-/**
- * @param {boolean} value
- */
-function writeMarkupPref(value) {
-    try {
-        localStorage.setItem(STORAGE_KEYS.REVIEW_MARKUP, value ? 'true' : 'false');
-    } catch {
-        // Storage full/unavailable (private-browsing quota, etc.) — the
-        // toggle just won't persist across reloads; not fatal.
     }
 }
 
@@ -333,11 +336,6 @@ export function markSeen(path, hash) {
 
 export const DiffReviewManager = {
     _current: null, // see _applyResponse() for shape
-    // GLOBAL markup-toggle preference (0.6.10), backed by
-    // STORAGE_KEYS.REVIEW_MARKUP — see this module's docstring's "0.6.10"
-    // section. Loaded from localStorage in init(); this field-literal
-    // default (false) only matters for the brief window before init() runs.
-    _highlightsOn: false,
     _jumpIndex: -1,
     _reviewSeq: 0,
     _seededPaths: new Set(),
@@ -359,10 +357,15 @@ export const DiffReviewManager = {
     },
 
     init() {
-        // 0.6.10: load the persisted GLOBAL markup preference (default OFF)
-        // before anything can call refresh()/_syncToolbar().
-        this._highlightsOn = readMarkupPref();
         this._bindToolbarControls();
+        // 0.6.12: repaint from the already-current `_current` whenever
+        // Review mode flips — no full refresh() needed, see
+        // modules/reviewMode.js's docstring's "Visibility gate, not a
+        // tracking gate" section.
+        onReviewModeChange(() => {
+            this._syncToolbar();
+            this._applyHighlightClasses();
+        });
     },
 
     /**
@@ -375,7 +378,9 @@ export const DiffReviewManager = {
     _bindToolbarControls() {
         const toggleBtn = elements.diffToggleBtn;
         const confirmBtn = elements.diffConfirmBtn;
-        if (toggleBtn) toggleBtn.addEventListener('click', () => this._toggleHighlights());
+        // 0.6.12: clicking 「変更 N」 no longer toggles markup (Review mode
+        // now owns that) — it jumps to the next change, same as ⌥↓.
+        if (toggleBtn) toggleBtn.addEventListener('click', () => this._jumpChange(1));
         if (confirmBtn) confirmBtn.addEventListener('click', () => this._confirmLatest());
 
         // ⌥↑↓ jump. keyboard.js's shortcut table only recognizes
@@ -579,10 +584,11 @@ export const DiffReviewManager = {
             removed,
             count
         };
-        // 0.6.10: `_highlightsOn` is the GLOBAL preference (loaded once in
-        // init(), updated by _toggleHighlights()) — a newly-arrived diff
-        // does NOT touch it either way, unlike 0.6.8's per-path default-ON
-        // memory (see this module's docstring's "0.6.10" section).
+        // 0.6.12: visibility is gated by isReviewMode() (modules/
+        // reviewMode.js), a preference this module doesn't own — a
+        // newly-arrived diff does NOT touch it either way, unlike 0.6.8's
+        // per-path default-ON memory (see this module's docstring's
+        // "0.6.8"/"0.6.12" sections).
         this._jumpIndex = -1;
         this._syncToolbar();
         this._applyHighlightClasses();
@@ -596,10 +602,14 @@ export const DiffReviewManager = {
     },
 
     /**
-     * Paint the two static toolbar buttons from `_current`/`_highlightsOn`
-     * — the 0.6.8 replacement for the old `_renderBar()`'s innerHTML
-     * rebuild. See this module's docstring's "0.6.8" section for the
-     * three states this covers (no diff / pending diff / unavailable).
+     * Paint the two static toolbar buttons from `_current` — the 0.6.8
+     * replacement for the old `_renderBar()`'s innerHTML rebuild. See this
+     * module's docstring's "0.6.8" section for the three states this
+     * covers (no diff / pending diff / unavailable). 0.6.12: gated on
+     * `isReviewMode()` FIRST — both buttons stay hidden whenever Review is
+     * OFF, regardless of `_current` (background tracking still computed
+     * it — see this module's docstring's "0.6.12" section — only the
+     * paint is skipped).
      */
     _syncToolbar() {
         const toggleBtn = elements.diffToggleBtn;
@@ -607,7 +617,7 @@ export const DiffReviewManager = {
         if (!toggleBtn || !confirmBtn) return;
         const c = this._current;
 
-        if (!c) {
+        if (!c || !isReviewMode()) {
             toggleBtn.classList.add('hidden');
             confirmBtn.classList.add('hidden');
             return;
@@ -619,25 +629,11 @@ export const DiffReviewManager = {
         if (c.kind === 'unavailable') {
             toggleBtn.textContent = '変更 ?';
             toggleBtn.title = '差分は取得できませんでした';
-            toggleBtn.removeAttribute('aria-pressed');
-            toggleBtn.classList.remove('active');
             return;
         }
 
         toggleBtn.textContent = `変更 ${c.count}`;
-        toggleBtn.title = '変更をハイライト表示/非表示（⌥↑↓ でジャンプ）';
-        toggleBtn.setAttribute('aria-pressed', String(this._highlightsOn));
-        toggleBtn.classList.toggle('active', this._highlightsOn);
-    },
-
-    _toggleHighlights() {
-        if (!this._current || this._current.kind !== 'full') return;
-        this._highlightsOn = !this._highlightsOn;
-        // 0.6.10: persist as the GLOBAL preference — every other diffable
-        // tab/file picks this up the next time refresh() paints it.
-        writeMarkupPref(this._highlightsOn);
-        this._applyHighlightClasses();
-        this._syncToolbar();
+        toggleBtn.title = '次の変更へジャンプ（⌥↓ でも移動）';
     },
 
     async _confirmLatest() {
@@ -665,13 +661,34 @@ export const DiffReviewManager = {
         // 0.6.5 round-7).
         if (!e.altKey || e.shiftKey || e.metaKey || e.ctrlKey) return;
         if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
-        if (!this._current || this._current.kind !== 'full' || !this._highlightsOn) return;
 
         const active = document.activeElement;
         const isTextInput = active && (
             active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable
         );
         if (isTextInput) return;
+
+        // 0.6.12: inert while Review mode is OFF — there is nothing
+        // visible on screen for this shortcut to act on (see
+        // modules/reviewMode.js's docstring). _jumpChange() re-checks the
+        // same condition (shared with the 「変更 N」 click handler), but
+        // checking here too lets us skip preventDefault() when the
+        // shortcut has nothing to do.
+        if (!isReviewMode() || !this._current || this._current.kind !== 'full') return;
+
+        e.preventDefault();
+        this._jumpChange(e.key === 'ArrowDown' ? 1 : -1);
+    },
+
+    /**
+     * Move the ⌥↑↓ jump cursor by `delta` and scroll/flash the target —
+     * shared by `_handleJumpKey()` (⌥↑↓) and `#diffToggleBtn`'s click
+     * handler (0.6.12: clicking 「変更 N」 now jumps instead of toggling
+     * markup, see this module's docstring's "0.6.12" section). No-ops
+     * while Review is OFF or there is nothing highlighted to jump between.
+     */
+    _jumpChange(delta) {
+        if (!isReviewMode() || !this._current || this._current.kind !== 'full') return;
 
         // 0.6.10: .diff-removed-after (a bare tick) is gone — the injected
         // .diff-removed-inline block is its replacement jump target, so
@@ -681,8 +698,6 @@ export const DiffReviewManager = {
         );
         if (!targets.length) return;
 
-        e.preventDefault();
-        const delta = e.key === 'ArrowDown' ? 1 : -1;
         this._jumpIndex = (this._jumpIndex + delta + targets.length) % targets.length;
         const el = targets[this._jumpIndex];
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -739,7 +754,10 @@ export const DiffReviewManager = {
 
     _applyHighlightClasses() {
         this._clearHighlightClasses();
-        if (!this._highlightsOn || !this._current || this._current.kind !== 'full') return;
+        // 0.6.12: Review ON always shows highlights/strikethrough for a
+        // full diff now — no separate `_highlightsOn` sub-toggle left to
+        // check (see this module's docstring's "0.6.12" section).
+        if (!isReviewMode() || !this._current || this._current.kind !== 'full') return;
 
         const blocks = this._collectBlocks();
         if (!blocks.length) {

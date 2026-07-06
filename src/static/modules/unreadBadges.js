@@ -1,5 +1,6 @@
 /**
- * MDV - Unread Tree Badges (0.6.5; ✓ seen badge REMOVED in 0.6.8)
+ * MDV - Unread Tree Badges (0.6.5; ✓ seen badge REMOVED in 0.6.8; visibility
+ * gated by Review mode in 0.6.12)
  *
  * Task ③ of the 0.6.x review-surface plan
  * (docs/plan-review-surface-0.6.x.md — "③ 確認チェック") — see that doc's
@@ -19,6 +20,24 @@
  * bit of bookkeeping that fed it; `_unreadEtag` (the ● source of truth)
  * and everything downstream of it — folder count badges, the header chip,
  * `⌥⇧↓`/next-unread cycling — are UNCHANGED.
+ *
+ * ---------------------------------------------------------------------
+ * 0.6.12: gated by modules/reviewMode.js's isReviewMode() — owner's Word
+ * 校閲/Review tab mental model
+ * ---------------------------------------------------------------------
+ * Every badge this module paints (the ● dot, folder count badges, the
+ * sidebar header chip) is now part of the ONE review surface
+ * modules/reviewMode.js's toolbar button gates. `decorate()` and
+ * `_updateHeaderChip()` both check `isReviewMode()` FIRST and paint
+ * zero/hidden when it's OFF — but `_unreadEtag` (the map both read from)
+ * keeps getting updated by `handleFilesChanged()`/`_handleSeen()`
+ * regardless, so flipping Review back ON immediately shows the accurate
+ * current unread state with no re-scan. `init()` also subscribes to
+ * `onReviewModeChange()` to repaint on every toggle. The ⌥⇧↓ shortcut
+ * (`_handleShortcut()`) additionally no-ops outright while OFF — nothing
+ * is visible for it to cycle to. See modules/reviewMode.js's docstring's
+ * "Visibility gate, not a tracking gate" section for the shared rationale
+ * with modules/diffReview.js.
  *
  * ---------------------------------------------------------------------
  * Design: event-driven, never poll-driven
@@ -62,13 +81,15 @@
  *   1. WebSocketManager.setUnreadBadgesManager(UnreadBadgesManager) — the
  *      `files_changed` dispatch seam (see modules/websocket.js docstring).
  *   2. The FileTreeManager method wraps described above.
- *   3. UnreadBadgesManager.init() — builds the sidebar header chip and
- *      subscribes to diffReview.js's onSeen().
+ *   3. UnreadBadgesManager.init() — builds the sidebar header chip,
+ *      subscribes to diffReview.js's onSeen(), and (0.6.12) subscribes to
+ *      reviewMode.js's onReviewModeChange() to repaint on toggle.
  */
 import { state } from './state.js';
 import { elements } from './dom.js';
 import { TabManager } from './tabs.js';
 import { DiffReviewManager, getLastSeen, markSeen, onSeen } from './diffReview.js';
+import { isReviewMode, onReviewModeChange } from './reviewMode.js';
 
 export const UnreadBadgesManager = {
     // path -> etag|null. Presence = unread (the ONLY per-file status this
@@ -83,6 +104,15 @@ export const UnreadBadgesManager = {
         this._buildHeaderChip();
         onSeen((path) => this._handleSeen(path));
         document.addEventListener('keydown', (e) => this._handleShortcut(e));
+        // 0.6.12 (modules/reviewMode.js): repaint from the already-current
+        // `_unreadEtag` map whenever Review mode flips — no re-scan
+        // needed, tracking never stopped while it was OFF (see
+        // reviewMode.js's docstring's "Visibility gate, not a tracking
+        // gate" section).
+        onReviewModeChange(() => {
+            this.decorate();
+            this._updateHeaderChip();
+        });
     },
 
     _buildHeaderChip() {
@@ -104,6 +134,10 @@ export const UnreadBadgesManager = {
     _handleShortcut(e) {
         if (!e.altKey || !e.shiftKey || e.metaKey || e.ctrlKey) return;
         if (e.key !== 'ArrowDown') return;
+        // 0.6.12: inert while Review mode is OFF — the chip/badges this
+        // cycles between aren't even shown (see modules/reviewMode.js's
+        // docstring).
+        if (!isReviewMode()) return;
         const active = document.activeElement;
         const isTextInput = active && (
             active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable
@@ -227,9 +261,13 @@ export const UnreadBadgesManager = {
         return domOrder.concat(rest);
     },
 
+    // 0.6.12: the chip is part of the review surface Review mode gates —
+    // forced to 0/hidden while OFF, WITHOUT touching `_unreadEtag` itself
+    // (see modules/reviewMode.js's docstring's "Visibility gate, not a
+    // tracking gate" section).
     _updateHeaderChip() {
         if (!this._chipEl) return;
-        const count = this._unreadEtag.size;
+        const count = isReviewMode() ? this._unreadEtag.size : 0;
         this._chipEl.textContent = count > 0 ? String(count) : '';
         this._chipEl.classList.toggle('hidden', count === 0);
     },
@@ -239,11 +277,15 @@ export const UnreadBadgesManager = {
      * unread state (0.6.8: unread ● only, no ✓). Idempotent, no full-tree
      * rebuild — only adds/updates/removes one small badge child per row.
      * Safe (and cheap) to call redundantly; see this module's docstring
-     * for when app.js calls it.
+     * for when app.js calls it. 0.6.12: paints ZERO badges while Review
+     * mode is OFF (`showBadges` below), without discarding `_unreadEtag` —
+     * see modules/reviewMode.js's docstring's "Visibility gate, not a
+     * tracking gate" section.
      */
     decorate() {
         const treeEl = elements.fileTree;
         if (!treeEl) return;
+        const showBadges = isReviewMode();
         const unreadPaths = Array.from(this._unreadEtag.keys());
 
         treeEl.querySelectorAll('.tree-item[data-path]').forEach((el) => {
@@ -254,10 +296,12 @@ export const UnreadBadgesManager = {
 
             if (isDir) {
                 const prefix = path ? path + '/' : '';
-                const count = unreadPaths.reduce((n, p) => n + (p.startsWith(prefix) ? 1 : 0), 0);
+                const count = showBadges
+                    ? unreadPaths.reduce((n, p) => n + (p.startsWith(prefix) ? 1 : 0), 0)
+                    : 0;
                 this._renderCountBadge(contentEl, count);
             } else {
-                this._renderStatusBadge(contentEl, this._unreadEtag.has(path));
+                this._renderStatusBadge(contentEl, showBadges && this._unreadEtag.has(path));
             }
         });
     },
