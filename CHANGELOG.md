@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.14] - 2026-07-06
+
+### Changed — 校閲ボタン群の再配置とガタつき解消（オーナー指摘3点）
+
+- 「変更 N」「✓ 確認」を Edit/PDF の間から **Review ボタンの直右**に移動
+- 「変更 N」→「**次の変更 N**」に改名（クリック＝次の変更へジャンプ、を名前で言う）
+- Review ON 中は両ボタンを**常時表示**に変更し、対象がないタブでは
+  グレーアウト（disabled）で示す方式に。タブ切替や差分の出現・解消で
+  ボタンが出たり消えたりして後続の PDF/Style/検索がガタガタ動くのを解消
+  （非表示になるのは Review OFF のときだけ）
+
 ## [0.6.13] - 2026-07-06
 
 ### Changed
