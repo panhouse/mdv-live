@@ -56,3 +56,24 @@ test('dragging the handle tracks the cursor with no transition, persists once on
   const widthAfter = await sidebar.evaluate((el) => el.getBoundingClientRect().width);
   expect(Math.abs(widthAfter - Number(stored))).toBeLessThan(8);
 });
+
+test('a drag released in the collapse zone still remembers the last expanded width (codex)', async ({ page }) => {
+  await page.goto(server.baseURL + '/');
+  const handle = page.locator('.resize-handle');
+  const box = await handle.boundingBox();
+
+  const before = await page.evaluate(() => localStorage.getItem('mdv-sidebar-width'));
+
+  await page.mouse.move(box.x + box.width / 2, box.y + 200);
+  await page.mouse.down();
+  await page.mouse.move(420, box.y + 200, { steps: 4 }); // 開いた幅を経由して
+  await page.mouse.move(20, box.y + 200, { steps: 8 });  // 畳みゾーンで離す
+  await page.mouse.up();
+
+  await expect(page.locator('#sidebar')).toHaveClass(/collapsed/);
+  const stored = await page.evaluate(() => localStorage.getItem('mdv-sidebar-width'));
+  // このドラッグで経由した「最後の展開幅」（畳み境界の直前に通った値）が
+  // 保存されている — ドラッグ前の値のままではなく、かつ有効な展開幅
+  expect(Number(stored)).toBeGreaterThanOrEqual(50);
+  expect(stored).not.toBe(before);
+});

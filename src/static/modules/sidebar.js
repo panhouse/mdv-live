@@ -72,9 +72,15 @@ export const ResizeHandler = {
                 this._rafId = null;
             }
             if (this._pendingX !== null) {
-                SidebarManager.setWidth(this._pendingX); // final width, persisted once
+                SidebarManager.setWidth(this._pendingX, { persist: false });
                 this._pendingX = null;
             }
+            // Persist ONCE per drag, unconditionally: state.sidebarWidth
+            // always holds the last EXPANDED width (the collapsed branch
+            // never overwrites it), so a drag released below the collapse
+            // threshold still saves the width the user dragged through
+            // (codex 0.6.11 round-1).
+            localStorage.setItem(STORAGE_KEYS.SIDEBAR_WIDTH, state.sidebarWidth);
             elements.resizeHandle.classList.remove('active');
             elements.sidebar.classList.remove('resizing');
             document.body.style.cursor = '';
