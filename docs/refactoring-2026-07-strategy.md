@@ -6,19 +6,19 @@
 
 ## 0. 診断サマリー
 
-> **状態（0.6.8時点）**: この診断は 2026-07-05 のスナップショット。P1-1(CSRF)・
+> **状態（0.6.12時点、2026-07-06更新）**: この診断は 2026-07-05 のスナップショット。P1-1(CSRF)・
 > P1-2(無視リスト乖離)・P1-3(非アトミック保存)・P1-4(errors.js SSOT 未採用)・
 > P1-10(multer 1.x) は 0.6.0 で修正済み（詳細は CHANGELOG.md [0.6.0] 参照）。
 > P1-5(escapeHtml 3実装)・P1-6(readEditableText 重複)・P1-7(presenter 保存
 > ルーティング状態機械が未テスト) も解消済み（`src/utils/html.js`・
 > `src/static/lib/notesEditor.js`・`src/static/lib/saveQueue.js` に統合、
 > いずれもテスト付き）。P1-8(bin/mdv.js) は `src/cli/` への分割で、P1-9
-> (app.js) は `src/static/modules/` への分割（現在382行・28モジュール）で
-> 解消済み。P1-11(テスト数のハードコード) は CLAUDE.md/README とも
-> 「all-PASS」表記に是正済み。§4 成功基準は個別に再検証が必要（例: app.js
-> は現在382行で目標300行をやや超過、`modules/diffReview.js` 677行・
-> `modules/contentRenderer.js` 515行は目標500行を超過 — 0.6.x でレビュー
-> サーフェス機能を追加した影響）。
+> (app.js) は `src/static/modules/` への分割で解消済み。P1-11(テスト数の
+> ハードコード) は CLAUDE.md/README とも「all-PASS」表記に是正済み。§4
+> 成功基準は個別に再検証が必要（app.js は388行、modules/diffReview.js は
+> 896行（0.6.9-0.6.12でReview mode統合に伴い677→896行へさらに乖離）・
+> contentRenderer.js は515行で未達 — 0.6.x でレビューサーフェス機能を
+> 追加した影響）。
 
 コードベースは「**不均一にリファクタ済み**」。2026-05 のリファクタで作られた SSOT 基盤
 （utils/errors.js, etag.js, atomicWrite.js, pathLock.js, marpNote/ の guard 分離）は本物だが、
@@ -130,7 +130,7 @@ publish はユーザー承認後のみ。
 - [x] escapeHtml 実装がサーバー側 1 箇所
 - [x] 全ミューテーション API に Origin ガード
 - [x] POST /api/file が atomicWrite + withPathLock 経由
-- [ ] app.js が 300 行以下の bootstrap になり、modules/ が各 500 行以下（app.js は382行、modules/diffReview.js は677行・contentRenderer.js は515行で未達）
+- [ ] app.js が 300 行以下の bootstrap になり、modules/ が各 500 行以下（app.js は388行、modules/diffReview.js は896行（0.6.9-0.6.12でReview mode統合に伴い677→896行へさらに乖離）・contentRenderer.js は515行で未達）
 - [x] フロント HTTP 呼び出しが apiClient 経由に統一（XHR upload は文書化された例外）
 - [x] E2E スモーク 10 本 + CI が回る
 - [x] bin/mdv.js のロジックが src/cli/ で export されユニットテスト可能
