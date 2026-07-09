@@ -41,9 +41,9 @@ jobs:
         run: npm run test:e2e
 
       - name: Audit production dependencies
-        # 依存更新（multer 2.x 等）完了までは情報提供のみ。完了後に continue-on-error を外す。
+        # 2026-07-09 に全脆弱性を解消（audit fix・0 vulnerabilities）したため厳格化。
+        # ここが落ちたら「無関係なPRでも直してから進む」が方針（後回しにしない）。
         run: npm audit --omit=dev
-        continue-on-error: true
 
       - name: Verify npm tarball contents
         run: npm pack --dry-run
