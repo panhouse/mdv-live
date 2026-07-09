@@ -14,6 +14,7 @@
  * `wheel` event with `ctrlKey` set, so ctrl+scroll on a mouse zooms too.
  */
 import * as MarpZoomLib from '../lib/marpZoom.js';
+import { state } from './state.js';
 
 export const MarpZoom = {
         area: null,
@@ -21,6 +22,10 @@ export const MarpZoom = {
         onWheel: null,
         onDblClick: null,
         ro: null,
+        // Set when the ResizeObserver fires while a sidebar drag is in
+        // progress (state.isResizing) — the re-apply is deferred to the
+        // drag's end instead of running every frame (0.6.15).
+        _dirty: false,
 
         // Pure zoom math lives in lib/marpZoom.js so it can be unit-tested
         // without a DOM. Stage 3d: imported directly as an ES module
@@ -51,6 +56,15 @@ export const MarpZoom = {
             // fit instead of freezing at a stale size.
             if (typeof ResizeObserver !== 'undefined') {
                 this.ro = new ResizeObserver(() => {
+                    // A sidebar drag fires this observer every frame the
+                    // pane's width changes — re-applying zoom on every one
+                    // of those is the "重い" drag lag (owner report,
+                    // 0.6.15). Defer to the drag's end (see the
+                    // mdv:sidebar-resize-end listener below) instead.
+                    if (state.isResizing) {
+                        this._dirty = true;
+                        return;
+                    }
                     if (!this.lib().isFit(this.zoom)) this.zoomTo(this.zoom);
                 });
                 this.ro.observe(area);
@@ -137,3 +151,16 @@ export const MarpZoom = {
             this.area.scrollTop = 0;
         }
 };
+
+// Wired once at module scope (not inside init()/detach(), which run once
+// per Marp file open/close and would otherwise pile up duplicate document
+// listeners). Dispatched by modules/sidebar.js ResizeHandler.end() —
+// explicit event, not an implicit re-notification, so a deferred re-apply
+// (see the ResizeObserver above) is never silently dropped (codex 0.6.15).
+document.addEventListener('mdv:sidebar-resize-end', () => {
+    if (!MarpZoom._dirty) return;
+    MarpZoom._dirty = false;
+    if (MarpZoom.area && !MarpZoom.lib().isFit(MarpZoom.zoom)) {
+        MarpZoom.zoomTo(MarpZoom.zoom);
+    }
+});
