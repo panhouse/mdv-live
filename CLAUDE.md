@@ -85,7 +85,8 @@ src/
     ├── modules/                  # one manager per module, see docs/ARCHITECTURE.md for the full list
     ├── lib/                      # DOM-free / cross-cutting: apiClient, saveQueue,
     │                             #   tabRegistry, presenterChannel, errorCodes,
-    │                             #   debounce, marpZoom, notesEditor
+    │                             #   debounce, marpZoom, notesEditor,
+    │                             #   presenterSaveRouting
     └── vendor/                   # offline-vendored highlight.js/mermaid/tailwind/
                                   #   html2pdf + versions.json (see sync-vendor.js)
 tests/

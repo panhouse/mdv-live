@@ -128,6 +128,7 @@ from `app.js`).
 | `debounce.js` | `createDebouncedAction()` factory (schedule/flush/cancel) — used by `inlineNotes.js`; `editor.js`'s autosave is deliberately hand-rolled (documented in its own file) and not on this factory. |
 | `marpZoom.js` | Pure, DOM-free zoom math (contain-fit, clamp, wheel→zoom) for `marpZoomGlue.js`. Unit-tested without a browser. |
 | `notesEditor.js` | `readEditableText()` (contenteditable → newline-preserving text) and `isNotesEditable()` (single-note-per-slide rule), shared by `inlineNotes.js` and `presenter.html`'s inline script. |
+| `presenterSaveRouting.js` | `createSaveRouter()` — the Presenter window's save-routing/failover protocol (which main window a note edit routes to, find-saver/saver-here re-pinning, ack-timeout failover, `note-saved` ack classification), extracted DOM-free from `presenter.html`'s inline script for unit-test coverage. Unit-tested without a browser (`tests/test-presenter-save-routing.js`). See §2.3. |
 
 `src/static/vendor/` holds offline copies of highlight.js, mermaid, tailwind,
 and html2pdf.js (no CDN dependency — mdv works fully offline). `versions.json`
@@ -247,6 +248,10 @@ presenter → main:  request-slides, goto, edit-note, find-saver
 - Each `edit-note` carries a `requestId` echoed back in the matching
   `note-saved`, so Presenter View can correlate a save result to the request
   that triggered it (concurrent edits to different slides don't cross wires).
+- The pinning/failover/ack-classification decisions above are implemented as
+  the DOM-free `createSaveRouter()` in `src/static/lib/presenterSaveRouting.js`
+  (unit-tested in `tests/test-presenter-save-routing.js`); `presenter.html`'s
+  inline script only wires it to `channel.postMessage` and the save-status UI.
 
 ## 3. SSOT inventory
 
@@ -267,6 +272,7 @@ presenter → main:  request-slides, goto, edit-note, find-saver
 | Rendered-file envelope → tab object | `src/static/modules/renderedFile.js` | `applyRenderedFile()`, used by 3 call sites (tabs/websocket/editor). |
 | Review-mode on/off (gates unread badges/diff highlights/strikethrough) | `src/static/modules/reviewMode.js` | Single GLOBAL `STORAGE_KEYS.REVIEW_MODE` boolean, default OFF. `isReviewMode()`/`onReviewModeChange()` are the read/subscribe seam `diffReview.js` and `unreadBadges.js` both consult — background tracking keeps running while OFF, only painting is gated. |
 | BroadcastChannel channel name + message types | `src/static/lib/presenterChannel.js` | Mirrored (values only) by `presenter.html`'s inline script. |
+| Presenter save-routing/failover decisions (pin/find-saver/ack-timeout/note-saved classification) | `src/static/lib/presenterSaveRouting.js` | `createSaveRouter()`, DOM-free; `presenter.html` wires it to the channel + save-status UI. |
 | Marp cluster shared state (`currentSlide`, `keyHandler`) | `src/static/modules/marpState.js` | Get/set accessors, since native ESM can't share a bare `let`. |
 | `mdv.config.json` loading | `src/cli/config.js` | Consumed by `src/cli/registry.js` (viewer) and `src/cli/convert.js`. |
 | Version string | `src/utils/version.js` | Reads `package.json` once, cached. |
