@@ -24,6 +24,16 @@
  *       straight from src/utils/lineDiff.js's `diffLines()` — see that
  *       module's docstring. Backs the frontend's Word-style strikethrough
  *       inline display, modules/diffReview.js.)
+ *       When the current content is a Marp deck, this branch also carries
+ *       `slideRanges: [{ start, end }, ...]` — ONE-based inclusive raw-line
+ *       ranges per slide (same convention as `added`/`changed` above),
+ *       derived from marpitAdapter.js's `parseDeck()` (the Marp/Marpit
+ *       parsing SSOT — never re-parsed in the browser). Lets the frontend's
+ *       modules/marpDiffIndicator.js work out which slide(s) a hunk touches
+ *       without a second Marp parser client-side. Parsed only here (on an
+ *       actual pending diff), not on every render, and best-effort: a deck
+ *       too malformed for `parseDeck()` (`NOT_PARSEABLE`) just omits the
+ *       field rather than failing the whole diff response.
  *   - `from` missing, unknown, or its content was evicted/oversized:
  *       { available: false, reason: 'unknown-baseline', currentHash }
  *   - current file content exceeds JOURNAL_MAX_FILE_BYTES (never read/hashed):
@@ -42,6 +52,7 @@ import { makeEtag } from '../utils/etag.js';
 import { diffLines } from '../utils/lineDiff.js';
 import { mkError, sendError } from '../utils/errors.js';
 import { resolveWithinRoot } from '../utils/path.js';
+import { isMarp, parseDeck } from '../rendering/marpitAdapter.js';
 
 /**
  * Setup the change-tracking diff route.
@@ -108,7 +119,19 @@ export function setupDiffRoutes(app) {
         return res.json({ available: false, reason: 'too-large', currentHash });
       }
 
-      return res.json({ available: true, identical: false, currentHash, ...diff });
+      const response = { available: true, identical: false, currentHash, ...diff };
+      if (isMarp(current)) {
+        try {
+          response.slideRanges = parseDeck(current).slideRanges.map((r) => ({
+            start: r.startLine + 1,
+            end: r.endLine
+          }));
+        } catch {
+          // Malformed deck (NOT_PARSEABLE) — the slide indicator just won't
+          // show for this file; the diff itself is still valid and useful.
+        }
+      }
+      return res.json(response);
     } catch (err) {
       if (err.code === 'ENOENT') {
         return sendError(res, mkError('NOT_FOUND', 'File not found'));

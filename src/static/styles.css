@@ -1469,6 +1469,23 @@ body.marp-fullscreen .marp-nav.dragging .slide-counter {
     margin-left: 8px;
 }
 
+/* 0.6.16: Review-mode-only, current-slide-only indicator — see
+   modules/marpDiffIndicator.js's docstring for why this is a single dot
+   rather than a per-slide strip. Reuses .diff-added/.diff-changed's yellow
+   (--warning). Unlike #diffToggleBtn/#diffConfirmBtn (permanently mounted,
+   gated by .hidden), this element is only ever CREATED next to
+   .slide-counter when relevant and REMOVED otherwise (marpDiffIndicator.js)
+   — genuinely zero DOM trace while Review mode is off, not just
+   zero-visible. No .hidden state needed here for that reason. */
+.marp-nav .marp-diff-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--warning);
+    margin-left: -6px;
+    flex-shrink: 0;
+}
+
 /* Fullscreen Mode */
 body.marp-fullscreen {
     overflow: hidden;

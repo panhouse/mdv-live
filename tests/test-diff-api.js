@@ -369,3 +369,60 @@ describe('GET /api/diff — identical response still seeds the journal (codex ro
     }
   });
 });
+
+describe('GET /api/diff — slideRanges (0.6.16, Marp deck diffs only, feeds modules/marpDiffIndicator.js)', () => {
+  it('a real diff on a Marp deck includes one-based slideRanges matching the current content\'s slides', async () => {
+    const deck = '---\nmarp: true\n---\n\n# 一枚目\n\n---\n\n# 二枚目\n';
+    const ctx = await startTestServer({ files: { 'deck.md': deck } });
+    try {
+      const before = await (await fetch(`${ctx.baseUrl}/api/diff?path=deck.md`)).json();
+      const baselineHash = before.currentHash;
+
+      const edited = deck + '\n---\n\n# 三枚目\n';
+      const fs = await import('node:fs/promises');
+      const path = await import('node:path');
+      await fs.writeFile(path.join(ctx.rootDir, 'deck.md'), edited);
+
+      const res = await fetch(`${ctx.baseUrl}/api/diff?path=deck.md&from=${encodeURIComponent(baselineHash)}`);
+      const data = await res.json();
+      assert.strictEqual(data.available, true);
+      assert.ok(Array.isArray(data.slideRanges), 'slideRanges must be present for a Marp deck diff');
+      assert.strictEqual(data.slideRanges.length, 3);
+      // One-based inclusive, back-to-back (each slide's range starts the
+      // line right after the previous slide's last line) — matching
+      // src/api/diff.js's docstring (marpitAdapter.js's parseDeck()
+      // 0-based startLine + 1 / endLine as-is, which is already the
+      // previous slide's 1-based last line).
+      assert.strictEqual(data.slideRanges[0].start, 1);
+      for (let i = 1; i < data.slideRanges.length; i++) {
+        assert.strictEqual(data.slideRanges[i].start, data.slideRanges[i - 1].end + 1);
+      }
+      // At least one added range overlaps the LAST (newly-added) slide's
+      // range — same overlap test lib/marpDiffMap.js's changedSlideIndices()
+      // uses, not strict containment: the hunk may also cover the blank
+      // separator line just above the new `---` slide divider.
+      const lastRange = data.slideRanges[data.slideRanges.length - 1];
+      assert.ok(data.added.some(([s, e]) => lastRange.start <= e && s <= lastRange.end),
+        `expected an added range overlapping the new slide ${JSON.stringify(lastRange)}, got ${JSON.stringify(data.added)}`);
+    } finally {
+      await ctx.stop();
+    }
+  });
+
+  it('a non-Marp diff never includes slideRanges', async () => {
+    const ctx = await startTestServer({ files: { 'plain.md': '# Title\n\nOne.\n' } });
+    try {
+      const before = await (await fetch(`${ctx.baseUrl}/api/diff?path=plain.md`)).json();
+      const fs = await import('node:fs/promises');
+      const path = await import('node:path');
+      await fs.writeFile(path.join(ctx.rootDir, 'plain.md'), '# Title\n\nOne.\n\nTwo.\n');
+
+      const res = await fetch(`${ctx.baseUrl}/api/diff?path=plain.md&from=${encodeURIComponent(before.currentHash)}`);
+      const data = await res.json();
+      assert.strictEqual(data.available, true);
+      assert.strictEqual('slideRanges' in data, false);
+    } finally {
+      await ctx.stop();
+    }
+  });
+});

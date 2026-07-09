@@ -34,6 +34,7 @@ import { SearchPalette } from './modules/searchPalette.js';
 import { DiffReviewManager } from './modules/diffReview.js';
 import { UnreadBadgesManager } from './modules/unreadBadges.js';
 import { ReviewModeManager } from './modules/reviewMode.js';
+import { MarpDiffIndicator } from './modules/marpDiffIndicator.js';
 import { MDVApi } from './lib/apiClient.js';
 
 // ============================================================
@@ -268,6 +269,11 @@ async function init() {
     ReviewModeManager.init();
     DiffReviewManager.init();
     UnreadBadgesManager.init();
+    // Subscribes to DiffReviewManager's onCurrentChange() seam — order vs.
+    // DiffReviewManager.init() doesn't matter (onCurrentChange() just
+    // registers a listener, same as onSeen() above), placed here for
+    // readability alongside the other review-surface managers.
+    MarpDiffIndicator.init();
     KeyboardManager.init();
     PresenterView.init();
 
