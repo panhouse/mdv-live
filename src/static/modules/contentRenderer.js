@@ -25,6 +25,7 @@ import { InlineNotesPanel } from './inlineNotes.js';
 import { MarpSplitHandle } from './marpSplit.js';
 import { MarpZoom } from './marpZoomGlue.js';
 import { PresenterView } from './presenterView.js';
+import { MarpDiffIndicator } from './marpDiffIndicator.js';
 
 export const ContentRenderer = {
         render(htmlContent, fileType) {
@@ -201,6 +202,7 @@ export const ContentRenderer = {
                 if (prevBtn) prevBtn.disabled = index === 0;
                 if (nextBtn) nextBtn.disabled = index === slides.length - 1;
                 PresenterView.broadcastIndex(index);
+                MarpDiffIndicator.onSlideChange(index);
             };
 
             const nextSlide = () => {

@@ -343,6 +343,22 @@ export function onSeen(fn) {
     seenListeners.push(fn);
 }
 
+// 0.6.16 subscription seam for modules/marpDiffIndicator.js — same shape as
+// onSeen() above, but fired every time `_current` itself changes (a new
+// diff arrives, the active tab/path changes, or the pending diff resolves
+// via ✓ 確認), not just on confirm. `current` is the same object
+// `_applyResponse()` builds (or null once hidden) — see its shape there;
+// Marp tabs carry `slideRanges`/`added`/`changed` on it even though
+// `kind !== 'full'` skips the line-highlight paint for them.
+const currentListeners = [];
+
+/**
+ * @param {(current: object|null) => void} fn
+ */
+export function onCurrentChange(fn) {
+    currentListeners.push(fn);
+}
+
 /**
  * Record `path` as confirmed-seen at `hash` (now).
  * @param {string} path
@@ -394,6 +410,24 @@ export const DiffReviewManager = {
     resetSeeds() {
         this._seededPaths.clear();
         this._staleRefetchKey = null;
+    },
+
+    /**
+     * The ONE place `this._current` is assigned — notifies
+     * modules/marpDiffIndicator.js's onCurrentChange() seam every time,
+     * including the null (hidden) case, so it never has to poll or
+     * duplicate this module's diff-fetch logic.
+     * @param {object|null} value
+     */
+    _setCurrent(value) {
+        this._current = value;
+        for (const fn of currentListeners) {
+            try {
+                fn(value);
+            } catch (e) {
+                console.error('diffReview: onCurrentChange listener failed:', e);
+            }
+        }
     },
 
     init() {
@@ -591,7 +625,7 @@ export const DiffReviewManager = {
                 this._hide();
                 return;
             }
-            this._current = { path: tab.path, kind: 'unavailable', currentHash: data.currentHash };
+            this._setCurrent({ path: tab.path, kind: 'unavailable', currentHash: data.currentHash });
             this._jumpIndex = -1;
             this._clearHighlightClasses();
             this._syncToolbar();
@@ -614,7 +648,7 @@ export const DiffReviewManager = {
             this._hide();
             return;
         }
-        this._current = {
+        this._setCurrent({
             path: tab.path,
             kind: canHighlight ? 'full' : 'bar-only',
             currentHash: data.currentHash,
@@ -622,8 +656,13 @@ export const DiffReviewManager = {
             changed,
             removedAt,
             removed,
-            count
-        };
+            count,
+            // Only present for Marp tabs (src/api/diff.js) — modules/
+            // marpDiffIndicator.js intersects it against added/changed to
+            // work out which slide(s) a hunk touches. undefined for
+            // non-Marp tabs, same as data.slideRanges itself.
+            slideRanges: data.slideRanges
+        });
         // 0.6.12: visibility is gated by isReviewMode() (modules/
         // reviewMode.js), a preference this module doesn't own — a
         // newly-arrived diff does NOT touch it either way, unlike 0.6.8's
@@ -635,7 +674,7 @@ export const DiffReviewManager = {
     },
 
     _hide() {
-        this._current = null;
+        this._setCurrent(null);
         this._jumpIndex = -1;
         this._syncToolbar();
         this._clearHighlightClasses();

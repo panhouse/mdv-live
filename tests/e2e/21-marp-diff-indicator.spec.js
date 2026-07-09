@@ -1,0 +1,123 @@
+import { test, expect } from '@playwright/test';
+import { writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { makeFixtureDir, seedFiles, startServer, removeFixtureDir, buildMarpDeck } from './helpers.js';
+
+// modules/marpDiffIndicator.js (0.6.16) — Review mode's diff tracking
+// (modules/diffReview.js) already highlights changed lines for plain
+// markdown, but the Marp preview tab showed nothing at all. This adds the
+// smallest visible trace: a small yellow dot next to the existing
+// `.marp-nav` slide counter, shown only while Review is ON, only for a
+// Marp tab, and only when the CURRENTLY DISPLAYED slide overlaps an
+// added/changed line range (src/api/diff.js's Marp-only `slideRanges` +
+// lib/marpDiffMap.js's changedSlideIndices()).
+//
+// Same "zero DOM trace while OFF" contract every other review surface
+// documents (modules/reviewMode.js) — but this dot is CREATED/REMOVED
+// outright (marpDiffIndicator.js), not just class-hidden like
+// #diffToggleBtn/#diffConfirmBtn, so `.marp-diff-dot` must not exist in the
+// DOM at all whenever it shouldn't show — not merely be invisible.
+
+let fixtureDir;
+let server;
+
+async function waitForBaseline(page, p) {
+  await expect.poll(() => page.evaluate((rel) => {
+    const store = JSON.parse(localStorage.getItem('mdv-last-seen') || '{}');
+    const key = Object.keys(store).find((k) => k.endsWith('\u0000' + rel));
+    return !!key && typeof store[key].hash === 'string';
+  }, p), { timeout: 5000 }).toBe(true);
+}
+
+async function toggleReviewMode(page) {
+  await page.locator('#reviewModeToggle').click();
+}
+
+const FILE = 'deck.md';
+const ORIGINAL = buildMarpDeck(['note one', 'note two']);
+// Slide 2's heading changes; slide 1 is untouched.
+const EDITED = ORIGINAL.replace('# Slide 2', '# Slide 2 (revised)');
+
+test.beforeAll(async () => {
+  fixtureDir = await makeFixtureDir('mdv-e2e-marp-diff-dot-');
+  await seedFiles(fixtureDir, { [FILE]: ORIGINAL });
+  server = await startServer(fixtureDir);
+});
+
+test.afterAll(async () => {
+  await server.stop();
+  await removeFixtureDir(fixtureDir);
+});
+
+test('Marp diff dot: zero DOM trace while Review is OFF, appears only for the changed slide while ON, and disappears on ✓ 確認', async ({ page }) => {
+  await page.goto(server.baseURL + '/');
+  await page.locator(`.tree-item[data-path="${FILE}"] [data-action="open"]`).click();
+  await expect(page.locator('.marpit')).toBeVisible();
+  await waitForBaseline(page, FILE);
+
+  const dot = page.locator('.marp-diff-dot');
+  await expect(dot).toHaveCount(0);
+
+  // External edit to slide 2 only.
+  await writeFile(path.join(fixtureDir, FILE), EDITED, 'utf-8');
+  // The active tab is slide 1, so the visible slide's own text never
+  // changes — poll the toolbar's pending-diff count once Review is on
+  // instead of pane content. First confirm the background diff actually
+  // landed by giving the file_update -> GET /api/diff round trip time,
+  // matching 18-diff-highlight.spec.js's pattern for an inactive-slide edit.
+  await page.waitForTimeout(1000);
+
+  // Still OFF: genuinely zero DOM trace, even though a real diff is
+  // sitting there in the background (proven the instant Review flips on).
+  await expect(dot).toHaveCount(0);
+
+  await toggleReviewMode(page);
+  await expect(page.locator('#diffToggleBtn')).toBeEnabled({ timeout: 6000 });
+
+  // On slide 1 (unchanged): no dot.
+  await expect(page.locator('.slide-counter')).toHaveText('1 / 2');
+  await expect(dot).toHaveCount(0);
+
+  // Navigate to slide 2 (changed): dot appears.
+  await page.locator('.marp-next').click();
+  await expect(page.locator('.slide-counter')).toHaveText('2 / 2');
+  await expect(dot).toHaveCount(1);
+  await expect(dot).toHaveAttribute('title', 'このスライドに変更があります');
+
+  // Back to slide 1: dot disappears again (per-current-slide, not per-deck).
+  await page.locator('.marp-prev').click();
+  await expect(page.locator('.slide-counter')).toHaveText('1 / 2');
+  await expect(dot).toHaveCount(0);
+
+  // Turning Review OFF while looking at the changed slide hides it outright,
+  // even though the underlying diff is untouched.
+  await page.locator('.marp-next').click();
+  await expect(dot).toHaveCount(1);
+  await toggleReviewMode(page);
+  await expect(dot).toHaveCount(0);
+
+  // Re-enable Review: the dot reappears without any new edit (background
+  // tracking never forgot the pending diff).
+  await toggleReviewMode(page);
+  await expect(dot).toHaveCount(1);
+
+  // ✓ 確認 resolves the pending diff -> the dot clears, same semantics as
+  // the toolbar buttons/highlights it's wired through onCurrentChange().
+  await page.locator('#diffConfirmBtn').click();
+  await expect(dot).toHaveCount(0);
+  await expect(page.locator('#diffToggleBtn')).toBeDisabled();
+});
+
+test('Marp diff dot: never shown for a non-Marp tab even while Review is ON', async ({ page }) => {
+  const p = 'plain.md';
+  await writeFile(path.join(fixtureDir, p), '# Plain\n\n本文。\n');
+  await page.goto(server.baseURL + '/');
+  await page.locator(`.tree-item[data-path="${p}"] [data-action="open"]`).click();
+  await expect(page.locator('#content h1')).toHaveText('Plain');
+  await toggleReviewMode(page);
+  await expect(page.locator('.marp-diff-dot')).toHaveCount(0);
+  // Turn Review back off so it doesn't leak (localStorage/global) into
+  // whichever spec file Playwright happens to run in this worker next —
+  // each spec gets its own browser context, but being tidy costs nothing.
+  await toggleReviewMode(page);
+});
