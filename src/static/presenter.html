@@ -253,6 +253,7 @@
 import { readEditableText, isNotesEditable } from '/static/lib/notesEditor.js';
 import { ERROR_CODES } from '/static/lib/errorCodes.js';
 import { TYPES } from '/static/lib/presenterChannel.js';
+import { createSaveRouter } from '/static/lib/presenterSaveRouting.js';
 (function () {
   const channel = (window.MDVPresenterChannel && window.MDVPresenterChannel.create()) || null;
   if (!channel) {
@@ -290,20 +291,6 @@ import { TYPES } from '/static/lib/presenterChannel.js';
   let deckPath = '';
   let saveTimer = null;
 
-  // Window-routing + failover state: the presenter delegates saving to
-  // ONE main window (saverWindowId — the first that can serve this deck).
-  // saveAckTimer detects when that window stops answering. inflightSave /
-  // pendingSave hold a FROZEN copy of the edit ({path, slideIndex, note,
-  // etag, requestId}) so a failover resends the original edit, not
-  // whatever the editor shows after a later blur / slide navigation.
-  let saverWindowId = null;
-  let saveAckTimer = null;
-  let findSaverTimer = null; // bounds the wait for a find-saver reply
-  let inflightSave = null;   // routed, awaiting ack | null
-  let pendingSave = null;    // deferred until a saver is (re)pinned | null
-  const SAVE_ACK_TIMEOUT_MS = 6000;
-  const FIND_SAVER_TIMEOUT_MS = 3000;
-
   // Each edit-note carries a globally-unique requestId so its note-saved
   // ack matches the exact save that produced it — an older save's ack
   // must never clear a newer save's failover timer. The presenterId
@@ -316,6 +303,21 @@ import { TYPES } from '/static/lib/presenterChannel.js';
     saveRequestSeq += 1;
     return presenterId + ':' + saveRequestSeq;
   }
+
+  // Window-routing + failover protocol (which main window saves, retry on a
+  // gone/unresponsive window) — pure logic extracted to lib/presenterSaveRouting.js.
+  // This inline script only wires it to the channel (postMessage) and the UI
+  // (save-status text).
+  const saveRouter = createSaveRouter({
+    postMessage: (msg) => channel.postMessage(msg),
+    newRequestId,
+    onNoSaverFound: () => {
+      setSaveStatus('保存失敗: 保存先ウィンドウが見つかりません', 'err');
+    },
+    onSaveStart: () => {
+      setSaveStatus('保存中…');
+    }
+  });
 
   const notesBanner = document.getElementById('notesBanner');
 
@@ -433,17 +435,16 @@ import { TYPES } from '/static/lib/presenterChannel.js';
     // Detect a deck switch BEFORE updating deckPath: the presenter window
     // can be reused by another main window for another deck, and the old
     // saver may not hold the new deck (→ "No active Marp tab", no retry).
-    const deckChanged = !!payload.path && payload.path !== deckPath;
+    // Pin (or re-pin) the window serving this deck as our saver — see
+    // lib/presenterSaveRouting.js's pinFromSlides() for the full rule
+    // (first window wins; re-pins on a deck switch; failover for a gone
+    // saver is handled separately via find-saver / saver-here).
+    saveRouter.pinFromSlides({
+      prevDeckPath: deckPath,
+      path: payload.path,
+      sourceWindowId: payload.sourceWindowId
+    });
     deckPath = payload.path || deckPath;
-    // Pin the window serving this deck as our saver, so edit-note saves
-    // route to exactly one window (no duplicate PUTs). A non-empty
-    // `slides` proves the sender holds the deck. Re-pin on a deck switch
-    // (the presenter window can be reused by another main window).
-    // Failover (saver gone) is handled separately via find-saver /
-    // saver-here, which also discovers inactive background deck tabs.
-    if (payload.sourceWindowId && (saverWindowId === null || deckChanged)) {
-      saverWindowId = payload.sourceWindowId;
-    }
     slideCount = stageCurrent.querySelectorAll('.marpit > svg[data-marpit-svg]').length;
     render(typeof payload.current === 'number' ? payload.current : currentIndex);
   }
@@ -478,44 +479,11 @@ import { TYPES } from '/static/lib/presenterChannel.js';
     }
   }
 
-  // Broadcast a find-saver query for `path` and bound the wait: a deck
-  // open in ANY window's tab (active OR background) answers `saver-here`;
-  // if none does within the timeout the deck has no reachable window, so
-  // surface an honest error instead of spinning on 保存中… forever.
-  function requestSaver(path) {
-    channel.postMessage({ type: TYPES.FIND_SAVER, path });
-    if (findSaverTimer !== null) clearTimeout(findSaverTimer);
-    findSaverTimer = setTimeout(() => {
-      findSaverTimer = null;
-      if (pendingSave !== null) {
-        pendingSave = null;
-        setSaveStatus('保存失敗: 保存先ウィンドウが見つかりません', 'err');
-      }
-    }, FIND_SAVER_TIMEOUT_MS);
-  }
-
-  // Re-pin a live saver and resend `payload` (the exact edit that could
-  // not be delivered). Used when the saver window stops answering or no
-  // longer holds the deck.
-  function failOver(payload) {
-    if (saveAckTimer !== null) {
-      clearTimeout(saveAckTimer);
-      saveAckTimer = null;
-    }
-    saverWindowId = null;
-    inflightSave = null;
-    if (!payload) return;
-    pendingSave = payload;
-    requestSaver(payload.path);
-  }
-
-  // The saver window never acknowledged our edit-note (it was closed or
-  // frozen). Fail over, resending the exact edit that timed out.
-  function onSaveAckTimeout() {
-    saveAckTimer = null;
-    failOver(inflightSave);
-  }
-
+  // find-saver broadcast / failover / ack-timeout / edit-note routing all
+  // now live in saveRouter (lib/presenterSaveRouting.js) — see its docstring
+  // for the full protocol. This inline script only supplies the frozen edit
+  // payload and reacts to the UI callbacks wired into createSaveRouter()
+  // above.
   function sendNoteSave() {
     // Freeze the slide / deck / etag captured when the user started
     // editing — not the live values, which can change under us if the
@@ -525,50 +493,11 @@ import { TYPES } from '/static/lib/presenterChannel.js';
     const idx = editingSlideIndex >= 0 ? editingSlideIndex : currentIndex;
     const value = getNotesText();
     notes[idx] = value.trim();
-    postEditNote({
+    saveRouter.sendEditNote({
       path: editingPath || deckPath,
       slideIndex: idx,
       note: value,
       etag: editingEtag || deckEtag
-    });
-  }
-
-  // Route one frozen edit payload to the pinned saver, or defer it until
-  // a saver is (re)pinned.
-  function postEditNote(payload) {
-    setSaveStatus('保存中…');
-
-    // No live saver pinned yet (first edit before slides arrived, or the
-    // previous saver window went away). Routing an edit-note without a
-    // targetWindowId would let EVERY main window save it and collide on
-    // the optimistic lock — the exact bug this routing fixes. Instead ask
-    // who can serve this deck; the saver-here handler re-pins and resends.
-    if (saverWindowId === null) {
-      pendingSave = payload;
-      requestSaver(payload.path);
-      return;
-    }
-
-    // Fresh requestId per actual send: a failover resend must NOT reuse
-    // the timed-out original's id, or that original's late ack would be
-    // mistaken for the resend's ack.
-    inflightSave = {
-      path: payload.path,
-      slideIndex: payload.slideIndex,
-      note: payload.note,
-      etag: payload.etag,
-      requestId: newRequestId()
-    };
-    if (saveAckTimer !== null) clearTimeout(saveAckTimer);
-    saveAckTimer = setTimeout(onSaveAckTimeout, SAVE_ACK_TIMEOUT_MS);
-    channel.postMessage({
-      type: TYPES.EDIT_NOTE,
-      path: inflightSave.path,
-      etag: inflightSave.etag,
-      slideIndex: inflightSave.slideIndex,
-      note: inflightSave.note,
-      requestId: inflightSave.requestId,
-      targetWindowId: saverWindowId
     });
   }
 
@@ -634,52 +563,23 @@ import { TYPES } from '/static/lib/presenterChannel.js';
     } else if (msg.type === TYPES.INDEX) {
       render(msg.index);
     } else if (msg.type === TYPES.SAVER_HERE) {
-      // A window answered our find-saver query. Pin it and resend the
-      // deferred edit — but only if it serves the exact deck that edit
-      // targets (find-saver is path-scoped, yet guard defensively). The
-      // first answer wins; later answers find pendingSave already null.
-      if (pendingSave !== null
-          && msg.windowId
-          && msg.path === pendingSave.path) {
-        if (findSaverTimer !== null) {
-          clearTimeout(findSaverTimer);
-          findSaverTimer = null;
-        }
-        saverWindowId = msg.windowId;
-        const queued = pendingSave;
-        pendingSave = null;
-        postEditNote(queued);
-      }
+      // Routing decision (pin the answering window + resend the deferred
+      // edit, first-answer-wins) lives in saveRouter.handleSaverHere() —
+      // see lib/presenterSaveRouting.js.
+      saveRouter.handleSaverHere(msg);
     } else if (msg.type === TYPES.NOTE_SAVED) {
-      // Is this the answer to OUR routed save? Match on the unique
-      // requestId so an older save's ack can't clear a newer save's
-      // failover timer, and a foreign save (e.g. an inline edit) for the
-      // same slide is ignored — inline saves carry no requestId.
-      const isOwnAck = inflightSave !== null
-        && msg.requestId != null
-        && msg.requestId === inflightSave.requestId;
-      // A note-saved that carries a requestId but isn't our current
-      // inflight save is a superseded / timed-out save's late ack — drop
-      // it so it can't overwrite status / backup / editingEtag for the
-      // current edit. requestId-less acks (inline edits) still fall
-      // through to the observer logic below.
-      if (!isOwnAck && msg.requestId != null) return;
-      if (isOwnAck) {
-        // The pinned saver no longer holds this deck (tab closed / switched
-        // away). It IS alive, but cannot save — fail over to a window that
-        // can, resending the same edit, instead of surfacing an error.
-        if (msg.code === ERROR_CODES.NO_DECK) {
-          failOver(inflightSave);
-          return;
-        }
-        // A real answer (success OR genuine STALE) — stop the failover
-        // timer and let the status handling below run.
-        if (saveAckTimer !== null) {
-          clearTimeout(saveAckTimer);
-          saveAckTimer = null;
-        }
-        inflightSave = null;
-      }
+      // Is this the answer to OUR routed save, a foreign/superseded routed
+      // save's late ack, or a failover trigger (saver alive but no longer
+      // holds the deck)? saveRouter.handleNoteSaved() classifies it — see
+      // lib/presenterSaveRouting.js for the full rule (matches on the
+      // unique requestId so an older save's ack can't clear a newer save's
+      // failover timer).
+      const routing = saveRouter.handleNoteSaved(msg);
+      if (routing === 'drop' || routing === 'failover') return;
+      // routing === 'continue': either a genuine ack for our own routed
+      // save, or a requestId-less broadcast (e.g. an inline-panel save)
+      // that was never part of routing — both fall through to the same
+      // display/backup logic below, exactly as before.
       // Ignore results for a different deck — a second presenter window,
       // or the main window having switched decks mid-flight.
       if (msg.path && deckPath && msg.path !== deckPath) return;
