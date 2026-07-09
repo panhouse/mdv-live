@@ -60,6 +60,10 @@ export function sendError(res, err) {
   const payload = {
     ok: false,
     code,
+    // `error` predates `code` (pre-0.6.0 flat shape). It is now PERMANENT
+    // public API, not a compat shim awaiting removal: the package has been
+    // on npm/GitHub as a public tool since 0.6.9, so external callers may
+    // match on it (decided 2026-07-09).
     error: (err && err.message) || code
   };
   if (err && err.currentEtag) payload.currentEtag = err.currentEtag;
