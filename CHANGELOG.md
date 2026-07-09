@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.16] - 2026-07-10
+
+### Added — MarpタブにReviewモード連動の変更スライドドット
+
+- Review ON時、**表示中のスライドが変更行を含むとき**だけ、スライドカウンター横に
+  小さな黄ドットを表示（PR #24）。変更行→スライドの対応は `/api/diff` が
+  Marpデッキに限り返す `slideRanges`（サーバー側 `parseDeck()` 由来・
+  ブラウザでMarpを再パースしない）と純粋関数 `lib/marpDiffMap.js` の交差判定。
+  Review OFF・非Marpタブ・変更なしスライドではDOM要素ごと不在（痕跡ゼロ）
+
+### Changed — 内部品質（動作変更なし）
+
+- presenter.html の保存ルーティング（どの窓が保存するか・failover）を
+  DOM非依存の純粋モジュール `lib/presenterSaveRouting.js` に抽出し、
+  ユニットテストを新設（リポジトリで唯一テストが無かった箇所の解消・PR #23）
+- npm audit の全9件（high 3: ws / tmp / express→qs）を解消し **0 vulnerabilities**。
+  CIのAuditステップを厳格化（`continue-on-error` 除去・以後は弱点混入でビルド失敗・PR #22）
+- エラー応答の `error` キーを恒久公開APIとして宣言（削除待ちの互換シム扱いを終了）
+- マージ済みブランチ（ローカル6本・リモート8本）を削除
+
 ## [0.6.15] - 2026-07-09
 
 ### Fixed — サイドバー幅ドラッグの根本修正（オーナー指摘: 重い・持ちづらい・途中で止まる）
