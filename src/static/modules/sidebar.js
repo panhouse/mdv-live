@@ -116,9 +116,14 @@ export const ResizeHandler = {
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
         if (this._pointerId !== null) {
-            // No-op if already released (spec-guaranteed) — safe even when
-            // pointerup/pointercancel already released capture themselves.
-            elements.resizeHandle.releasePointerCapture(this._pointerId);
+            // hasPointerCapture guard, not a bare release: for touch/pen the
+            // pointer itself can be gone by the time end() runs (pointerup
+            // removes it), and releasePointerCapture throws NotFoundError for
+            // an inactive pointerId — which would skip the resize-end
+            // dispatch below. hasPointerCapture just returns false then.
+            if (elements.resizeHandle.hasPointerCapture(this._pointerId)) {
+                elements.resizeHandle.releasePointerCapture(this._pointerId);
+            }
             this._pointerId = null;
         }
         // Let interested modules (marpZoomGlue.js) know a drag just ended,
@@ -138,15 +143,28 @@ export const ResizeHandler = {
         // pointer event routed to `handle` regardless of what's
         // underneath the cursor.
         handle.addEventListener('pointerdown', (e) => {
+            // A second simultaneous pointer (multi-touch) must not steal
+            // an in-progress drag (codex 0.6.15) — same reason the
+            // handlers below filter on the captured pointerId.
+            if (state.isResizing) return;
             e.preventDefault();
             this._pointerId = e.pointerId;
             handle.setPointerCapture(e.pointerId);
             this.start();
         });
-        handle.addEventListener('pointermove', (e) => this.move(e.clientX));
-        handle.addEventListener('pointerup', () => this.end());
-        handle.addEventListener('pointercancel', () => this.end());
-        handle.addEventListener('lostpointercapture', () => this.end());
+        handle.addEventListener('pointermove', (e) => {
+            if (e.pointerId !== this._pointerId) return;
+            this.move(e.clientX);
+        });
+        handle.addEventListener('pointerup', (e) => {
+            if (e.pointerId === this._pointerId) this.end();
+        });
+        handle.addEventListener('pointercancel', (e) => {
+            if (e.pointerId === this._pointerId) this.end();
+        });
+        handle.addEventListener('lostpointercapture', (e) => {
+            if (e.pointerId === this._pointerId) this.end();
+        });
         // Tab switch / OS-level focus loss during a drag doesn't always
         // deliver pointerup/pointercancel to the page — blur is the
         // catch-all so a drag never gets stuck "active" (codex 0.6.15).

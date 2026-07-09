@@ -87,7 +87,7 @@ test('a drag released in the collapse zone still remembers the last expanded wid
 
 // 0.6.15: Pointer Events + setPointerCapture rebuild (owner: "重い / 持ち
 // づらい / 途中でとまったりする"). The tests below characterize the new
-// contract — the three existing tests above are untouched and must keep
+// contract — the two existing tests above are untouched and must keep
 // passing unmodified (page.mouse fires pointer events too, so they exercise
 // the new pointerdown/pointermove/pointerup path transparently).
 
@@ -178,9 +178,10 @@ test('a drag can start just outside the visible 6px bar, inside the widened hit-
   const box = await handle.boundingBox();
 
   // box.width is the visible 6px bar. +3px lands outside it but well
-  // inside the ::after hit-area extension (14px wide, 4px past each
-  // edge) — kept a pixel short of the exact +4px boundary to avoid
-  // sub-pixel edge flakiness in the hit-test.
+  // inside the ::after hit-area extension (14px from the handle's left
+  // edge, i.e. 8px past its right edge — .main side only, so the file
+  // tree's scrollbar stays untouched) — kept clear of the exact boundary
+  // to avoid sub-pixel edge flakiness in the hit-test.
   const startX = box.x + box.width + 3;
   await page.mouse.move(startX, box.y + 200);
   await page.mouse.down();
@@ -201,10 +202,27 @@ test('a synthetic pointercancel cleans up drag state (real input cannot reproduc
   const handle = page.locator('.resize-handle');
   const box = await handle.boundingBox();
 
+  // The handler filters pointercancel on the captured pointerId (a stray
+  // pointer must not end someone else's drag), so record the real drag's
+  // pointerId before starting it and dispatch the cancel under that id.
+  await handle.evaluate((el) => {
+    el.addEventListener('pointerdown', (e) => { window.__dragPointerId = e.pointerId; },
+      { once: true, capture: true });
+  });
+
   await page.mouse.move(box.x + box.width / 2, box.y + 200);
   await page.mouse.down();
   await page.mouse.move(400, box.y + 200, { steps: 5 });
   await page.waitForTimeout(50);
+  await expect(sidebar).toHaveClass(/resizing/);
+
+  // A cancel from a DIFFERENT pointer must not end this drag — that's the
+  // pointerId filter working (a second touch mid-drag, codex 0.6.15).
+  await handle.evaluate((el) => {
+    el.dispatchEvent(new PointerEvent('pointercancel', {
+      pointerId: 999, bubbles: true, cancelable: true
+    }));
+  });
   await expect(sidebar).toHaveClass(/resizing/);
 
   // page.mouse cannot produce a real pointercancel (browsers only fire it
@@ -213,7 +231,9 @@ test('a synthetic pointercancel cleans up drag state (real input cannot reproduc
   // one directly, to exercise the cleanup branch that pointerup/blur don't
   // cover. Not a substitute for the real-input tests above.
   await handle.evaluate((el) => {
-    el.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new PointerEvent('pointercancel', {
+      pointerId: window.__dragPointerId, bubbles: true, cancelable: true
+    }));
   });
 
   await expect(sidebar).not.toHaveClass(/resizing/);

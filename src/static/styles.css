@@ -262,15 +262,17 @@ body {
 }
 
 /* Widens the drag hit-area to 14px while the visible bar above stays 6px
-   — a 6px target is hard to grab precisely (owner: 持ちづらい). Centered
-   on the handle (4px into each neighbor) and fully transparent so the
-   visual weight is unchanged. */
+   — a 6px target is hard to grab precisely (owner: 持ちづらい). Extends
+   into .main ONLY (left: 0, not centered on the bar): the file tree's
+   8px scrollbar sits flush against this handle's sidebar side, and a
+   leftward extension would eat the scrollbar's right half (codex
+   0.6.15). Fully transparent so the visual weight is unchanged. */
 .resize-handle::after {
     content: '';
     position: absolute;
     top: 0;
     bottom: 0;
-    left: -4px;
+    left: 0;
     width: 14px;
     cursor: col-resize;
     background: transparent;
