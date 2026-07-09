@@ -67,6 +67,10 @@ export default [
         // inside a page.evaluate() callback to assert added/changed share
         // one color.
         getComputedStyle: 'readonly',
+        // 0.6.15 (20-sidebar-resize.spec.js): dispatches a synthetic
+        // pointercancel from inside an el.evaluate() callback — page.mouse
+        // cannot produce a real one.
+        PointerEvent: 'readonly',
       },
     },
   },

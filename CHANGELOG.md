@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.15] - 2026-07-09
+
+### Fixed — サイドバー幅ドラッグの根本修正（オーナー指摘: 重い・持ちづらい・途中で止まる）
+
+- **Pointer Events + `setPointerCapture` に全面移行**。旧実装は document 全域の
+  mousemove/mouseup 頼みで、カーソルが iframe プレビュー（HTML/PDF）に入った瞬間
+  イベントが iframe 側に渡りドラッグが黙って死んでいた（「途中で止まる」の正体）。
+  capture 中は全ポインタイベントがハンドルに届くため、iframe 上でも
+  ウィンドウ外でも追従が切れない。タブ切替等は `window.blur` で確実に終了
+- **範囲外カーソルをクランプに変更**。旧実装は `clientX > 500` を「無視」していて、
+  最大幅を超えて引いた瞬間に追従が完全停止していた。上限にピン留めして追従を
+  維持し、戻した瞬間に即応する。閾値 50/500 は `modules/constants.js` に定数化し、
+  保存済みの範囲外幅も読込時に正規化
+- **当たり判定を6px→14pxに拡大**（「持ちづらい」対策）。見た目は6pxのまま、
+  透明な ::after をコンテンツ側にのみ延ばす（ツリーのスクロールバーを侵食しない）。
+  `touch-action: none` 付与でタッチドラッグにも対応
+- **ドラッグ中はコンテンツペインの pointer-events を遮断**し、Marp ズームの
+  ResizeObserver 再適用はドラッグ終了時の1回に集約（「重い」対策）。
+  終了は `mdv:sidebar-resize-end` イベントで明示配線
+- 複数ポインタ（マルチタッチ）が進行中のドラッグを乗っ取れないよう
+  pointerId でフィルタ
+
 ## [0.6.14] - 2026-07-06
 
 ### Changed — 校閲ボタン群の再配置とガタつき解消（オーナー指摘3点）

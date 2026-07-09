@@ -3,7 +3,7 @@
  * Pure move from app.js (Stage 3b). No logic changes.
  * Grouped together because ResizeHandler only ever calls SidebarManager.
  */
-import { STORAGE_KEYS } from './constants.js';
+import { STORAGE_KEYS, SIDEBAR_COLLAPSE_THRESHOLD, SIDEBAR_MAX_WIDTH } from './constants.js';
 import { state } from './state.js';
 import { elements } from './dom.js';
 
@@ -16,7 +16,7 @@ export const SidebarManager = {
     },
 
     setWidth(width, { persist = true } = {}) {
-        if (width < 50) {
+        if (width < SIDEBAR_COLLAPSE_THRESHOLD) {
             elements.sidebar.classList.add('collapsed');
         } else {
             elements.sidebar.classList.remove('collapsed');
@@ -38,12 +38,17 @@ export const SidebarManager = {
 export const ResizeHandler = {
     _rafId: null,
     _pendingX: null,
-    // Tracked SYNCHRONOUSLY on every mousemove (a number assignment is
+    // Tracked SYNCHRONOUSLY on every pointermove (a number assignment is
     // free): a fast drag can coalesce straight past every expanded
     // position before one animation frame fires, and the persistence on
-    // mouseup must still know the last expanded width this drag passed
+    // pointerup must still know the last expanded width this drag passed
     // through (codex 0.6.11 round-2).
     _lastExpandedX: null,
+    // The pointerId this drag captured, so end() can release capture
+    // explicitly on every exit path (not just the pointerup/pointercancel
+    // paths the browser releases automatically) — e.g. a window `blur`
+    // mid-drag leaves the button physically down with capture still held.
+    _pointerId: null,
 
     start() {
         state.isResizing = true;
@@ -53,17 +58,25 @@ export const ResizeHandler = {
         // following it — the whole perceived lag (owner report, 0.6.11).
         // Suspend it for the duration of the drag.
         elements.sidebar.classList.add('resizing');
+        // Content panes (iframes especially) can eat pointer/selection
+        // events mid-drag; gate them off for the duration (0.6.15,
+        // styles.css `body.sidebar-dragging .main`).
+        document.body.classList.add('sidebar-dragging');
         document.body.style.cursor = 'col-resize';
         document.body.style.userSelect = 'none';
     },
 
     move(clientX) {
         if (!state.isResizing) return;
-        if (clientX < 0 || clientX > 500) return;
-        // One width write per FRAME, not per mousemove event (which can
+        // Clamp instead of ignoring out-of-range input (0.6.15) — the old
+        // `if (clientX < 0 || clientX > 500) return;` guard made the drag
+        // feel "stuck" the moment the cursor crossed either bound, since
+        // tracking simply stopped instead of pinning to the bound.
+        const clamped = Math.max(0, Math.min(clientX, SIDEBAR_MAX_WIDTH));
+        // One width write per FRAME, not per pointermove event (which can
         // fire far more often than the display refreshes).
-        this._pendingX = clientX;
-        if (clientX >= 50) this._lastExpandedX = clientX;
+        this._pendingX = clamped;
+        if (clamped >= SIDEBAR_COLLAPSE_THRESHOLD) this._lastExpandedX = clamped;
         if (this._rafId !== null) return;
         this._rafId = requestAnimationFrame(() => {
             this._rafId = null;
@@ -71,37 +84,90 @@ export const ResizeHandler = {
         });
     },
 
+    // Idempotent: every exit path (pointerup, pointercancel,
+    // lostpointercapture, window blur) calls end() directly, and the
+    // `state.isResizing` guard means only the first call of the bunch does
+    // anything — later calls (e.g. blur after pointerup already fired) are
+    // harmless no-ops.
     end() {
-        if (state.isResizing) {
-            state.isResizing = false;
-            if (this._rafId !== null) {
-                cancelAnimationFrame(this._rafId);
-                this._rafId = null;
-            }
-            if (this._pendingX !== null) {
-                SidebarManager.setWidth(this._pendingX, { persist: false });
-                this._pendingX = null;
-            }
-            // Persist ONCE per drag, unconditionally. _lastExpandedX (not
-            // state.sidebarWidth) is the source of truth for "the last
-            // expanded width this drag passed through": rAF coalescing can
-            // skip the state update entirely on a fast collapse-release
-            // (codex 0.6.11 rounds 1-2).
-            if (this._lastExpandedX !== null) {
-                state.sidebarWidth = this._lastExpandedX;
-                this._lastExpandedX = null;
-            }
-            localStorage.setItem(STORAGE_KEYS.SIDEBAR_WIDTH, state.sidebarWidth);
-            elements.resizeHandle.classList.remove('active');
-            elements.sidebar.classList.remove('resizing');
-            document.body.style.cursor = '';
-            document.body.style.userSelect = '';
+        if (!state.isResizing) return;
+        state.isResizing = false;
+        if (this._rafId !== null) {
+            cancelAnimationFrame(this._rafId);
+            this._rafId = null;
         }
+        if (this._pendingX !== null) {
+            SidebarManager.setWidth(this._pendingX, { persist: false });
+            this._pendingX = null;
+        }
+        // Persist ONCE per drag, unconditionally. _lastExpandedX (not
+        // state.sidebarWidth) is the source of truth for "the last
+        // expanded width this drag passed through": rAF coalescing can
+        // skip the state update entirely on a fast collapse-release
+        // (codex 0.6.11 rounds 1-2).
+        if (this._lastExpandedX !== null) {
+            state.sidebarWidth = this._lastExpandedX;
+            this._lastExpandedX = null;
+        }
+        localStorage.setItem(STORAGE_KEYS.SIDEBAR_WIDTH, state.sidebarWidth);
+        elements.resizeHandle.classList.remove('active');
+        elements.sidebar.classList.remove('resizing');
+        document.body.classList.remove('sidebar-dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        if (this._pointerId !== null) {
+            // hasPointerCapture guard, not a bare release: for touch/pen the
+            // pointer itself can be gone by the time end() runs (pointerup
+            // removes it), and releasePointerCapture throws NotFoundError for
+            // an inactive pointerId — which would skip the resize-end
+            // dispatch below. hasPointerCapture just returns false then.
+            if (elements.resizeHandle.hasPointerCapture(this._pointerId)) {
+                elements.resizeHandle.releasePointerCapture(this._pointerId);
+            }
+            this._pointerId = null;
+        }
+        // Let interested modules (marpZoomGlue.js) know a drag just ended,
+        // instead of relying on an implicit re-notification (codex 0.6.15).
+        document.dispatchEvent(new CustomEvent('mdv:sidebar-resize-end'));
     },
 
     init() {
-        elements.resizeHandle.addEventListener('mousedown', () => this.start());
-        document.addEventListener('mousemove', (e) => this.move(e.clientX));
-        document.addEventListener('mouseup', () => this.end());
+        const handle = elements.resizeHandle;
+        // Pointer Events + setPointerCapture replace the old mousedown +
+        // document-wide mousemove/mouseup pair (0.6.15). The old pattern
+        // routed mousemove/mouseup through whatever element was under the
+        // cursor — crossing an iframe (HTML/PDF preview panes) handed
+        // those events to the iframe's own document instead, silently
+        // killing the drag mid-motion (owner: "途中でとまったりする").
+        // Capturing the pointer on the handle keeps every subsequent
+        // pointer event routed to `handle` regardless of what's
+        // underneath the cursor.
+        handle.addEventListener('pointerdown', (e) => {
+            // A second simultaneous pointer (multi-touch) must not steal
+            // an in-progress drag (codex 0.6.15) — same reason the
+            // handlers below filter on the captured pointerId.
+            if (state.isResizing) return;
+            e.preventDefault();
+            this._pointerId = e.pointerId;
+            handle.setPointerCapture(e.pointerId);
+            this.start();
+        });
+        handle.addEventListener('pointermove', (e) => {
+            if (e.pointerId !== this._pointerId) return;
+            this.move(e.clientX);
+        });
+        handle.addEventListener('pointerup', (e) => {
+            if (e.pointerId === this._pointerId) this.end();
+        });
+        handle.addEventListener('pointercancel', (e) => {
+            if (e.pointerId === this._pointerId) this.end();
+        });
+        handle.addEventListener('lostpointercapture', (e) => {
+            if (e.pointerId === this._pointerId) this.end();
+        });
+        // Tab switch / OS-level focus loss during a drag doesn't always
+        // deliver pointerup/pointercancel to the page — blur is the
+        // catch-all so a drag never gets stuck "active" (codex 0.6.15).
+        window.addEventListener('blur', () => this.end());
     }
 };

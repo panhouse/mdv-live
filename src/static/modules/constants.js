@@ -36,6 +36,14 @@ export const STORAGE_KEYS = {
     REVIEW_MODE: 'mdv-review-mode'
 };
 
+// Sidebar resize (modules/sidebar.js's ResizeHandler + SidebarManager,
+// modules/state.js's initial-width normalization). KEEP IN SYNC with
+// styles.css's `.sidebar { max-width: ... }` — the CSS clamp and this JS
+// clamp must agree, or a drag can visually stop at one bound while the
+// tracked/stored width claims another.
+export const SIDEBAR_COLLAPSE_THRESHOLD = 50;
+export const SIDEBAR_MAX_WIDTH = 500;
+
 export const NOTES_AUTOSAVE_DEBOUNCE_MS = 800;
 export const NOTES_ROW_DEFAULT_PX = 240;
 export const NOTES_ROW_MIN_PX = 0;

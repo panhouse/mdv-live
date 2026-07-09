@@ -96,6 +96,9 @@ body {
 .sidebar {
     width: 280px;
     min-width: 0;
+    /* KEEP IN SYNC with SIDEBAR_MAX_WIDTH in modules/constants.js — the
+       resize drag (modules/sidebar.js) clamps to that JS constant, so this
+       CSS bound must match it or the two disagree at the edge. */
     max-width: 500px;
     background: var(--bg-secondary);
     display: flex;
@@ -238,11 +241,41 @@ body {
    ============================================================ */
 
 .resize-handle {
+    position: relative;
+    /* Fixed 6px basis regardless of flex grow/shrink — the ::after below
+       widens the drag hit-area without changing this visual width. */
+    flex: 0 0 6px;
     width: 6px;
+    /* Wins over .main (a non-positioned flex sibling, so it would
+       otherwise paint on top of this handle's ::after hit-area extension
+       per normal stacking order) without approaching the 1000+ tier
+       modals/overlays use elsewhere in this file (codex 0.6.15). */
+    z-index: 1;
+    /* Required alongside Pointer Events (modules/sidebar.js
+       ResizeHandler) — without this, a touch drag scrolls the page
+       instead of firing pointermove on the handle (codex 0.6.15). */
+    touch-action: none;
     cursor: col-resize;
     background: var(--bg-secondary);
     border-right: 1px solid var(--border);
     transition: background 0.2s;
+}
+
+/* Widens the drag hit-area to 14px while the visible bar above stays 6px
+   — a 6px target is hard to grab precisely (owner: 持ちづらい). Extends
+   into .main ONLY (left: 0, not centered on the bar): the file tree's
+   8px scrollbar sits flush against this handle's sidebar side, and a
+   leftward extension would eat the scrollbar's right half (codex
+   0.6.15). Fully transparent so the visual weight is unchanged. */
+.resize-handle::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 14px;
+    cursor: col-resize;
+    background: transparent;
 }
 
 .resize-handle:hover, .resize-handle.active {
@@ -258,6 +291,15 @@ body {
     display: flex;
     flex-direction: column;
     overflow: hidden;
+}
+
+/* While the sidebar resize drag is in progress (modules/sidebar.js
+   ResizeHandler.start()/end()), block pointer events on the content pane
+   so an iframe preview (HTML/PDF) underneath the cursor can't steal the
+   drag, and so no text/selection side-effects fire over it mid-drag
+   (codex 0.6.15). */
+body.sidebar-dragging .main {
+    pointer-events: none;
 }
 
 /* ============================================================
