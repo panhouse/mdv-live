@@ -9,7 +9,7 @@
  * 'unknown-baseline' }`, never a crash). Backs the 0.6.3 change-tracking
  * backend (docs/plan-review-surface-0.6.x.md §②).
  *
- * Two independent bounds, both eviction-driven (never an error):
+ * THREE independent protections, layered:
  *  - `maxBytesTotal` — a global LRU (across every path) on total content
  *    bytes held. Recording a new snapshot that would push the running total
  *    over this limit evicts the globally least-recently-touched snapshot(s)
@@ -17,11 +17,47 @@
  *    byte size, timestamp — is kept so latestHash()/listVersions() stay
  *    accurate; see the `hasContent` flag on listVersions()).
  *  - `maxVersionsPerFile` — a per-path cap on how many distinct-hash
- *    versions are remembered at all, independent of the byte budget. The
- *    oldest version for that path is dropped once a new one would exceed it.
+ *    versions are remembered at all, independent of the byte budget.
+ *  - **pin** (`pinnedByPath`, Fix 1/2, 2026-07-13; public `pin()`, Fix 5,
+ *    2026-07-13) — `pin(path, hash)` marks `hash` as `path`'s pinned
+ *    version, and is a no-op if the hash is unknown or its content has
+ *    been evicted/oversized. `get(path, hash)` calls it internally the
+ *    moment a lookup SUCCEEDS (entry exists AND its content hasn't been
+ *    evicted/oversized) — that was the ONLY way to pin before Fix 5;
+ *    src/api/diff.js's `from === currentHash` (identical) branch now also
+ *    calls `pin()` directly, since that branch never calls `get()` (there
+ *    is no earlier hash to look up) but still represents the client
+ *    confirming its current baseline is correct. The pin is the client's
+ *    confirmed diff baseline (the `from` hash of a GET /api/diff request —
+ *    see src/api/diff.js) and is never time-limited: it holds until a
+ *    DIFFERENT hash is pinned for that path. Both eviction paths below
+ *    skip a path's pinned version/cell — UNLESS every other candidate is
+ *    also excluded (pinned or newest), in which case the byte budget still
+ *    wins; a pin must never become an unbounded memory leak.
+ *
+ *    Why a pin and not just "touch recency on get()" (the design this
+ *    replaced): mdv's own editor stops polling /api/diff while the user is
+ *    actively typing (src/static/modules/diffReview.js early-returns in
+ *    edit mode), so a purely time-based/recency protection goes cold mid-
+ *    edit and the autosave-driven flood of record() calls evicts the
+ *    baseline anyway. A pin set once at the start of editing survives
+ *    because it isn't re-earned by repeated touches — it's held until
+ *    explicitly replaced.
+ *
+ *    `lastUsed` (per version entry) is unrelated to `ts`: `ts` is the
+ *    wall-clock time of the entry's most recent record() call (inspection
+ *    only, via listVersions()); `lastUsed` is a monotonically increasing
+ *    counter (`++accessSeq`, NOT Date.now() — ms-granularity ties let a
+ *    just-touched baseline be selected as its own eviction victim) bumped
+ *    only by a successful get(), used purely to rank version-cap eviction
+ *    candidates that are neither pinned nor the newest version.
+ *
  *  - `maxBytesPerFile` — a single file's content is only stored if it fits;
  *    an oversized file still gets a "hash-only" version record (same
- *    `get()` contract as an evicted one: content is null).
+ *    `get()` contract as an evicted one: content is null). A null-content
+ *    lookup NEVER pins or touches — there is nothing to diff against, so
+ *    "using" it isn't meaningful, and doing so would let a shell block
+ *    eviction forever (see get() below).
  *
  * get(path, hash) cannot distinguish "hash never seen" from "hash seen but
  * content evicted/oversized" — both return null. That's intentional: every
@@ -49,8 +85,10 @@ function byteLength(content) {
  * @returns {{
  *   record: (path: string, content: string) => string,
  *   get: (path: string, hash: string) => string|null,
+ *   pin: (path: string, hash: string) => boolean,
  *   latestHash: (path: string) => string|null,
  *   listVersions: (path: string) => Array<{hash: string, bytes: number, ts: number, hasContent: boolean}>,
+ *   deletePath: (path: string) => void,
  * }}
  */
 export function createChangeJournal({
@@ -58,8 +96,18 @@ export function createChangeJournal({
   maxBytesPerFile = JOURNAL_MAX_FILE_BYTES,
   maxVersionsPerFile = JOURNAL_MAX_VERSIONS_PER_FILE,
 } = {}) {
-  // path -> version records, OLDEST FIRST: { hash, content: string|null, bytes, ts }
+  // path -> version records, LEAST-RECENTLY-RECORDED FIRST:
+  // { hash, content: string|null, bytes, ts, lastUsed }
   const filesByPath = new Map();
+
+  // path -> pinned hash: the client's confirmed diff baseline for that
+  // path, set only by a successful get() (see module docstring above).
+  const pinnedByPath = new Map();
+
+  // Monotonic counter backing `lastUsed`. Deliberately NOT Date.now() —
+  // ms-granularity ties would let a just-pinned entry be chosen as its own
+  // eviction victim in the same tick (codex #2, 2026-07-13).
+  let accessSeq = 0;
 
   // Global LRU of "cells" that currently hold stored content bytes.
   // key = `${path}\u0000${hash}` -> bytes stored. A `Map` preserves
@@ -74,23 +122,57 @@ export function createChangeJournal({
     return `${path}\u0000${hash}`;
   }
 
-  /** Evict the single globally-oldest content cell. Returns false if there's nothing left to evict. */
-  function evictOldestCell() {
-    const oldestKey = lru.keys().next().value;
-    if (oldestKey === undefined) return false;
-
-    const bytes = lru.get(oldestKey);
-    lru.delete(oldestKey);
+  /** Evict a single content cell (helper shared by evictOldestCell()'s two passes). */
+  function evictCell(key) {
+    const bytes = lru.get(key);
+    lru.delete(key);
     totalBytes -= bytes;
 
-    const sep = oldestKey.indexOf('\u0000');
-    const path = oldestKey.slice(0, sep);
-    const hash = oldestKey.slice(sep + 1);
+    const sep = key.indexOf('\u0000');
+    const path = key.slice(0, sep);
+    const hash = key.slice(sep + 1);
     const versions = filesByPath.get(path);
     const entry = versions && versions.find((v) => v.hash === hash);
     if (entry) entry.content = null; // keep the version record; drop only the bytes
 
     return true;
+  }
+
+  /**
+   * Evict a content cell to bring totalBytes back under budget. Called
+   * from record() right after it added-or-restored ITS OWN path cell
+   * (always the most-recently-inserted/touched key, i.e. lru is Map-order
+   * last entry at the moment of the call) -- that cell is excluded from
+   * candidacy too, or a record() whose two other tracked paths both happen
+   * to be pinned would immediately null out the content it just wrote,
+   * defeating the write (surfaced by the pre-existing global byte-budget
+   * LRU eviction unit test once pins were added, 2026-07-13).
+   *
+   * Priority (Fix 2, 2026-07-13): (1) oldest cell that is neither pinned
+   * nor the just-written one, (2) if every OTHER cell is pinned, the oldest
+   * of those -- the byte budget must never be violated just to keep every
+   * pin alive, (3) only if the just-written cell is the ONLY cell that
+   * exists at all (maxBytesTotal smaller than a single entry) does it get
+   * sacrificed too. Returns false if there is nothing to evict.
+   */
+  function evictOldestCell() {
+    const keys = [...lru.keys()];
+    if (keys.length === 0) return false;
+    const justWrittenKey = keys[keys.length - 1];
+
+    for (const key of keys) {
+      if (key === justWrittenKey) continue;
+      const sep = key.indexOf("\u0000");
+      const path = key.slice(0, sep);
+      const hash = key.slice(sep + 1);
+      if (pinnedByPath.get(path) === hash) continue; // protected -- try the next-oldest
+      return evictCell(key);
+    }
+    for (const key of keys) {
+      if (key === justWrittenKey) continue;
+      return evictCell(key); // every other cell is pinned -- the budget still wins
+    }
+    return evictCell(justWrittenKey); // nothing else exists at all
   }
 
   /**
@@ -147,6 +229,7 @@ export function createChangeJournal({
       content: oversized ? null : content,
       bytes: oversized ? 0 : bytes,
       ts: Date.now(),
+      lastUsed: 0, // bumped only by a successful get() — see module docstring
     };
     versions.push(entry);
 
@@ -159,8 +242,42 @@ export function createChangeJournal({
     // over-cap version often brings the journal back under budget on its
     // own — running the global eviction before it could sacrifice another
     // file's baseline for a transient overage.
+    //
+    // Victim selection (Fix 2, 2026-07-13): never the newest version (last
+    // array element — always excluded regardless of pin/lastUsed) or the
+    // path's pinned version (the client's confirmed baseline). Among the
+    // rest, prefer an already-content-less "shell" (content === null —
+    // nothing left to lose by dropping the record too), then the version
+    // least recently used (lowest `lastUsed`; ties keep the
+    // earliest-recorded candidate, matching the old shift()-oldest
+    // behavior when nothing has ever been touched). If every remaining
+    // version is pinned or newest, there is nothing safe to evict —
+    // tolerate the cap overage for this record() call rather than destroy
+    // a live baseline.
     while (versions.length > maxVersionsPerFile) {
-      const dropped = versions.shift();
+      const pinnedHash = pinnedByPath.get(path);
+      const newest = versions[versions.length - 1];
+      let victimIndex = -1;
+      for (let i = 0; i < versions.length; i++) {
+        const v = versions[i];
+        if (v === newest) continue;
+        if (pinnedHash !== undefined && v.hash === pinnedHash) continue;
+        if (victimIndex === -1) {
+          victimIndex = i;
+          continue;
+        }
+        const candidate = versions[victimIndex];
+        const vIsShell = v.content === null;
+        const candidateIsShell = candidate.content === null;
+        if (vIsShell && !candidateIsShell) {
+          victimIndex = i;
+        } else if (vIsShell === candidateIsShell && v.lastUsed < candidate.lastUsed) {
+          victimIndex = i;
+        }
+      }
+      if (victimIndex === -1) break; // nothing evictable — tolerate cap overage
+
+      const [dropped] = versions.splice(victimIndex, 1);
       const key = cellKey(path, dropped.hash);
       if (lru.has(key)) {
         totalBytes -= lru.get(key);
@@ -176,6 +293,50 @@ export function createChangeJournal({
   }
 
   /**
+   * Pin `hash` as `path`'s confirmed diff baseline — protected from both
+   * the version cap and the global LRU (see module docstring) until a
+   * DIFFERENT hash is pinned for `path`. No-ops (returns false) if `hash`
+   * was never recorded for `path`, or its content has already been
+   * evicted/oversized — a content-less shell has nothing to diff against,
+   * so "confirming" it as a baseline would be meaningless and would let a
+   * shell block eviction forever (same rule get() enforced inline before
+   * Fix 5).
+   *
+   * This is the ONE place the pin/lastUsed/LRU-touch condition lives
+   * (SSOT, Fix 5, 2026-07-13) — get() below is just "look up, then pin()
+   * on success" so the two can never drift. src/api/diff.js's `from ===
+   * currentHash` (identical, nothing changed yet) branch calls this
+   * directly: that branch never calls get() (there is no earlier hash to
+   * look up), so without a standalone pin() it had no way to protect the
+   * baseline a client had just confirmed is still current — the gap that
+   * let a file opened via Review ON with no pending edit lose its
+   * baseline the moment edit-mode autosave started churning versions.
+   * @param {string} path
+   * @param {string} hash
+   * @returns {boolean} true if `hash` was pinned, false if it couldn't be
+   *   (unknown path/hash, or a content-less shell).
+   */
+  function pin(path, hash) {
+    const versions = filesByPath.get(path);
+    if (!versions) return false;
+    const entry = versions.find((v) => v.hash === hash);
+    if (!entry || entry.content === null) return false;
+
+    pinnedByPath.set(path, hash); // pin: protected until a different hash is pinned for this path
+    entry.lastUsed = ++accessSeq; // monotonic — see module docstring for why not Date.now()
+
+    // Touch the LRU cell too: an actively-diffed baseline must not be the
+    // next eviction victim while colder entries survive (codex round-3).
+    const key = cellKey(path, hash);
+    if (lru.has(key)) {
+      const bytes = lru.get(key);
+      lru.delete(key);
+      lru.set(key, bytes);
+    }
+    return true;
+  }
+
+  /**
    * @param {string} path
    * @param {string} hash
    * @returns {string|null} The stored content, or null if the hash was
@@ -185,17 +346,14 @@ export function createChangeJournal({
     const versions = filesByPath.get(path);
     if (!versions) return null;
     const entry = versions.find((v) => v.hash === hash);
-    if (!entry) return null;
-    if (entry.content !== null) {
-      // Touch the LRU cell: an actively-diffed baseline must not be the
-      // next eviction victim while colder entries survive (codex round-3).
-      const key = cellKey(path, hash);
-      if (lru.has(key)) {
-        const bytes = lru.get(key);
-        lru.delete(key);
-        lru.set(key, bytes);
-      }
-    }
+    // Only a SUCCESSFUL lookup (entry exists, content still held) pins or
+    // touches anything (Fix 1, 2026-07-13) — a shell with nothing to diff
+    // against isn't a meaningful "use", and pinning it would let a
+    // content-less record block eviction forever. pin() re-checks the
+    // same condition (SSOT, Fix 5) — the redundant lookup is cheap
+    // (versions arrays are capped at maxVersionsPerFile, currently 32).
+    if (!entry || entry.content === null) return null;
+    pin(path, hash);
     return entry.content;
   }
 
@@ -211,7 +369,14 @@ export function createChangeJournal({
 
   /**
    * Test/inspection hook: every version record currently kept for `path`,
-   * oldest first.
+   * least-recently-recorded first — NOT strictly creation order: re-
+   * recording an already-known hash (see record() above) moves it to the
+   * end, so a version that keeps getting re-saved with unchanged content
+   * stays "newest" even though it was first seen long ago. `ts` is the
+   * wall-clock time of the entry's most recent record() call; it is
+   * unrelated to `lastUsed` (bumped only by get(), used only to rank
+   * version-cap eviction candidates — see the module docstring above),
+   * which this method does not expose.
    * @param {string} path
    * @returns {Array<{hash: string, bytes: number, ts: number, hasContent: boolean}>}
    */
@@ -226,7 +391,32 @@ export function createChangeJournal({
     }));
   }
 
-  return { record, get, latestHash, listVersions };
+  /**
+   * Forget every version and pin held for `path` (Fix 4, 2026-07-13 —
+   * src/watcher.js calls this on a chokidar 'unlink': the file is gone, so
+   * its baseline history should be too). Removes this path's cells from
+   * the global LRU/byte budget and clears its pin so a later record() for
+   * the SAME path (e.g. the file gets recreated) starts with a clean,
+   * unpinned history rather than one where a stale pin from before the
+   * deletion still shields an unrelated version. Other paths are untouched.
+   * @param {string} path
+   */
+  function deletePath(path) {
+    const versions = filesByPath.get(path);
+    if (versions) {
+      for (const v of versions) {
+        const key = cellKey(path, v.hash);
+        if (lru.has(key)) {
+          totalBytes -= lru.get(key);
+          lru.delete(key);
+        }
+      }
+      filesByPath.delete(path);
+    }
+    pinnedByPath.delete(path);
+  }
+
+  return { record, get, pin, latestHash, listVersions, deletePath };
 }
 
 export default createChangeJournal;

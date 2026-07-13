@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.17] - 2026-07-13
+
+### Fixed — Reviewモードの変更ハイライトが数回の編集で消えていた（重大）
+
+同じファイルが**4回書き換わると、それまでの変更ハイライトが丸ごと消えていた**
+（ツールバーが「次の変更 ?」／本文のハイライトが全消滅）。mdv の中核ユースケース
+（AIエージェントが書き換えた成果物をレビューする）で最も踏みやすい壊れ方だった。
+
+**原因**: `changeJournal` の版キャップ（`JOURNAL_MAX_VERSIONS_PER_FILE`、旧値4）を超えると
+`versions.shift()` で**最も古い版から捨てていた**。ところがベースライン（クライアントが
+最後に確認した版）こそが最も古い版であり、**守るべきものから先に捨てていた**。
+`watcher` は保存のたびに `record()` するため、4回の書き換え（エディタの自動保存なら
+数十秒の入力）でベースラインが押し出され、`/api/diff` が `unknown-baseline` を返していた。
+
+**修正**:
+- **pin**（`changeJournal.pin()`）を導入。`GET /api/diff?from=<hash>` が届いた版＝
+  「クライアントが今ベースラインにしている版」として pin し、**版キャップ・グローバルLRUの
+  両方の eviction から除外**する。pin は時間で弱まらず、別の版が pin されるまで保持される
+  （recency/touch 方式では、mdv のエディタが編集中に `/api/diff` を止めるため保護が効かない）。
+  pin が張られたまま予算超過する場合はメモリ予算を優先（pin をリークの穴にしない）
+- `from === currentHash`（まだ変更がない状態）でも pin を張る。フロントの fast path も
+  `from` を送るようになり、**Review ON で開いた直後に編集モードへ入っても**ベースラインが残る
+- 版キャップの犠牲者選択を「最古」から「**最新でも pin でもない版のうち、抜け殻（content=null）優先 →
+  最も長く未使用のもの**」へ変更（単調増加カウンタで判定。`Date.now()` の ms 同値で
+  pin 直後の版が自分自身の犠牲者に選ばれる罠を回避）
+- `JOURNAL_MAX_VERSIONS_PER_FILE` 4 → 32
+- `unlink` 時に `journal.deletePath()` で版・pin・バイト予算を掃除（削除済みパスのリーク）
+
+**再発防止**: E2E が全て「編集してから Review を ON」の順で書かれていたため、
+実運用の順序（**Review ON のまま繰り返し編集される**）を検証するテストが1本も無く、
+このバグがすり抜けていた。その順序の E2E と、版キャップを実際に超える回数を回す
+統合テストを追加（版数はハードコードせず定数を import ＝ 将来キャップを変えても空振りしない）。
+
 ## [0.6.16] - 2026-07-10
 
 ### Added — MarpタブにReviewモード連動の変更スライドドット

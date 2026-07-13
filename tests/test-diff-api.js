@@ -26,7 +26,7 @@ import fs from 'node:fs/promises';
 import WebSocket from 'ws';
 
 import { makeEtag } from '../src/utils/etag.js';
-import { JOURNAL_MAX_FILE_BYTES } from '../src/config/constants.js';
+import { JOURNAL_MAX_FILE_BYTES, JOURNAL_MAX_VERSIONS_PER_FILE } from '../src/config/constants.js';
 import { startTestServer } from './helpers/server.js';
 
 describe('api/diff.js — GET /api/diff (HTTP, baseline-capture flow)', () => {
@@ -364,6 +364,108 @@ describe('GET /api/diff — identical response still seeds the journal (codex ro
       const second = await (await fetch(`${ctx.baseUrl}/api/diff?path=seed.md&from=${encodeURIComponent(h1)}`)).json();
       assert.strictEqual(second.available, true, `identical path must have seeded v1: ${JSON.stringify(second)}`);
       assert.deepStrictEqual(second.added, [[2, 2]]);
+    } finally {
+      await ctx.stop();
+    }
+  });
+});
+
+describe('GET /api/diff — a pinned baseline survives repeated external edits past the version cap (Fix 1/2, 2026-07-13 — 実装計画_2026-07-13_reviewベースライン消失.md)', () => {
+  it('imports JOURNAL_MAX_VERSIONS_PER_FILE and edits the file MORE than that many times: available stays true throughout', async () => {
+    // This is the exact reported bug: Reviewモード ON でファイルを開いた状態
+    // のまま、そのファイルが繰り返し書き換わると、4回目の書き換えで変更ハイ
+    // ライトが丸ごと消える (H0 baseline evicted by the version cap). The cap
+    // was raised 4 -> 32, so a fixed small loop count would pass WITHOUT
+    // exercising the fix at all (space-out warning in the plan §4) — import
+    // the real constant and edit strictly MORE times than it allows.
+    const ctx = await startTestServer({ files: { 'churn.md': 'v0\n' } });
+    try {
+      // First call with no `from`: records H0 and reports unknown-baseline
+      // (nothing to diff against yet) — same as the client's first-sight
+      // baseline capture (diffReview.js).
+      const first = await (await fetch(`${ctx.baseUrl}/api/diff?path=churn.md`)).json();
+      const h0 = first.currentHash;
+      assert.strictEqual(first.available, false);
+      assert.strictEqual(first.reason, 'unknown-baseline');
+
+      // Pin H0: src/api/diff.js only calls journal.get() (the pin trigger)
+      // when `from !== currentHash` — an identical-content request never
+      // reaches it. Write v1 first so this diff request is a real
+      // non-identical lookup against H0, which is what actually pins it.
+      await fs.writeFile(`${ctx.rootDir}/churn.md`, 'v1\n', 'utf-8');
+      const afterFirstEdit = await (
+        await fetch(`${ctx.baseUrl}/api/diff?path=churn.md&from=${encodeURIComponent(h0)}`)
+      ).json();
+      assert.strictEqual(afterFirstEdit.available, true, `H0 must resolve right after the first edit: ${JSON.stringify(afterFirstEdit)}`);
+
+      // Now churn the file strictly MORE times than JOURNAL_MAX_VERSIONS_PER_FILE,
+      // asking for the diff against H0 every single time WITHOUT re-querying
+      // from a later hash — this is the "Review ON, keep editing" scenario:
+      // the client's baseline stays H0 the whole time (it only advances on
+      // 確認/confirm, which this test never does).
+      for (let i = 2; i <= JOURNAL_MAX_VERSIONS_PER_FILE + 5; i++) {
+        await fs.writeFile(`${ctx.rootDir}/churn.md`, `v${i}\n`, 'utf-8');
+        const res = await fetch(`${ctx.baseUrl}/api/diff?path=churn.md&from=${encodeURIComponent(h0)}`);
+        const data = await res.json();
+        assert.strictEqual(
+          data.available,
+          true,
+          `edit #${i} (cap is ${JOURNAL_MAX_VERSIONS_PER_FILE}) must still resolve H0: ${JSON.stringify(data)}`
+        );
+        assert.strictEqual(data.identical, false);
+      }
+    } finally {
+      await ctx.stop();
+    }
+  });
+});
+
+describe('GET /api/diff — Fix 5 (2026-07-13, 実装計画_2026-07-13_reviewベースライン消失.md §3): the identical-hash branch pins the baseline too', () => {
+  it('a from=H0 request with NOTHING changed yet (identical) pins H0, which then survives edits past the version cap made with ZERO further /api/diff calls in between', async () => {
+    // This is diffReview.js's "fast path" (modules/diffReview.js, around
+    // its `tab.etag === lastSeen.hash` check): the file hasn't changed
+    // since the client last saw it, so it sends `from=lastSeen.hash` —
+    // which equals the current hash, hitting the `identical` branch, NOT
+    // a real diff. Before Fix 5, diffReview.js sent `from=''` here (never
+    // pinning anything) and src/api/diff.js's identical branch never
+    // called journal.pin() either — so a file opened via Review ON with
+    // no pending change had NO pin protecting its baseline the moment it
+    // entered edit mode (where autosave churns versions with zero further
+    // /api/diff calls — diffReview.js's refresh() early-returns while
+    // state.isEditMode is true).
+    const ctx = await startTestServer({ files: { 'fastpath.md': 'v0\n' } });
+    try {
+      const journal = ctx.server.app.locals.changeJournal;
+      const { makeEtag } = await import('../src/utils/etag.js');
+      const h0 = makeEtag('v0\n');
+
+      const seed = await (
+        await fetch(`${ctx.baseUrl}/api/diff?path=fastpath.md&from=${encodeURIComponent(h0)}`)
+      ).json();
+      assert.strictEqual(seed.available, true);
+      assert.strictEqual(seed.identical, true, 'precondition: this is the fast-path/identical branch, not a real diff');
+
+      // Edit-mode simulation: versions pile up WITHOUT any /api/diff call
+      // in between, strictly MORE times than JOURNAL_MAX_VERSIONS_PER_FILE
+      // so the version cap is actually exercised (a small fixed loop count
+      // would pass without touching the fix at all — see the plan's §4
+      // space-out warning, same rule as the existing version-cap test
+      // above). Manipulate the SAME journal instance the running server
+      // uses directly (deterministic, no chokidar/watcher timing needed —
+      // same technique as the "codex P2" baseline-survival test above).
+      for (let i = 1; i <= JOURNAL_MAX_VERSIONS_PER_FILE + 5; i++) {
+        journal.record('fastpath.md', `v${i}\n`);
+      }
+      await fs.writeFile(`${ctx.rootDir}/fastpath.md`, `v${JOURNAL_MAX_VERSIONS_PER_FILE + 5}\n`, 'utf-8');
+
+      const res = await fetch(`${ctx.baseUrl}/api/diff?path=fastpath.md&from=${encodeURIComponent(h0)}`);
+      const data = await res.json();
+      assert.strictEqual(
+        data.available,
+        true,
+        `H0 must survive — pinned by the identical-branch fast-path seed above: ${JSON.stringify(data)}`
+      );
+      assert.strictEqual(data.identical, false);
     } finally {
       await ctx.stop();
     }

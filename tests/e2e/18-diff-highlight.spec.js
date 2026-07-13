@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { makeFixtureDir, seedFiles, startServer, removeFixtureDir } from './helpers.js';
+import { JOURNAL_MAX_VERSIONS_PER_FILE } from '../../src/config/constants.js';
 
 // modules/diffReview.js — 0.6.4 ハイライト + ジャンプ. Covers the full
 // baseline lifecycle: first open silently records a baseline (no toolbar
@@ -609,4 +610,144 @@ test('0.6.14 (owner: layout jitter) — #diffToggleBtn/#diffConfirmBtn staying m
   await expect(toggleBtn).toBeDisabled();
   const xBack = (await searchTrigger.boundingBox()).x;
   expect(xBack).toBe(xNoDiff);
+});
+
+test('regression (実装計画_2026-07-13_reviewベースライン消失.md): Review turned ON BEFORE any edit, then the file is churned by external writes MANY more times than the version cap — the highlight must keep showing every time, not just for the first few edits', async ({ page }) => {
+  // Every OTHER test in this file enables Review mode AFTER the edit(s)
+  // that create the pending diff. That ordering never exercised the
+  // reported bug: with Review already ON while a file keeps getting
+  // rewritten (mdv's own autosave, or any external tool saving repeatedly),
+  // the journal's per-file version cap used to evict the client's pinned
+  // baseline (H0) once enough versions piled up (old cap: 4 — a single
+  // ~6s autosave burst). This test is the ordering that shipped the bug:
+  // Review ON FIRST, edits AFTER, well past JOURNAL_MAX_VERSIONS_PER_FILE.
+  const p = 'churn.md';
+  const original = ['# Churn Doc', '', 'Line stays the same.'].join('\n') + '\n';
+  await writeFile(path.join(fixtureDir, p), original);
+  await page.goto(server.baseURL + '/');
+  await page.locator(`.tree-item[data-path="${p}"] [data-action="open"]`).click();
+  await expect(page.locator('#content h1')).toHaveText('Churn Doc');
+  await waitForBaseline(page, p);
+
+  await toggleReviewMode(page);
+  const toggleBtn = page.locator('#diffToggleBtn');
+  await expect(toggleBtn).toBeVisible();
+  await expect(toggleBtn).toBeDisabled(); // no pending diff yet — baseline == current content
+
+  const changedLine = page.locator('#content .diff-changed, #content .diff-added');
+
+  for (let i = 1; i <= JOURNAL_MAX_VERSIONS_PER_FILE + 3; i++) {
+    const edited = ['# Churn Doc', '', `Line changed ${i} times.`].join('\n') + '\n';
+    await writeFile(path.join(fixtureDir, p), edited, 'utf-8');
+    await expect(page.locator('#content')).toContainText(`Line changed ${i} times.`, { timeout: 3000 });
+
+    // The toolbar must report a real, resolvable diff against the
+    // ORIGINAL baseline (H0) on EVERY single edit — "次の変更 ?" is what
+    // unknown-baseline renders as (diffReview.js), the exact symptom the
+    // owner reported ("ボタンが「次の変更 ?」になるだけで、本文には一切
+    // ハイライトが出ない"). No 確認/confirm click happens anywhere in this
+    // loop, so the baseline never advances — H0 must keep resolving.
+    await expect(toggleBtn).toBeEnabled();
+    await expect(toggleBtn).toHaveText(/^次の変更 \d+$/);
+    await expect(toggleBtn).not.toHaveText('次の変更 ?');
+    await expect(toggleBtn).not.toHaveText('次の変更 0');
+
+    // And the actual body highlight — not just the toolbar count — is
+    // present. This is the part that silently disappeared in the bug: the
+    // toolbar could still say "?" while the body showed nothing at all.
+    await expect(changedLine).not.toHaveCount(0);
+  }
+});
+
+test('regression Fix 5 (実装計画_2026-07-13_reviewベースライン消失.md §3, 2026-07-13): opening a file with Review ON while NOTHING has changed yet (the fast path) still pins the baseline, so edit-mode autosave churn past the version cap does not lose it', async ({ page }) => {
+  // The test above ("Review turned ON BEFORE any edit...") already covers
+  // Fix 1-4's scope, but it never exercises this gap: EVERY edit in that
+  // loop goes through diffReview.js's REAL diff branch (content always
+  // differs from the baseline), which already called journal.get() (and
+  // so already pinned) before Fix 5 existed. The bug this test guards
+  // against needs the OPPOSITE precondition: a refresh() call where
+  // nothing has changed yet (tab.etag === lastSeen.hash) — diffReview.js's
+  // "fast path" — followed by edit mode, where refresh() early-returns
+  // and NO /api/diff call of any kind happens until edit mode ends.
+  const p = 'fastpath-editmode.md';
+  const original = ['# Fastpath Edit Doc', '', 'Base line stays for now.'].join('\n') + '\n';
+  await writeFile(path.join(fixtureDir, p), original);
+  await page.goto(server.baseURL + '/');
+  await page.locator(`.tree-item[data-path="${p}"] [data-action="open"]`).click();
+  await expect(page.locator('#content h1')).toHaveText('Fastpath Edit Doc');
+  await waitForBaseline(page, p);
+  await toggleReviewMode(page);
+
+  // Step 1: get a REAL, non-null tab.etag onto the open tab (a freshly-
+  // opened non-Marp tab's etag stays null until a live file_update WS
+  // message sets it — see this module's docstring's "0.6.14"/etag-table
+  // section referenced in diffReview.js) and confirm it, so lastSeen.hash
+  // matches tab.etag exactly — the fast path's precondition.
+  const confirmed = ['# Fastpath Edit Doc', '', 'Base line confirmed once.'].join('\n') + '\n';
+  await writeFile(path.join(fixtureDir, p), confirmed, 'utf-8');
+  await expect(page.locator('#content')).toContainText('Base line confirmed once.', { timeout: 3000 });
+  const toggleBtn = page.locator('#diffToggleBtn');
+  const confirmBtn = page.locator('#diffConfirmBtn');
+  await expect(toggleBtn).toHaveText('次の変更 1');
+  await confirmBtn.click();
+  await expect(toggleBtn).toBeDisabled();
+  await expect(toggleBtn).toHaveText('次の変更 0');
+
+  // Step 2: trigger ANOTHER refresh() for the SAME still-active tab with
+  // NOTHING changed since the confirm above (tab.etag === lastSeen.hash)
+  // -- this is what actually takes diffReview.js's fast path (a tab
+  // switch or first-ever open both count as a "path change", which the
+  // fast path explicitly excludes -- codex round-11). A theme toggle is a
+  // convenient, content-independent way to force a second renderActive()
+  // -> refresh() on the same tab (modules/theme.js's ThemeManager.toggle()
+  // calls the same renderActive() TabManager wraps everywhere else).
+  await page.locator('#themeToggle').click();
+  // The fast-path seed request is fire-and-forget (diffReview.js) -- give
+  // the one local round trip time to land (pins the baseline server-side,
+  // Fix 5) before the edit-mode churn below starts.
+  await page.waitForTimeout(800);
+
+  // Step 3: enter edit mode. diffReview.js's refresh() early-returns
+  // while state.isEditMode is true, so NOTHING calls /api/diff again
+  // until we leave.
+  await page.locator('#editToggle').click();
+  await expect(page.locator('#editToggle')).toHaveClass(/active/);
+  const textarea = page.locator('#editorTextarea');
+  await expect(textarea).toBeVisible();
+
+  // Step 4: autosave-during-edit-mode simulation, WITHOUT waiting on real
+  // fs-write/chokidar timing for every single version (the plan's
+  // instruction to keep this test fast): record synthetic versions
+  // directly into the SAME journal instance the running server uses,
+  // strictly MORE times than JOURNAL_MAX_VERSIONS_PER_FILE so the version
+  // cap is actually exercised (a smaller loop would pass without touching
+  // the fix at all -- same space-out warning as the plan's §4 / the
+  // sibling test above).
+  const journal = server.mdv.app.locals.changeJournal;
+  for (let i = 1; i <= JOURNAL_MAX_VERSIONS_PER_FILE + 5; i++) {
+    journal.record(p, `synthetic churn v${i}\n`);
+  }
+
+  // One REAL write so the file on disk (and the live tab -- the
+  // watcher's file_update broadcast keeps flowing even in edit mode, see
+  // websocket.js's handleFileUpdate(), which updates tab.etag AND the
+  // visible textarea since nothing was typed) actually differs from the
+  // pinned baseline by the time we leave edit mode.
+  const edited = ['# Fastpath Edit Doc', '', 'Base line was actually edited after the churn.'].join('\n') + '\n';
+  await writeFile(path.join(fixtureDir, p), edited, 'utf-8');
+  await expect(textarea).toHaveValue(edited, { timeout: 6000 });
+
+  // Step 5: leave edit mode -- hide() re-renders, which resumes
+  // refresh(). The pinned baseline is now far behind current content, so
+  // this is a REAL diff request, not the fast path -- and it must
+  // resolve, not unknown-baseline (the bug: the baseline would already be
+  // evicted here without Fix 5, since it was never pinned in step 2).
+  await page.locator('#editToggle').click();
+  await expect(page.locator('#editToggle')).not.toHaveClass(/active/);
+
+  await expect(toggleBtn).toBeEnabled({ timeout: 6000 });
+  await expect(toggleBtn).toHaveText(/^次の変更 \d+$/);
+  await expect(toggleBtn).not.toHaveText('次の変更 ?');
+  await expect(toggleBtn).not.toHaveText('次の変更 0');
+  await expect(page.locator('#content .diff-added, #content .diff-changed')).not.toHaveCount(0);
 });

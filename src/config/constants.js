@@ -149,7 +149,16 @@ export const JOURNAL_MAX_FILE_BYTES = 1 * 1024 * 1024;
 
 /**
  * Max snapshot versions changeJournal.js keeps per path, independent of the
- * global JOURNAL_MAX_BYTES byte budget — the oldest version for that path is
- * dropped once a new one pushes the count over this cap.
+ * global JOURNAL_MAX_BYTES byte budget. The client's confirmed diff
+ * baseline is protected from this cap by a pin (changeJournal.js's
+ * pinnedByPath, Fix 1/2, 2026-07-13) that never weakens with time, so this
+ * cap's real job is just bounding how many UNPINNED, non-newest
+ * intermediate versions accumulate — not protecting the baseline itself.
+ * 4 was too small: mdv's own editor autosaves every
+ * EDITOR_AUTOSAVE_DEBOUNCE_MS (1.5s), so ~6s of continuous typing already
+ * exceeded it and evicted the baseline out from under an open Review
+ * session before the pin existed. 32 leaves headroom; actual memory is
+ * still bounded by maxBytesPerFile (per snapshot) and the global
+ * JOURNAL_MAX_BYTES LRU, so raising this doesn't risk unbounded growth.
  */
-export const JOURNAL_MAX_VERSIONS_PER_FILE = 4;
+export const JOURNAL_MAX_VERSIONS_PER_FILE = 32;

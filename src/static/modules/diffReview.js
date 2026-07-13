@@ -525,14 +525,23 @@ export const DiffReviewManager = {
         // server restart the in-memory journal is empty even though
         // localStorage remembers this hash — seed it (fire-and-forget,
         // once per path per page load) so the NEXT edit produces real
-        // counts instead of unknown-baseline (codex round-8).
+        // counts instead of unknown-baseline (codex round-8). Sending
+        // `lastSeen.hash` (not '') as `from` matters beyond seeding, too
+        // (Fix 5, 2026-07-13): it makes this an identical-hash request,
+        // which src/api/diff.js now pins as the confirmed baseline.
+        // Before Fix 5 this sent `from=''`, which src/api/diff.js never
+        // pins — a file opened via Review ON with nothing changed yet had
+        // NO pin protecting its baseline, so entering edit mode right
+        // after let autosave's flood of journal.record() calls evict it
+        // before a single real diff was ever requested (実装計画_2026-07-13_
+        // reviewベースライン消失.md §3 Fix 5).
         if (!pathChanged && tab.etag && tab.etag === lastSeen.hash) {
             if (!this._seededPaths.has(tab.path)) {
                 this._seededPaths.add(tab.path);
                 // On failure, forget the suppression so a later visit
                 // retries instead of silently degrading to
                 // unknown-baseline (codex round-16).
-                MDVApi.diff(tab.path, '').catch(() => {
+                MDVApi.diff(tab.path, lastSeen.hash).catch(() => {
                     this._seededPaths.delete(tab.path);
                 });
             }

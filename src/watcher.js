@@ -26,11 +26,12 @@ const TREE_CHANGE_EVENTS = ['add', 'unlink', 'addDir', 'unlinkDir'];
  * @param {WebSocketServer} wss - WebSocket server for broadcasting
  * @param {Object} [options] - Watcher options
  * @param {number} [options.depth=3] - Directory depth to watch (prevents EMFILE errors)
- * @param {{ record: (path: string, content: string) => string }} [options.journal] -
+ * @param {{ record: (path: string, content: string) => string, deletePath: (path: string) => void }} [options.journal] -
  *   Change journal (src/services/changeJournal.js) to record a snapshot of
- *   every changed file into, BEFORE broadcasting file_update. Optional so
- *   callers that don't need change tracking (e.g. tests exercising the
- *   watcher in isolation) can omit it.
+ *   every changed file into, BEFORE broadcasting file_update, and to clean
+ *   up (deletePath) when a file is unlinked. Optional so callers that don't
+ *   need change tracking (e.g. tests exercising the watcher in isolation)
+ *   can omit it.
  * @returns {FSWatcher} Chokidar watcher instance
  */
 export function setupWatcher(rootDir, wss, options = {}) {
@@ -210,8 +211,15 @@ export function setupWatcher(rootDir, wss, options = {}) {
   // keeps counting ghosts (and 次の未読へ opens a dead path). Renames
   // arrive as unlink+add pairs and are covered by both handlers
   // (codex 0.6.5 round-1).
+  //
+  // journal.deletePath() (Fix 4, 2026-07-13): a deleted file's version
+  // history/pin/LRU cells are forgotten too, not left dangling — the
+  // 'change' handler above journals EVERY changed file regardless of
+  // isTrackable, so cleanup here can't be gated on isTrackable either, or
+  // a non-trackable file's journal entries would survive its own deletion.
   watcher.on('unlink', (filePath) => {
     const relativePath = toRelativePath(filePath);
+    if (journal) journal.deletePath(relativePath);
     if (isTrackable(relativePath)) {
       const seq = claimEventSeq(relativePath);
       scheduleFilesChanged({ path: relativePath, kind: 'removed' }, seq);
