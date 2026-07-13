@@ -304,6 +304,67 @@ test('0.6.12 unified review mode (owner): default OFF hides unread badges/chip/d
     await expect(chip).toBeHidden();
 });
 
+test('P2-a regression (codex 4th-round, 2026-07-14): フォルダ内を確認済みにする does not fire one /api/diff request per confirmed file', async ({ page }) => {
+    // Own directory, not shared with the earlier tests in this file (which
+    // already exercise docs/'s bulk-confirm for the known-etag/no-etag
+    // distinction) — this test is purely about REQUEST VOLUME.
+    const BULK_DIR = 'bulkdiff';
+    const FILE_COUNT = 5;
+    const files = Array.from({ length: FILE_COUNT }, (_, i) => `${BULK_DIR}/f${i}.md`);
+
+    // The page must already be connected (and watching) BEFORE these files
+    // are written — unreadBadges.js only marks a path unread via the
+    // `files_changed` broadcast fed by a LIVE chokidar 'add'/'change' event
+    // (see its docstring's "Design: event-driven, never poll-driven"
+    // section); a file that already existed at the time the client fetched
+    // the tree is never retroactively flagged unread. So: connect first,
+    // THEN seed. Every file arrives via chokidar's 'add' event, never
+    // opened by this page — codex rounds 2-4 (see unreadBadges.js's
+    // docstring) made 'added' items carry a real content etag, so each
+    // lands in `_unreadEtag` with a KNOWN etag: exactly the shape that used
+    // to make markFolderSeen() call the real markSeen() (and therefore
+    // _seedBaseline()/`GET /api/diff`) once per file.
+    await page.goto(server.baseURL + '/');
+    await toggleReviewMode(page);
+
+    // seedFiles() (not a bare writeFile loop) creates bulkdiff/ itself — it
+    // doesn't exist yet.
+    await seedFiles(fixtureDir, Object.fromEntries(
+        files.map((f, i) => [f, `# File ${i}\n\nBrand new.\n`])
+    ));
+
+    const dirRow = page.locator(`.tree-item[data-path="${BULK_DIR}"]`);
+    await expect(dirRow).toBeVisible({ timeout: 5000 });
+    const dirBadge = dirRow.locator(':scope > .tree-item-content > .tree-badge-count');
+    await expect(dirBadge).toHaveText(String(FILE_COUNT), { timeout: 5000 });
+
+    // This is a fresh page with NO tab open anywhere (not just none under
+    // bulkdiff/) — nothing else on the page could independently be issuing
+    // /api/diff calls during the window below, so every request captured
+    // here is attributable to the bulk-confirm click itself.
+    const diffRequestPaths = [];
+    page.on('request', (req) => {
+        const url = new URL(req.url());
+        if (url.pathname === '/api/diff') diffRequestPaths.push(url.searchParams.get('path'));
+    });
+
+    await dirRow.locator(':scope > .tree-item-content').click({ button: 'right' });
+    const menuItem = page.locator('.context-menu-item', { hasText: 'フォルダ内を確認済みにする' });
+    await expect(menuItem).toBeVisible();
+    await menuItem.click();
+
+    await expect(dirBadge).toHaveCount(0, { timeout: 5000 });
+    // The bug's symptom was N requests firing almost immediately after the
+    // click; give any (legitimate or buggy) fire-and-forget request time to
+    // land before counting, rather than racing it.
+    await page.waitForTimeout(1000);
+
+    expect(
+        diffRequestPaths,
+        `bulk-confirm with no active tab anywhere must fire ZERO /api/diff requests (one per file was the P2-a bug), got: ${JSON.stringify(diffRequestPaths)}`
+    ).toEqual([]);
+});
+
 test('0.6.12: Review mode ON/OFF survives reload (the unread map itself is session-only, an unrelated pre-existing 0.6.5 design choice — see modules/unreadBadges.js\'s docstring)', async ({ page }) => {
     await page.goto(server.baseURL + '/');
     const reviewToggle = page.locator('#reviewModeToggle');

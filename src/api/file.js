@@ -327,10 +327,24 @@ export function setupFileRoutes(app, options = {}) {
     await withLock(fullPath, async () => {
       try {
         const stats = await fs.stat(fullPath);
+        const journal = app.locals.changeJournal;
         if (stats.isDirectory()) {
           await fs.rm(fullPath, { recursive: true });
+          // Recursive cleanup (P2-c, 2026-07-14 review round): chokidar's
+          // 'unlink' events (src/watcher.js) only reach change-journal
+          // entries the watcher actually saw — GET /api/diff also lazily
+          // journals paths OUTSIDE the watch depth, which a plain fs.rm()
+          // here never fires an unlink for individually. Without this, a
+          // deleted directory's descendants keep their versions/pins/byte
+          // budget forever, and a path recreated later under the same name
+          // could inherit a pre-deletion baseline it should never see.
+          if (journal) journal.deletePath(relativePath, { recursive: true });
         } else {
           await fs.unlink(fullPath);
+          // Same gap, single-file case: this route can delete a file the
+          // watcher never saw an 'unlink' for (outside its depth limit),
+          // so cleanup can't rely on chokidar alone (P2-c, 2026-07-14).
+          if (journal) journal.deletePath(relativePath);
         }
 
         notifyTreeUpdate(app);

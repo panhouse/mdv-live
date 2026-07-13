@@ -210,6 +210,22 @@ export const UnreadBadgesManager = {
      * etag (an 'added' item, or a too-large baseline) can't be confirmed
      * against anything, so it's just cleared from the session's unread set
      * — documented limitation (task brief).
+     *
+     * `{ pin: false }` on every one of these markSeen() calls (codex
+     * 4th-round P2-a, 2026-07-14): without it, a folder with N unread files
+     * fired N `GET /api/diff` requests from ONE click — each a real file
+     * read + hash (and possibly a Myers diff) on the server — turning a bulk
+     * confirm into a self-inflicted request flood. Pinning exists to survive
+     * autosave churn on a file that is ACTIVELY being edited (see
+     * diffReview.js's docstring's "markSeen()'s `{ pin }` opt-out" section);
+     * a path bulk-confirmed from the tree context menu is by definition not
+     * that. The one exception — the active tab, if it happens to sit under
+     * `dirPath` — still ends up pinned: the trailing `DiffReviewManager.
+     * refresh()` call below re-checks the active tab against the baseline
+     * this loop just wrote, takes refresh()'s FAST path (tab.etag now
+     * equals lastSeen.hash), and that path calls `_seedBaseline()` directly
+     * — so the one file a user might immediately start editing next is
+     * protected without this loop having to special-case it.
      * @param {string} dirPath - '' for the tree root
      */
     markFolderSeen(dirPath) {
@@ -218,7 +234,7 @@ export const UnreadBadgesManager = {
             .filter(([p]) => p.startsWith(prefix));
         for (const [p, etag] of toClear) {
             if (etag) {
-                markSeen(p, etag); // triggers _handleSeen via onSeen
+                markSeen(p, etag, { pin: false }); // triggers _handleSeen via onSeen
             } else {
                 this._unreadEtag.delete(p);
             }
@@ -227,7 +243,9 @@ export const UnreadBadgesManager = {
         this._updateHeaderChip();
         // The bulk confirm may include the ACTIVE file — its toolbar
         // controls must not keep claiming "changed" for a baseline this
-        // action just updated (codex round-5).
+        // action just updated (codex round-5). This call also re-pins the
+        // active tab's baseline via refresh()'s fast path — see the
+        // `{ pin: false }` comment above.
         DiffReviewManager.refresh();
     },
 

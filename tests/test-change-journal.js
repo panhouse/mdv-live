@@ -543,3 +543,65 @@ describe('changeJournal — deletePath() (Fix 4, 2026-07-13)', () => {
     assert.strictEqual(journal.get('a.md', h4), 'w3');
   });
 });
+
+describe('changeJournal — deletePath(path, { recursive: true }) (P2-c, codex 4th-round, 2026-07-14 — src/api/file.js\'s DELETE /api/file recursive directory delete)', () => {
+  it('removes every path nested under a directory prefix, leaving unrelated paths untouched', () => {
+    const journal = createChangeJournal();
+    const hA = journal.record('dir/a.md', 'A');
+    const hB = journal.record('dir/sub/b.md', 'B');
+    const hC = journal.record('other.md', 'C');
+
+    journal.deletePath('dir', { recursive: true });
+
+    assert.strictEqual(journal.listVersions('dir/a.md').length, 0, 'top-level file under the deleted directory is gone');
+    assert.strictEqual(journal.listVersions('dir/sub/b.md').length, 0, 'nested file under the deleted directory is gone too');
+    assert.strictEqual(journal.get('other.md', hC), 'C', 'an unrelated path is untouched');
+    void hA; void hB;
+  });
+
+  it('does NOT match a sibling directory whose name merely starts with the same prefix (exact "dir/" boundary, not a raw string prefix)', () => {
+    // Without the '/' separator in the prefix check, deleting "dir" would
+    // wrongly also match "dir2/x.md" (a plain `path.startsWith('dir')`
+    // would) — this is the exact off-by-one a prefix sweep must not have.
+    const journal = createChangeJournal();
+    journal.record('dir/a.md', 'A');
+    const hSibling = journal.record('dir2/x.md', 'X');
+
+    journal.deletePath('dir', { recursive: true });
+
+    assert.strictEqual(journal.listVersions('dir/a.md').length, 0);
+    assert.strictEqual(journal.get('dir2/x.md', hSibling), 'X', 'dir2/x.md must survive deleting "dir" — it is not actually nested under it');
+  });
+
+  it('clears content/pin for a nested path even when pinned — not just unlisted, actually forgotten (mirrors the exact-match deletePath() guarantee)', () => {
+    // Checked directly via get() right after deletePath(), not via a later
+    // record()/cap-eviction dance: a stale-but-still-pinned nested entry
+    // and a properly-cleared one can coincidentally produce the SAME
+    // eviction outcome several record() calls later (pin protection and
+    // cap eviction interact in ways that don't reliably distinguish
+    // "cleared" from "not cleared" indirectly) — asserting on the
+    // immediate post-condition is the unambiguous check.
+    const journal = createChangeJournal({ maxBytesTotal: 1000 });
+    const hNested = journal.record('dir/a.md', 'nested-content');
+    journal.get('dir/a.md', hNested); // pin it — the recursive sweep must clear this too, not just unlist the path
+
+    journal.deletePath('dir', { recursive: true });
+
+    assert.strictEqual(
+      journal.get('dir/a.md', hNested),
+      null,
+      'a pinned nested path\'s content must be gone after a recursive delete of its parent, not still retrievable'
+    );
+  });
+
+  it('without { recursive: true } (the default), only the exact path is removed — nested paths survive', () => {
+    const journal = createChangeJournal();
+    const hNested = journal.record('dir/a.md', 'A');
+    journal.record('dir', 'dir-as-a-file-content'); // pathologically also record something AT the exact key
+
+    journal.deletePath('dir'); // no options -> non-recursive, matches every OTHER deletePath() call site (src/watcher.js)
+
+    assert.strictEqual(journal.listVersions('dir').length, 0, 'the exact path is still removed');
+    assert.strictEqual(journal.get('dir/a.md', hNested), 'A', 'a nested path is untouched without recursive: true');
+  });
+});

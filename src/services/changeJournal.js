@@ -111,7 +111,7 @@ function byteLength(content) {
  *   pin: (path: string, hash: string) => boolean,
  *   latestHash: (path: string) => string|null,
  *   listVersions: (path: string) => Array<{hash: string, bytes: number, ts: number, hasContent: boolean}>,
- *   deletePath: (path: string) => void,
+ *   deletePath: (path: string, opts?: { recursive?: boolean }) => void,
  * }}
  */
 export function createChangeJournal({
@@ -472,17 +472,8 @@ export function createChangeJournal({
     }));
   }
 
-  /**
-   * Forget every version and pin held for `path` (Fix 4, 2026-07-13 —
-   * src/watcher.js calls this on a chokidar 'unlink': the file is gone, so
-   * its baseline history should be too). Removes this path's cells from
-   * the global LRU/byte budget and clears its pin so a later record() for
-   * the SAME path (e.g. the file gets recreated) starts with a clean,
-   * unpinned history rather than one where a stale pin from before the
-   * deletion still shields an unrelated version. Other paths are untouched.
-   * @param {string} path
-   */
-  function deletePath(path) {
+  /** Forget every version/pin/LRU cell held for exactly `path` (shared by deletePath()'s single-path and recursive modes). */
+  function forgetOnePath(path) {
     const versions = filesByPath.get(path);
     if (versions) {
       for (const v of versions) {
@@ -495,6 +486,49 @@ export function createChangeJournal({
       filesByPath.delete(path);
     }
     pinnedByPath.delete(path);
+  }
+
+  /**
+   * Forget every version and pin held for `path` (Fix 4, 2026-07-13 —
+   * src/watcher.js calls this on a chokidar 'unlink': the file is gone, so
+   * its baseline history should be too). Removes this path's cells from
+   * the global LRU/byte budget and clears its pin so a later record() for
+   * the SAME path (e.g. the file gets recreated) starts with a clean,
+   * unpinned history rather than one where a stale pin from before the
+   * deletion still shields an unrelated version. Other paths are untouched
+   * (unless `recursive: true` — see below).
+   *
+   * `{ recursive: true }` (P2-c, 2026-07-14 review round — src/api/file.js's
+   * `DELETE /api/file` route, for a directory delete) ALSO forgets every
+   * path nested under `path` (prefix match on `path + '/'`), not just the
+   * exact key. This is needed because chokidar's own 'unlink' events (the
+   * exact-match call above) don't cover every deletion route: `GET
+   * /api/diff` lazily journals paths outside the watcher's depth limit (see
+   * that module's docstring), and `DELETE /api/file` can remove such a path
+   * — recursively, for a whole directory — without chokidar ever seeing an
+   * 'unlink' for each descendant (it may not even be watching that deep).
+   * Left uncleaned, those entries' versions/pins/byte budget would linger
+   * indefinitely, and a path recreated later (e.g. the directory rebuilt
+   * with same-named files) could inherit a pre-deletion baseline/pin it
+   * should never have seen — the same bug Fix 4 closed for the single-path
+   * case, reopened for anything the watcher doesn't directly see unlink for.
+   * The journal is keyed by individual file path (no directory-node
+   * concept), so a directory delete needs its own prefix sweep rather than
+   * one Map lookup.
+   * @param {string} path
+   * @param {{ recursive?: boolean }} [opts]
+   */
+  function deletePath(path, { recursive = false } = {}) {
+    forgetOnePath(path);
+    if (!recursive) return;
+    const prefix = path ? `${path}/` : '';
+    // Collect first, then delete — filesByPath must not be mutated while
+    // its own key iterator (used by .keys() below) is still in progress.
+    const nested = [];
+    for (const p of filesByPath.keys()) {
+      if (p !== path && p.startsWith(prefix)) nested.push(p);
+    }
+    for (const p of nested) forgetOnePath(p);
   }
 
   return { record, get, pin, latestHash, listVersions, deletePath };

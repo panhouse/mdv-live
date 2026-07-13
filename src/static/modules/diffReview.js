@@ -205,6 +205,31 @@
  * being adopted there; it keeps its own direct `_seedBaseline()` call.)
  *
  * ---------------------------------------------------------------------
+ * markSeen()'s `{ pin }` opt-out — bulk confirms must not pin every file
+ * (codex 4th-round P2-a, 2026-07-14)
+ * ---------------------------------------------------------------------
+ * The structural fix above has a cost the "every caller" framing glossed
+ * over: `_seedBaseline()` is a real `GET /api/diff` round trip (fire-and-
+ * forget, but still a request the server has to read+hash the file and
+ * possibly Myers-diff for). unreadBadges.js's `markFolderSeen()` ("フォルダ
+ * 内を確認済みにする") calls `markSeen()` once per unread path under a
+ * directory — a folder with thousands of files turned ONE click into
+ * thousands of `/api/diff` requests, each doing real file I/O, enough to
+ * saturate the server. markSeen()'s THIRD parameter, `{ pin = true }`, lets
+ * a caller opt OUT of the pin/seed side effect while still doing everything
+ * else markSeen() does (the localStorage baseline write + the onSeen()
+ * notification unreadBadges.js/marpDiffIndicator.js rely on) — see
+ * markFolderSeen()'s call site for why this is safe to skip for a bulk
+ * confirm specifically: the server's pin window only exists to survive
+ * autosave churn while a file is being ACTIVELY edited, and a file bulk-
+ * confirmed from the tree was — by definition, at the moment of the
+ * click — not the one open in the editor. The opt-out is explicit at the
+ * call site (not a silent default) precisely so a future caller doesn't
+ * have to remember it exists, matching the "every caller gets pin
+ * protection for free" bar the structural fix above set — this is the one
+ * documented exception, not a loophole.
+ *
+ * ---------------------------------------------------------------------
  * Why this module does NOT trust `tab.etag` as "always populated"
  * ---------------------------------------------------------------------
  * The task brief for this feature (and the 0.6.3 author's handoff note)
@@ -401,8 +426,12 @@ export function onCurrentChange(fn) {
  * nothing extra to remember.
  * @param {string} path
  * @param {string|null|undefined} hash
+ * @param {{ pin?: boolean }} [options] - `pin: false` (default `true`) skips
+ *   the server-side `_seedBaseline()` call below — see this module's
+ *   docstring's "markSeen()'s `{ pin }` opt-out" section for why
+ *   unreadBadges.js's bulk-confirm path is the one caller that needs this.
  */
-export function markSeen(path, hash) {
+export function markSeen(path, hash, { pin = true } = {}) {
     const key = storeKey(path);
     if (!key) return;
     const store = readStore();
@@ -431,8 +460,10 @@ export function markSeen(path, hash) {
     // DELETED, not adopted, so there is nothing to protect. This is the
     // structural fix: every markSeen() caller gets this for free instead of
     // each one needing its own explicit _seedBaseline() call (see the
-    // docstring section referenced above).
-    if (hash) {
+    // docstring section referenced above) — UNLESS it explicitly opted out
+    // via `{ pin: false }` (codex 4th-round P2-a, 2026-07-14; see this
+    // module's docstring's "markSeen()'s `{ pin }` opt-out" section).
+    if (hash && pin) {
         DiffReviewManager._seedBaseline(path, hash);
     }
 }
