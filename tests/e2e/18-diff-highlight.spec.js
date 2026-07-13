@@ -751,3 +751,103 @@ test('regression Fix 5 (実装計画_2026-07-13_reviewベースライン消失.m
   await expect(toggleBtn).not.toHaveText('次の変更 0');
   await expect(page.locator('#content .diff-added, #content .diff-changed')).not.toHaveCount(0);
 });
+
+test('regression P1 (codex, 2026-07-14 review round): review -> external edit -> ✓ 確認 -> edit mode DIRECTLY (no other action in between) still survives autosave churn past the version cap, even though an EARLIER hash for this SAME path was already fast-path-seeded once this page load', async ({ page }) => {
+  // The sibling Fix 5 test above proves the ORIGINAL pin (the very FIRST
+  // fast-path seed for a path) survives edit-mode churn. It does NOT
+  // exercise this bug: modules/diffReview.js's `_seededPaths` Set used to
+  // be keyed by PATH ALONE ("seed at most once per path per page load"),
+  // so once ANY hash for a path had been seeded once, `_confirmLatest()`
+  // (the ✓ 確認 button) advancing that SAME path's baseline to a LATER
+  // hash could never seed/pin it again — every future fast-path refresh()
+  // silently no-opped. `_confirmLatest()` itself also never sent a seed/
+  // pin request of its own pre-fix, relying entirely on some LATER
+  // fast-path refresh to do it — but entering edit mode right after
+  // confirming does NOT reliably trigger one: app.js's init() wraps
+  // EditorManager.show() to call refresh() afterward, but
+  // EditorManager.toggle() already sets state.isEditMode = true BEFORE
+  // calling show(), so that refresh() hits the state.isEditMode guard and
+  // returns before ever reaching the fast path. Both gaps compound in the
+  // most natural flow of all: review a change, confirm it, start editing.
+  //
+  // This test reproduces BOTH preconditions: an EARLIER hash for this path
+  // is fast-path-seeded first (cycle 0, populating the pre-fix `_seededPaths`
+  // Set for this path), THEN a SECOND external edit is reviewed, confirmed,
+  // and followed DIRECTLY by edit mode with no theme-toggle/tab-switch/etc.
+  // in between (cycle 1 — the exact "review -> 確認 -> 編集" sequence codex
+  // reported). Without BOTH fixes (seed key = path+hash, not just path;
+  // _confirmLatest() seeds explicitly instead of waiting for a later
+  // trigger), the confirmed baseline from cycle 1 is never pinned and gets
+  // evicted by the churn below, reintroducing unknown-baseline right after
+  // the most natural review workflow there is.
+  const p = 'repin-editmode.md';
+  const original = ['# Repin Doc', '', 'Base line stays for now.'].join('\n') + '\n';
+  await writeFile(path.join(fixtureDir, p), original);
+  await page.goto(server.baseURL + '/');
+  await page.locator(`.tree-item[data-path="${p}"] [data-action="open"]`).click();
+  await expect(page.locator('#content h1')).toHaveText('Repin Doc');
+  await waitForBaseline(page, p);
+  await toggleReviewMode(page);
+  const toggleBtn = page.locator('#diffToggleBtn');
+  const confirmBtn = page.locator('#diffConfirmBtn');
+
+  // --- Cycle 0: pre-seed `_seededPaths` for this path with an EARLIER
+  // hash, exactly like the sibling Fix 5 test's technique (confirm first
+  // so tab.etag === lastSeen.hash, then force a second refresh() with a
+  // theme toggle to actually take the fast path).
+  const edit0 = ['# Repin Doc', '', 'Base line confirmed once.'].join('\n') + '\n';
+  await writeFile(path.join(fixtureDir, p), edit0, 'utf-8');
+  await expect(toggleBtn).toHaveText('次の変更 1');
+  await confirmBtn.click();
+  await expect(toggleBtn).toBeDisabled();
+  await expect(toggleBtn).toHaveText('次の変更 0');
+  await page.locator('#themeToggle').click();
+  // Fire-and-forget seed request — give it time to land server-side
+  // before cycle 1 starts (matches the sibling Fix 5 test's own margin).
+  await page.waitForTimeout(800);
+
+  // --- Cycle 1 (the one under test): a SECOND external edit, reviewed and
+  // confirmed, with edit mode entered IMMEDIATELY after — no theme toggle,
+  // no tab switch, nothing else that could incidentally re-seed the
+  // baseline first.
+  const edit1 = ['# Repin Doc', '', 'Base line changed a second time.'].join('\n') + '\n';
+  await writeFile(path.join(fixtureDir, p), edit1, 'utf-8');
+  await expect(toggleBtn).toHaveText('次の変更 1');
+  await confirmBtn.click();
+  await expect(toggleBtn).toBeDisabled();
+  await expect(toggleBtn).toHaveText('次の変更 0');
+
+  await page.locator('#editToggle').click();
+  await expect(page.locator('#editToggle')).toHaveClass(/active/);
+  const textarea = page.locator('#editorTextarea');
+  await expect(textarea).toBeVisible();
+
+  // Autosave-during-edit-mode churn past the version cap, strictly MORE
+  // times than JOURNAL_MAX_VERSIONS_PER_FILE (same space-out rule as every
+  // other churn test in this file) — synthetic journal.record() calls
+  // directly against the running server's journal instance, no real
+  // fs-write/chokidar timing needed per version.
+  const journal = server.mdv.app.locals.changeJournal;
+  for (let i = 1; i <= JOURNAL_MAX_VERSIONS_PER_FILE + 5; i++) {
+    journal.record(p, `synthetic churn v${i}\n`);
+  }
+
+  // One REAL write so disk content genuinely differs from cycle 1's
+  // confirmed baseline by the time edit mode ends.
+  const final = ['# Repin Doc', '', 'Base line was actually edited after the churn.'].join('\n') + '\n';
+  await writeFile(path.join(fixtureDir, p), final, 'utf-8');
+  await expect(textarea).toHaveValue(final, { timeout: 6000 });
+
+  // Leave edit mode -- this is a REAL diff request against cycle 1's
+  // confirmed baseline (content genuinely changed, not the fast path). It
+  // must resolve, not unknown-baseline — the bug this test guards is that
+  // baseline never having been (re-)pinned back in cycle 1's confirm step.
+  await page.locator('#editToggle').click();
+  await expect(page.locator('#editToggle')).not.toHaveClass(/active/);
+
+  await expect(toggleBtn).toBeEnabled({ timeout: 6000 });
+  await expect(toggleBtn).toHaveText(/^次の変更 \d+$/);
+  await expect(toggleBtn).not.toHaveText('次の変更 ?');
+  await expect(toggleBtn).not.toHaveText('次の変更 0');
+  await expect(page.locator('#content .diff-added, #content .diff-changed')).not.toHaveCount(0);
+});

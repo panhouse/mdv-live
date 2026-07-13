@@ -394,6 +394,10 @@ export const DiffReviewManager = {
     _current: null, // see _applyResponse() for shape
     _jumpIndex: -1,
     _reviewSeq: 0,
+    // Keyed by `${path}::${hash}` — NOT by path alone (codex P1,
+    // 2026-07-14 review round). See _seedBaseline() below for why: a bare
+    // path key would suppress seeding a LATER hash for the same path once
+    // any earlier hash had already been seeded once this page load.
     _seededPaths: new Set(),
     _lastPath: null,
     // app.js injects the bootstrap-level refreshCurrentTab() here so a
@@ -410,6 +414,54 @@ export const DiffReviewManager = {
     resetSeeds() {
         this._seededPaths.clear();
         this._staleRefetchKey = null;
+    },
+
+    /**
+     * Fire-and-forget: tell the server "`hash` IS the confirmed baseline
+     * for `path`" so src/api/diff.js's `from === currentHash` branch pins
+     * it in the change journal, protecting it from the version-cap/LRU
+     * eviction an editing session's autosave flood would otherwise cause
+     * (Fix 5, 2026-07-13 — see refresh()'s fast-path comment above).
+     *
+     * Suppressed to once per (path, hash) PAIR per page load, not once per
+     * path (codex P1, 2026-07-14 review round): `_seededPaths` used to be
+     * keyed by path alone, so once a path's FIRST baseline (e.g. H0) had
+     * been seeded, `_confirmLatest()` advancing that same path's baseline
+     * to a LATER hash (H1) could never seed/pin H1 — every future fast-path
+     * refresh silently no-opped (`_seededPaths.has(path)` was already
+     * true), and H1 sat unpinned until an editing session's autosave churn
+     * evicted it, reintroducing unknown-baseline right after the most
+     * natural "review → ✓ 確認 → edit" flow. Keying by `${path}::${hash}`
+     * instead means a new baseline always gets its own fresh seed attempt.
+     *
+     * Called from two places: refresh()'s fast path above (nothing changed
+     * since last seen — the ORIGINAL codex round-8 seeding case), and
+     * _confirmLatest() below (baseline just advanced via ✓ 確認). The
+     * latter matters on its own, independent of the path/hash keying fix:
+     * entering edit mode right after confirming does NOT reliably trigger
+     * another fast-path refresh() first — app.js's init() wraps
+     * EditorManager.show() to call refresh() afterward, but state.isEditMode
+     * is already true by then (EditorManager.toggle() sets it BEFORE
+     * calling show()), so that refresh() call hits the `state.isEditMode`
+     * guard at the top and returns before ever reaching the fast path.
+     * Without this explicit call, the newly-confirmed baseline would only
+     * ever get seeded by some UNRELATED later trigger (a tab switch, theme
+     * toggle, etc.) that happens to fire before autosave's churn evicts it
+     * — not guaranteed by the "confirm then edit" flow itself.
+     * @param {string} path
+     * @param {string|null|undefined} hash
+     */
+    _seedBaseline(path, hash) {
+        if (!hash) return;
+        const key = `${path}::${hash}`;
+        if (this._seededPaths.has(key)) return;
+        this._seededPaths.add(key);
+        // On failure, forget the suppression so a later visit retries
+        // instead of silently degrading to unknown-baseline (codex
+        // round-16).
+        MDVApi.diff(path, hash).catch(() => {
+            this._seededPaths.delete(key);
+        });
     },
 
     /**
@@ -524,27 +576,20 @@ export const DiffReviewManager = {
         // current hash and it matches the baseline. One catch: after a
         // server restart the in-memory journal is empty even though
         // localStorage remembers this hash — seed it (fire-and-forget,
-        // once per path per page load) so the NEXT edit produces real
-        // counts instead of unknown-baseline (codex round-8). Sending
-        // `lastSeen.hash` (not '') as `from` matters beyond seeding, too
-        // (Fix 5, 2026-07-13): it makes this an identical-hash request,
-        // which src/api/diff.js now pins as the confirmed baseline.
-        // Before Fix 5 this sent `from=''`, which src/api/diff.js never
-        // pins — a file opened via Review ON with nothing changed yet had
-        // NO pin protecting its baseline, so entering edit mode right
-        // after let autosave's flood of journal.record() calls evict it
-        // before a single real diff was ever requested (実装計画_2026-07-13_
-        // reviewベースライン消失.md §3 Fix 5).
+        // once per path+hash per page load, see _seedBaseline() below) so
+        // the NEXT edit produces real counts instead of unknown-baseline
+        // (codex round-8). Sending `lastSeen.hash` (not '') as `from`
+        // matters beyond seeding, too (Fix 5, 2026-07-13): it makes this an
+        // identical-hash request, which src/api/diff.js now pins as the
+        // confirmed baseline. Before Fix 5 this sent `from=''`, which
+        // src/api/diff.js never pins — a file opened via Review ON with
+        // nothing changed yet had NO pin protecting its baseline, so
+        // entering edit mode right after let autosave's flood of
+        // journal.record() calls evict it before a single real diff was
+        // ever requested (実装計画_2026-07-13_reviewベースライン消失.md §3
+        // Fix 5).
         if (!pathChanged && tab.etag && tab.etag === lastSeen.hash) {
-            if (!this._seededPaths.has(tab.path)) {
-                this._seededPaths.add(tab.path);
-                // On failure, forget the suppression so a later visit
-                // retries instead of silently degrading to
-                // unknown-baseline (codex round-16).
-                MDVApi.diff(tab.path, lastSeen.hash).catch(() => {
-                    this._seededPaths.delete(tab.path);
-                });
-            }
+            this._seedBaseline(tab.path, lastSeen.hash);
             this._hide();
             return;
         }
@@ -759,6 +804,11 @@ export const DiffReviewManager = {
             hash = tab ? await this._resolveCurrentHash(tab) : null;
         }
         markSeen(path, hash);
+        // Pin the just-confirmed hash server-side right away instead of
+        // waiting for some later fast-path refresh() to do it (codex P1,
+        // 2026-07-14 review round — see _seedBaseline()'s docstring for why
+        // that wait is not reliable for the "confirm then edit" flow).
+        this._seedBaseline(path, hash);
         this._hide();
     },
 

@@ -147,6 +147,30 @@ export function setupWatcher(rootDir, wss, options = {}) {
     try {
       const rendered = await renderFile(filePath, relativeDir === '.' ? '' : relativeDir);
 
+      // Superseded-event guard (codex P2, 2026-07-14 review round): the
+      // await above can resolve AFTER a LATER fs event already claimed a
+      // newer seq for this same path — most importantly 'unlink' (below),
+      // which calls journal.deletePath() synchronously the instant it
+      // fires. A now-stale handler that still journal.record()s would
+      // resurrect a just-deleted path's history (a recreated file
+      // inheriting a pre-deletion baseline/pin it should never have seen).
+      //
+      // The whole handler bails, not just the journal write: record() and
+      // broadcastFileUpdate() are a PAIR (see the 0.6.3 comment below —
+      // the journal is seeded BEFORE broadcasting precisely so a diff
+      // request racing the WS message can use that version as a `from`
+      // baseline). Skipping only the record while still broadcasting would
+      // ship the client an etag the journal has never heard of — the exact
+      // unknown-baseline shape this whole change exists to eliminate.
+      // Dropping the stale event entirely is also simply correct: a newer
+      // event for this path already claimed the seq, and its own handler
+      // broadcasts the newer content (or, for 'unlink', removes the file).
+      //
+      // `seq === undefined` (non-trackable paths never claim one — see
+      // claimEventSeq() above) means no newer-claim protection is available
+      // for that path: same pre-existing gap as before, not a regression.
+      if (seq !== undefined && pathEventSeq.get(relativePath) !== seq) return;
+
       // Change tracking (0.6.3): journal the raw source BEFORE broadcasting,
       // so a diff request racing this WS message can already use this
       // version as a `from` baseline. `etag` is set AFTER spreading
@@ -193,7 +217,16 @@ export function setupWatcher(rootDir, wss, options = {}) {
       if (stat.size <= JOURNAL_MAX_FILE_BYTES) {
         const raw = await fs.readFile(filePath, 'utf-8');
         etag = makeEtag(raw);
-        if (journal) journal.record(relativePath, raw);
+        // Superseded-event guard (codex P2, 2026-07-14 review round): same
+        // race as the 'change' handler above — a slow stat/read here can
+        // resolve AFTER a later 'unlink' already claimed a newer seq (and
+        // called journal.deletePath()) for this path. `seq` is always
+        // defined at this point (the isTrackable early-return above is the
+        // only path that skips claimEventSeq()), so no `undefined` check is
+        // needed here unlike the 'change' handler.
+        if (journal && pathEventSeq.get(relativePath) === seq) {
+          journal.record(relativePath, raw);
+        }
       }
     } catch {
       // Unreadable/vanished before we got to it — fall through etag-less;

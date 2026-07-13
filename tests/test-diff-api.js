@@ -472,6 +472,88 @@ describe('GET /api/diff — Fix 5 (2026-07-13, 実装計画_2026-07-13_reviewベ
   });
 });
 
+describe('GET /api/diff — a re-pinned baseline (advanced past the ORIGINAL pin via a second identical request) survives the version cap too (codex P1, 2026-07-14 review round)', () => {
+  it('①H0 pinned via an identical request ②a real edit is diffed against H0 (H0->H1, NOT itself an identical request, so H1 is not yet pinned) ③the client confirms H1 via ITS OWN identical request (from=H1) ④the version cap is exceeded with zero further /api/diff calls ⑤from=H1 still resolves available:true', async () => {
+    // This is the SERVER-side half of the contract modules/diffReview.js's
+    // fixed _confirmLatest()/_seedBaseline() now drives end-to-end (see
+    // that module and its "codex P1" comments): confirming a diff must
+    // pin the NEW hash the same way the fast-path's first-ever seed pins
+    // the original one, not just once per path for the lifetime of the
+    // page. src/api/diff.js's pinning rule itself (Fix 5) already handles
+    // any identical request correctly regardless of how many times a path
+    // was seeded before — this test pins down that server contract for a
+    // baseline that has ALREADY ADVANCED once, so a regression here would
+    // be caught independently of the client-side fix (the client-side half
+    // — that the browser actually SENDS step ③'s request after a real
+    // ✓ 確認 click, even when an EARLIER hash for the same path was already
+    // seeded once this page load — is covered by the Playwright E2E
+    // regression test in tests/e2e/18-diff-highlight.spec.js, which is the
+    // only test that can actually fail from the pre-fix path-only
+    // `_seededPaths` Set: this HTTP-level test cannot observe that bug,
+    // since src/api/diff.js's pinning logic was already correct before
+    // this review round).
+    const ctx = await startTestServer({ files: { 'repin.md': 'v0\n' } });
+    try {
+      const journal = ctx.server.app.locals.changeJournal;
+      const h0 = makeEtag('v0\n');
+
+      // ① H0 pinned via an identical request — same as the Fix 5 test
+      // above; this is the FIRST-EVER seed for this path.
+      const seed = await (
+        await fetch(`${ctx.baseUrl}/api/diff?path=repin.md&from=${encodeURIComponent(h0)}`)
+      ).json();
+      assert.strictEqual(seed.identical, true, 'precondition: H0 is pinned via the identical branch');
+
+      // ② A real external edit — diffed against H0 (from=H0, currentHash=H1
+      // -> NOT an identical request, so this alone does NOT pin H1; only
+      // journal.get()'s lookup-side pin fires here, which pins H0 again
+      // (the FROM hash), not H1 (the CURRENT hash).
+      const v1 = 'v1 edited\n';
+      await fs.writeFile(`${ctx.rootDir}/repin.md`, v1, 'utf-8');
+      const h1 = makeEtag(v1);
+      const realDiff = await (
+        await fetch(`${ctx.baseUrl}/api/diff?path=repin.md&from=${encodeURIComponent(h0)}`)
+      ).json();
+      assert.strictEqual(realDiff.available, true);
+      assert.strictEqual(realDiff.identical, false);
+      assert.strictEqual(realDiff.currentHash, h1);
+
+      // ③ The client confirms H1 — modules/diffReview.js's _confirmLatest()
+      // (post-fix) sends its OWN identical request (from=H1) right when
+      // markSeen() advances the local baseline, not just whenever some
+      // later fast-path refresh happens to fire.
+      const confirm = await (
+        await fetch(`${ctx.baseUrl}/api/diff?path=repin.md&from=${encodeURIComponent(h1)}`)
+      ).json();
+      assert.strictEqual(confirm.identical, true, 'precondition: H1 is pinned via its own identical request');
+
+      // ④ Edit-mode churn past the version cap, zero further /api/diff
+      // calls in between — same technique as the Fix 5 test above.
+      for (let i = 2; i <= JOURNAL_MAX_VERSIONS_PER_FILE + 5; i++) {
+        journal.record('repin.md', `v${i}\n`);
+      }
+      await fs.writeFile(
+        `${ctx.rootDir}/repin.md`,
+        `v${JOURNAL_MAX_VERSIONS_PER_FILE + 5}\n`,
+        'utf-8'
+      );
+
+      // ⑤ from=H1 still resolves — the RE-pin survived the churn exactly
+      // like the ORIGINAL pin does in the Fix 5 test.
+      const res = await fetch(`${ctx.baseUrl}/api/diff?path=repin.md&from=${encodeURIComponent(h1)}`);
+      const data = await res.json();
+      assert.strictEqual(
+        data.available,
+        true,
+        `H1 must survive — re-pinned by the second identical-branch confirm above: ${JSON.stringify(data)}`
+      );
+      assert.strictEqual(data.identical, false);
+    } finally {
+      await ctx.stop();
+    }
+  });
+});
+
 describe('GET /api/diff — slideRanges (0.6.16, Marp deck diffs only, feeds modules/marpDiffIndicator.js)', () => {
   it('a real diff on a Marp deck includes one-based slideRanges matching the current content\'s slides', async () => {
     const deck = '---\nmarp: true\n---\n\n# 一枚目\n\n---\n\n# 二枚目\n';
