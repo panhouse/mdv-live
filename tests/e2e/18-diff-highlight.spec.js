@@ -851,3 +851,143 @@ test('regression P1 (codex, 2026-07-14 review round): review -> external edit ->
   await expect(toggleBtn).not.toHaveText('次の変更 0');
   await expect(page.locator('#content .diff-added, #content .diff-changed')).not.toHaveCount(0);
 });
+
+test('regression P1 (codex 3rd-round review, 2026-07-14): FIRST-SIGHT baseline — a file opened, reviewed, and put into edit mode WITHOUT ever clicking ✓ 確認 (or triggering any other refresh() first) — survives autosave churn past the version cap', async ({ page }) => {
+  // The two sibling regression tests above ("Fix 5" and the first "P1" test)
+  // both pre-seed the pin via an explicit ✓ 確認 click (or the fast path's
+  // own "nothing changed" re-seed) before entering edit mode. Neither one
+  // exercises the FIRST-SIGHT branch of refresh() (`!lastSeen`): before this
+  // fix, `_seedBaseline()` was called from exactly two places
+  // (refresh()'s fast path and `_confirmLatest()`) — first sight's
+  // `markSeen(tab.path, currentHash)` call was NOT one of them, so a file
+  // that is opened, reviewed, and edited WITHOUT ever confirming (or
+  // otherwise triggering a second refresh() first) had its baseline
+  // recorded in localStorage but never pinned server-side. The very next
+  // edit-mode autosave churn past the version cap evicted it, reproducing
+  // unknown-baseline ("次の変更 ?", no highlight) right after the simplest
+  // possible flow: open a file, turn Review on, start typing.
+  const p = 'firstsight-editmode.md';
+  const original = ['# First Sight Doc', '', 'Base line stays for now.'].join('\n') + '\n';
+  await writeFile(path.join(fixtureDir, p), original);
+  await page.goto(server.baseURL + '/');
+  await page.locator(`.tree-item[data-path="${p}"] [data-action="open"]`).click();
+  await expect(page.locator('#content h1')).toHaveText('First Sight Doc');
+
+  // First sight: refresh()'s `!lastSeen` branch records the baseline via
+  // markSeen() the instant the tab opens — no edit, no confirm click, no
+  // tab switch/theme toggle to trigger any OTHER refresh() first.
+  await waitForBaseline(page, p);
+  // The first-sight seed request markSeen() now fires (this fix) is
+  // fire-and-forget — give the one local round trip time to land
+  // server-side before the churn below starts (same margin the sibling
+  // Fix 5/P1 tests give their own seed requests).
+  await page.waitForTimeout(800);
+
+  await toggleReviewMode(page);
+  const toggleBtn = page.locator('#diffToggleBtn');
+  await expect(toggleBtn).toBeVisible();
+  await expect(toggleBtn).toBeDisabled(); // no pending diff yet — baseline == current content
+
+  // Enter edit mode DIRECTLY — no confirm click, no tab switch, no theme
+  // toggle: nothing that could incidentally re-seed the baseline via some
+  // OTHER code path before the churn below runs.
+  await page.locator('#editToggle').click();
+  await expect(page.locator('#editToggle')).toHaveClass(/active/);
+  const textarea = page.locator('#editorTextarea');
+  await expect(textarea).toBeVisible();
+
+  // Autosave-during-edit-mode churn past the version cap, strictly MORE
+  // times than JOURNAL_MAX_VERSIONS_PER_FILE (same technique as the sibling
+  // churn tests above): synthetic journal.record() calls directly against
+  // the running server's journal instance, no real fs-write/chokidar timing
+  // needed per version.
+  const journal = server.mdv.app.locals.changeJournal;
+  for (let i = 1; i <= JOURNAL_MAX_VERSIONS_PER_FILE + 5; i++) {
+    journal.record(p, `synthetic churn v${i}\n`);
+  }
+
+  // One REAL write so disk content genuinely differs from the first-sight
+  // baseline by the time edit mode ends.
+  const edited = ['# First Sight Doc', '', 'Base line was actually edited after the churn.'].join('\n') + '\n';
+  await writeFile(path.join(fixtureDir, p), edited, 'utf-8');
+  await expect(textarea).toHaveValue(edited, { timeout: 6000 });
+
+  // Leave edit mode -- this is a REAL diff request against the FIRST-SIGHT
+  // baseline (content genuinely changed, not the fast path). It must
+  // resolve, not unknown-baseline — the bug this test guards is that
+  // baseline never having been pinned in the first place.
+  await page.locator('#editToggle').click();
+  await expect(page.locator('#editToggle')).not.toHaveClass(/active/);
+
+  await expect(toggleBtn).toBeEnabled({ timeout: 6000 });
+  await expect(toggleBtn).toHaveText(/^次の変更 \d+$/);
+  await expect(toggleBtn).not.toHaveText('次の変更 ?');
+  await expect(toggleBtn).not.toHaveText('次の変更 0');
+  await expect(page.locator('#content .diff-added, #content .diff-changed')).not.toHaveCount(0);
+});
+
+test('integration P1 (codex 3rd-round review, 2026-07-14): markSeen() itself pins the baseline server-side — independent of WHICH caller invoked it', async ({ page }) => {
+  // Exercises markSeen() directly (dynamic import of the same module
+  // instance the running app already loaded — ES modules are cached by
+  // resolved URL, so this is not a second copy), bypassing tab-open/
+  // edit-mode choreography entirely. This isolates the ONE thing under
+  // test: does markSeen(path, hash) — no matter who calls it — protect
+  // `hash` from the journal's version-cap eviction? (Every real caller —
+  // first sight, ✓ 確認, the zero-hunk auto-adopt, フォルダ内を確認済みにする
+  // — funnels through markSeen(), so this single test stands in for all of
+  // them; see diffReview.js's docstring's "markSeen() is also the ONE
+  // place that pins..." section.)
+  const p = 'seed-via-marksseen.md';
+  await writeFile(path.join(fixtureDir, p), '# Seed Via markSeen\n\nBody.\n');
+  await page.goto(server.baseURL + '/');
+  // Wait for app bootstrap (state.rootPath comes from /api/info, fetched
+  // before the tree renders — see app.js's init()) so markSeen()'s
+  // storeKey() doesn't bail out for lack of a known root.
+  await expect(page.locator('.tree-item').first()).toBeVisible();
+
+  const hash = await page.evaluate(async (rel) => {
+    const res = await fetch('/api/diff?path=' + encodeURIComponent(rel) + '&from=');
+    const data = await res.json();
+    return data.currentHash;
+  }, p);
+  expect(hash).toMatch(/^sha256:/);
+
+  // Call markSeen() DIRECTLY — no tab was ever opened for this path, no
+  // first-sight refresh(), no confirm click. If markSeen() itself pins,
+  // this alone must be enough to protect the hash below.
+  await page.evaluate(async ({ rel, h }) => {
+    const mod = await import('/static/modules/diffReview.js');
+    mod.markSeen(rel, h);
+  }, { rel: p, h: hash });
+
+  // Fire-and-forget seed request — give it time to land server-side.
+  await page.waitForTimeout(500);
+
+  // Churn this path's journal past the per-file version cap, entirely
+  // server-side (no browser/tab involvement at all) — an unpinned baseline
+  // is fair game for eviction here; a pinned one must survive.
+  const journal = server.mdv.app.locals.changeJournal;
+  for (let i = 1; i <= JOURNAL_MAX_VERSIONS_PER_FILE + 5; i++) {
+    journal.record(p, `synthetic churn v${i}\n`);
+  }
+
+  // A REAL content change on disk is required here: src/api/diff.js's
+  // `from === currentHash` branch short-circuits straight to `identical`
+  // WITHOUT ever consulting the journal at all, so leaving the file
+  // untouched would make this assertion pass trivially regardless of
+  // whether `hash` survived the churn above — it would never actually
+  // exercise journal.get(path, hash).
+  await writeFile(path.join(fixtureDir, p), '# Seed Via markSeen\n\nBody, changed after the churn.\n', 'utf-8');
+
+  // Ask the server directly: is `hash` still diffable as a baseline against
+  // the NOW-DIFFERENT current content? Unpinned + evicted ->
+  // { available: false, reason: 'unknown-baseline' }.
+  const result = await page.evaluate(async ({ rel, h }) => {
+    const res = await fetch('/api/diff?path=' + encodeURIComponent(rel) + '&from=' + encodeURIComponent(h));
+    return res.json();
+  }, { rel: p, h: hash });
+
+  expect(result.reason).not.toBe('unknown-baseline');
+  expect(result.available).toBe(true);
+  expect(result.identical).toBe(false);
+});
