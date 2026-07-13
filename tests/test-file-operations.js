@@ -177,55 +177,6 @@ describe('File Operations', () => {
     });
   });
 
-  describe('DELETE /api/file — change-journal cleanup (P2-c, codex 4th-round, 2026-07-14)', () => {
-    // journal.record() is called directly here (rather than relying on
-    // chokidar to journal the write asynchronously) so each assertion
-    // isolates the DELETE ROUTE's own cleanup call — the bug this guards
-    // was journal entries surviving a deletion the watcher's own 'unlink'
-    // handler never independently cleaned up (e.g. src/api/diff.js's lazy
-    // journaling of a path outside the watch depth); reproducing that
-    // exact race deterministically isn't needed to prove the route itself
-    // now calls journal.deletePath().
-    it('clears the journal entry when a single file is deleted', async () => {
-      const journal = ctx.server.app.locals.changeJournal;
-      await fs.writeFile(tempPath('journaled.md'), 'v1');
-      journal.record('journaled.md', 'v1');
-      assert.notStrictEqual(journal.latestHash('journaled.md'), null, 'precondition: journal has a version for this path');
-
-      const response = await fetch(apiUrl('/api/file?path=journaled.md'), {
-        method: 'DELETE',
-        headers: { 'Sec-Fetch-Site': 'same-origin' },
-      });
-      assert.strictEqual(response.status, 200);
-
-      assert.strictEqual(journal.listVersions('journaled.md').length, 0, 'journal must be cleared for the deleted path');
-    });
-
-    it('clears journal entries for every path nested under a recursively-deleted directory, leaving unrelated paths untouched', async () => {
-      const journal = ctx.server.app.locals.changeJournal;
-      await fs.mkdir(tempPath('journaled_dir', 'sub'), { recursive: true });
-      await fs.writeFile(tempPath('journaled_dir', 'a.md'), 'a1');
-      await fs.writeFile(tempPath('journaled_dir', 'sub', 'b.md'), 'b1');
-      await fs.writeFile(tempPath('sibling.md'), 's1');
-
-      journal.record('journaled_dir/a.md', 'a1');
-      journal.record('journaled_dir/sub/b.md', 'b1');
-      journal.record('sibling.md', 's1');
-
-      const response = await fetch(apiUrl('/api/file?path=journaled_dir'), {
-        method: 'DELETE',
-        headers: { 'Sec-Fetch-Site': 'same-origin' },
-      });
-      assert.strictEqual(response.status, 200);
-
-      assert.strictEqual(journal.listVersions('journaled_dir/a.md').length, 0, 'a top-level file under the deleted directory must be cleared');
-      assert.strictEqual(journal.listVersions('journaled_dir/sub/b.md').length, 0, 'a NESTED file under the deleted directory must be cleared too');
-      assert.notStrictEqual(journal.latestHash('sibling.md'), null, 'an unrelated sibling path outside the deleted directory must be untouched');
-
-      await fs.unlink(tempPath('sibling.md'));
-    });
-  });
-
   describe('POST /api/mkdir', () => {
     it('should create directory', async () => {
       const response = await fetch(apiUrl('/api/mkdir'), {

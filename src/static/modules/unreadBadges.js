@@ -219,22 +219,38 @@ export const UnreadBadgesManager = {
      * autosave churn on a file that is ACTIVELY being edited (see
      * diffReview.js's docstring's "markSeen()'s `{ pin }` opt-out" section);
      * a path bulk-confirmed from the tree context menu is by definition not
-     * that. The one exception — the active tab, if it happens to sit under
-     * `dirPath` — still ends up pinned: the trailing `DiffReviewManager.
-     * refresh()` call below re-checks the active tab against the baseline
-     * this loop just wrote, takes refresh()'s FAST path (tab.etag now
-     * equals lastSeen.hash), and that path calls `_seedBaseline()` directly
-     * — so the one file a user might immediately start editing next is
-     * protected without this loop having to special-case it.
+     * that.
+     *
+     * The ACTIVE tab's path is the one exception, and it needs `{ pin: true
+     * }` explicitly (codex, 2026-07-14 — a later round than P2-a above): the
+     * comment this replaced claimed the trailing `DiffReviewManager.
+     * refresh()` call below re-pins it "for free" via refresh()'s fast path,
+     * but that is only true when the active tab is NOT in edit mode —
+     * refresh() early-returns the moment `state.isEditMode` is true (see
+     * that method's guard at its very top), before it ever reaches the fast
+     * path that calls `_seedBaseline()`. Bulk-confirming a folder while the
+     * active file sits open in the editor is an entirely ordinary sequence
+     * (open a file, start editing, then clear the rest of the folder from
+     * the tree without leaving edit mode first) — under the old code that
+     * file's newly-adopted baseline was written to localStorage but never
+     * pinned server-side, so once autosave churn pushed it past the version
+     * cap the next diff request came back `unknown-baseline`. Pinning it
+     * directly here, unconditionally, closes that gap regardless of edit
+     * mode.
      * @param {string} dirPath - '' for the tree root
      */
     markFolderSeen(dirPath) {
         const prefix = dirPath ? dirPath + '/' : '';
         const toClear = Array.from(this._unreadEtag.entries())
             .filter(([p]) => p.startsWith(prefix));
+        const activeTab = state.activeTabIndex >= 0 ? state.tabs[state.activeTabIndex] : null;
         for (const [p, etag] of toClear) {
             if (etag) {
-                markSeen(p, etag, { pin: false }); // triggers _handleSeen via onSeen
+                // triggers _handleSeen via onSeen. The active tab is pinned
+                // even here — see the `{ pin: true }` doc section above —
+                // because refresh() below cannot be relied on to do it
+                // while the active tab is in edit mode.
+                markSeen(p, etag, { pin: activeTab ? p === activeTab.path : false });
             } else {
                 this._unreadEtag.delete(p);
             }
@@ -243,9 +259,7 @@ export const UnreadBadgesManager = {
         this._updateHeaderChip();
         // The bulk confirm may include the ACTIVE file — its toolbar
         // controls must not keep claiming "changed" for a baseline this
-        // action just updated (codex round-5). This call also re-pins the
-        // active tab's baseline via refresh()'s fast path — see the
-        // `{ pin: false }` comment above.
+        // action just updated (codex round-5).
         DiffReviewManager.refresh();
     },
 

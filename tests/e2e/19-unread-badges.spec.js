@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { makeFixtureDir, seedFiles, startServer, removeFixtureDir } from './helpers.js';
+import { JOURNAL_MAX_VERSIONS_PER_FILE } from '../../src/config/constants.js';
 
 // modules/unreadBadges.js — 0.6.5 未読●/フォルダバッジ + 次の未読へ
 // (0.6.8: the green ✓ "seen" badge is REMOVED — owner: 「既読マーク(緑✓)
@@ -363,6 +364,112 @@ test('P2-a regression (codex 4th-round, 2026-07-14): フォルダ内を確認済
         diffRequestPaths,
         `bulk-confirm with no active tab anywhere must fire ZERO /api/diff requests (one per file was the P2-a bug), got: ${JSON.stringify(diffRequestPaths)}`
     ).toEqual([]);
+});
+
+test('regression (codex, 2026-07-14 review round): フォルダ内を確認済みにする pins the ACTIVE tab even while it is in edit mode, so autosave churn past the version cap does not lose its bulk-confirmed baseline', async ({ page }) => {
+    // The P2-a test above proves markFolderSeen() must NOT pin every file
+    // (request-flood prevention). This test proves the one carve-out it
+    // still needs: when the bulk-confirmed folder contains the file
+    // currently open IN EDIT MODE, that file's newly-adopted baseline must
+    // still get pinned — the trailing `DiffReviewManager.refresh()` call
+    // markFolderSeen() relies on to "re-pin the active tab for free" only
+    // reaches its fast path (which calls _seedBaseline()) when the active
+    // tab is NOT in edit mode; refresh() early-returns the instant
+    // state.isEditMode is true (see diffReview.js's refresh(), its very
+    // first guard). Bulk-confirming a folder while the file you're
+    // actively editing sits inside it is an entirely ordinary sequence —
+    // open a file, start editing, clear the rest of the folder from the
+    // tree without leaving edit mode first — and left that file's
+    // confirmed baseline unpinned pre-fix: the next autosave churn past
+    // the version cap evicted it, and leaving edit mode afterward
+    // surfaced unknown-baseline instead of the real diff.
+    const PIN_DIR = 'pindir';
+    const P = `${PIN_DIR}/active.md`;
+    const original = ['# Active Doc', '', 'Base line stays for now.'].join('\n') + '\n';
+
+    await page.goto(server.baseURL + '/');
+    await toggleReviewMode(page);
+    await seedFiles(fixtureDir, { [P]: original });
+
+    // Expand pindir/ before the nested file row can be interacted with
+    // (root-level dirs are already loaded — see 06-pagination.spec.js —
+    // this only toggles the collapsed class, same as the docs/ expand
+    // above in the combined 0.6.12 test).
+    const dirRow = page.locator(`.tree-item[data-path="${PIN_DIR}"]`);
+    await expect(dirRow).toBeVisible({ timeout: 5000 });
+    await dirRow.locator(':scope > .tree-item-content').click();
+
+    const fileRow = page.locator(`.tree-item[data-path="${P}"]`);
+    await expect(fileRow).toBeVisible({ timeout: 5000 });
+    await fileRow.locator('[data-action="open"]').click();
+    await expect(page.locator('#content')).toContainText('Active Doc');
+    await waitForBaseline(page, P);
+
+    // Enter edit mode BEFORE the external edit below — refresh()'s
+    // early-return while state.isEditMode is true is exactly the
+    // precondition this bug needs.
+    await page.locator('#editToggle').click();
+    await expect(page.locator('#editToggle')).toHaveClass(/active/);
+    const textarea = page.locator('#editorTextarea');
+    await expect(textarea).toBeVisible();
+
+    // External edit while in edit mode: the watcher's file_update
+    // broadcast still flows (updates tab.etag + the visible textarea,
+    // since nothing was typed — same as the sibling churn tests in
+    // 18-diff-highlight.spec.js), AND the files_changed feed marks this
+    // path unread (nothing consumed it — diffReview.js's refresh() never
+    // ran to advance the local baseline while edit mode is on).
+    const edited = ['# Active Doc', '', 'Edited while in edit mode.'].join('\n') + '\n';
+    await writeFile(path.join(fixtureDir, P), edited, 'utf-8');
+    await expect(textarea).toHaveValue(edited, { timeout: 6000 });
+
+    const dirBadge = dirRow.locator(':scope > .tree-item-content > .tree-badge-count');
+    await expect(dirBadge).toHaveText('1', { timeout: 5000 });
+
+    // Bulk-confirm the folder WHILE still in edit mode — this is the call
+    // under test.
+    await dirRow.locator(':scope > .tree-item-content').click({ button: 'right' });
+    const menuItem = page.locator('.context-menu-item', { hasText: 'フォルダ内を確認済みにする' });
+    await expect(menuItem).toBeVisible();
+    await menuItem.click();
+    await expect(dirBadge).toHaveCount(0, { timeout: 5000 });
+
+    // Give the fire-and-forget pin/seed request time to land server-side
+    // (same margin the sibling Fix 5/P1 tests in 18-diff-highlight.spec.js
+    // give their own seed requests).
+    await page.waitForTimeout(800);
+
+    // Autosave-during-edit-mode churn past the version cap, strictly MORE
+    // times than JOURNAL_MAX_VERSIONS_PER_FILE — same technique as the
+    // sibling churn tests in 18-diff-highlight.spec.js: synthetic
+    // journal.record() calls directly against the running server's
+    // journal instance, no real fs-write/chokidar timing needed per
+    // version.
+    const journal = server.mdv.app.locals.changeJournal;
+    for (let i = 1; i <= JOURNAL_MAX_VERSIONS_PER_FILE + 5; i++) {
+        journal.record(P, `synthetic churn v${i}\n`);
+    }
+
+    // One REAL write so disk content genuinely differs from the
+    // bulk-confirmed baseline by the time edit mode ends.
+    const final = ['# Active Doc', '', 'Edited again after the churn.'].join('\n') + '\n';
+    await writeFile(path.join(fixtureDir, P), final, 'utf-8');
+    await expect(textarea).toHaveValue(final, { timeout: 6000 });
+
+    // Leave edit mode -- this is a REAL diff request against the
+    // bulk-confirmed baseline (content genuinely changed, not the fast
+    // path). It must resolve, not unknown-baseline -- the bug this test
+    // guards is that baseline never having been pinned by the folder
+    // bulk-confirm in the first place.
+    await page.locator('#editToggle').click();
+    await expect(page.locator('#editToggle')).not.toHaveClass(/active/);
+
+    const toggleBtn = page.locator('#diffToggleBtn');
+    await expect(toggleBtn).toBeEnabled({ timeout: 6000 });
+    await expect(toggleBtn).toHaveText(/^次の変更 \d+$/);
+    await expect(toggleBtn).not.toHaveText('次の変更 ?');
+    await expect(toggleBtn).not.toHaveText('次の変更 0');
+    await expect(page.locator('#content .diff-added, #content .diff-changed')).not.toHaveCount(0);
 });
 
 test('0.6.12: Review mode ON/OFF survives reload (the unread map itself is session-only, an unrelated pre-existing 0.6.5 design choice — see modules/unreadBadges.js\'s docstring)', async ({ page }) => {

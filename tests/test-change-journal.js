@@ -3,11 +3,11 @@
  *
  * Covers: basic record/get/latestHash roundtrip, content-hash dedup +
  * recency touch, per-file version cap (maxVersionsPerFile), oversized-file
- * hash-only behavior, global byte-budget LRU eviction across files, the
+ * hash-only behavior, global byte-budget LRU eviction across files, and the
  * pin (Fix 1/2, 2026-07-13 — see 実装計画_2026-07-13_reviewベースライン消失.md)
  * that protects the client's confirmed diff baseline from BOTH the version
  * cap and the global LRU regardless of how much time or how many autosave
- * cycles pass, and deletePath() (Fix 4).
+ * cycles pass.
  */
 
 import { describe, it } from 'node:test';
@@ -502,106 +502,3 @@ describe('changeJournal — global-LRU eviction over many tracked snapshots comp
   });
 });
 
-describe('changeJournal — deletePath() (Fix 4, 2026-07-13)', () => {
-  it('removes every version and pin for one path without touching another', () => {
-    const journal = createChangeJournal({ maxBytesTotal: 1000 });
-    const hA1 = journal.record('a.md', 'AAAAAAA');
-    journal.record('a.md', 'A2A2A2A');
-    const hB = journal.record('b.md', 'BBBBBBB');
-    journal.get('a.md', hA1); // pin a.md
-
-    journal.deletePath('a.md');
-
-    assert.strictEqual(journal.listVersions('a.md').length, 0, 'a.md has no versions left');
-    assert.strictEqual(journal.latestHash('a.md'), null);
-    assert.strictEqual(journal.get('a.md', hA1), null, 'a.md content is gone');
-    assert.strictEqual(journal.get('b.md', hB), 'BBBBBBB', 'b.md is untouched');
-  });
-
-  it('frees its byte budget — a stale charge would force an eviction that should not happen', () => {
-    const journal = createChangeJournal({ maxBytesTotal: 20, maxBytesPerFile: 100, maxVersionsPerFile: 100 });
-    journal.record('a.md', '1'.repeat(10)); // 10 bytes
-    journal.deletePath('a.md');             // must free those 10 bytes
-
-    const hB = journal.record('b.md', '2'.repeat(10)); // 10 bytes
-    const hC = journal.record('c.md', '3'.repeat(10)); // 10 bytes; exactly 20 total IF a.md's charge is really gone
-
-    assert.strictEqual(journal.get('b.md', hB), '2'.repeat(10), 'no stale a.md byte charge forced b.md out');
-    assert.strictEqual(journal.get('c.md', hC), '3'.repeat(10));
-  });
-
-  it('clears the pin — a path recreated afterward gets normal (unpinned) cap eviction', () => {
-    const journal = createChangeJournal({ maxVersionsPerFile: 2 });
-    const h1 = journal.record('a.md', 'v1');
-    journal.get('a.md', h1); // pin h1
-    journal.deletePath('a.md');
-
-    const h2 = journal.record('a.md', 'w1');
-    journal.record('a.md', 'w2');
-    const h4 = journal.record('a.md', 'w3'); // len 3 > cap(2) -> evicts w1, no stale pin protecting it
-    assert.strictEqual(journal.get('a.md', h2), null, 'oldest of the fresh history was evicted normally');
-    assert.strictEqual(journal.get('a.md', h4), 'w3');
-  });
-});
-
-describe('changeJournal — deletePath(path, { recursive: true }) (P2-c, codex 4th-round, 2026-07-14 — src/api/file.js\'s DELETE /api/file recursive directory delete)', () => {
-  it('removes every path nested under a directory prefix, leaving unrelated paths untouched', () => {
-    const journal = createChangeJournal();
-    const hA = journal.record('dir/a.md', 'A');
-    const hB = journal.record('dir/sub/b.md', 'B');
-    const hC = journal.record('other.md', 'C');
-
-    journal.deletePath('dir', { recursive: true });
-
-    assert.strictEqual(journal.listVersions('dir/a.md').length, 0, 'top-level file under the deleted directory is gone');
-    assert.strictEqual(journal.listVersions('dir/sub/b.md').length, 0, 'nested file under the deleted directory is gone too');
-    assert.strictEqual(journal.get('other.md', hC), 'C', 'an unrelated path is untouched');
-    void hA; void hB;
-  });
-
-  it('does NOT match a sibling directory whose name merely starts with the same prefix (exact "dir/" boundary, not a raw string prefix)', () => {
-    // Without the '/' separator in the prefix check, deleting "dir" would
-    // wrongly also match "dir2/x.md" (a plain `path.startsWith('dir')`
-    // would) — this is the exact off-by-one a prefix sweep must not have.
-    const journal = createChangeJournal();
-    journal.record('dir/a.md', 'A');
-    const hSibling = journal.record('dir2/x.md', 'X');
-
-    journal.deletePath('dir', { recursive: true });
-
-    assert.strictEqual(journal.listVersions('dir/a.md').length, 0);
-    assert.strictEqual(journal.get('dir2/x.md', hSibling), 'X', 'dir2/x.md must survive deleting "dir" — it is not actually nested under it');
-  });
-
-  it('clears content/pin for a nested path even when pinned — not just unlisted, actually forgotten (mirrors the exact-match deletePath() guarantee)', () => {
-    // Checked directly via get() right after deletePath(), not via a later
-    // record()/cap-eviction dance: a stale-but-still-pinned nested entry
-    // and a properly-cleared one can coincidentally produce the SAME
-    // eviction outcome several record() calls later (pin protection and
-    // cap eviction interact in ways that don't reliably distinguish
-    // "cleared" from "not cleared" indirectly) — asserting on the
-    // immediate post-condition is the unambiguous check.
-    const journal = createChangeJournal({ maxBytesTotal: 1000 });
-    const hNested = journal.record('dir/a.md', 'nested-content');
-    journal.get('dir/a.md', hNested); // pin it — the recursive sweep must clear this too, not just unlist the path
-
-    journal.deletePath('dir', { recursive: true });
-
-    assert.strictEqual(
-      journal.get('dir/a.md', hNested),
-      null,
-      'a pinned nested path\'s content must be gone after a recursive delete of its parent, not still retrievable'
-    );
-  });
-
-  it('without { recursive: true } (the default), only the exact path is removed — nested paths survive', () => {
-    const journal = createChangeJournal();
-    const hNested = journal.record('dir/a.md', 'A');
-    journal.record('dir', 'dir-as-a-file-content'); // pathologically also record something AT the exact key
-
-    journal.deletePath('dir'); // no options -> non-recursive, matches every OTHER deletePath() call site (src/watcher.js)
-
-    assert.strictEqual(journal.listVersions('dir').length, 0, 'the exact path is still removed');
-    assert.strictEqual(journal.get('dir/a.md', hNested), 'A', 'a nested path is untouched without recursive: true');
-  });
-});

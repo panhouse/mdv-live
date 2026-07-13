@@ -26,12 +26,11 @@ const TREE_CHANGE_EVENTS = ['add', 'unlink', 'addDir', 'unlinkDir'];
  * @param {WebSocketServer} wss - WebSocket server for broadcasting
  * @param {Object} [options] - Watcher options
  * @param {number} [options.depth=3] - Directory depth to watch (prevents EMFILE errors)
- * @param {{ record: (path: string, content: string) => string, deletePath: (path: string) => void }} [options.journal] -
+ * @param {{ record: (path: string, content: string) => string }} [options.journal] -
  *   Change journal (src/services/changeJournal.js) to record a snapshot of
- *   every changed file into, BEFORE broadcasting file_update, and to clean
- *   up (deletePath) when a file is unlinked. Optional so callers that don't
- *   need change tracking (e.g. tests exercising the watcher in isolation)
- *   can omit it.
+ *   every changed file into, BEFORE broadcasting file_update. Optional so
+ *   callers that don't need change tracking (e.g. tests exercising the
+ *   watcher in isolation) can omit it.
  * @returns {FSWatcher} Chokidar watcher instance
  */
 export function setupWatcher(rootDir, wss, options = {}) {
@@ -138,50 +137,14 @@ export function setupWatcher(rootDir, wss, options = {}) {
 
   watcher.on('change', async (filePath) => {
     const relativePath = toRelativePath(filePath);
-    const trackable = isTrackable(relativePath);
-    // Claim a seq for EVERY path, not just badge-feed (trackable) ones
-    // (codex P2-b, 2026-07-14 review round). journal.record() below runs
-    // for ANY changed file regardless of trackability (see the 0.6.3
-    // comment further down), so a non-trackable path (HTML etc.) needs the
-    // same stale-event protection a trackable one gets — see the guard
-    // comment below for the race this closes. Round-7's original concern
-    // (the table growing one entry per path that never enters the badge
-    // feed) is preserved, not reintroduced: a non-trackable path's claim is
-    // deleted again the moment this handler is done with it (see the
-    // `trackable` branch below) — nothing else (no scheduleFilesChanged
-    // flush) would ever clean it up otherwise, unlike a trackable path's
-    // entry, which the debounce flush's hygiene step consumes.
-    const seq = claimEventSeq(relativePath);
+    // Claim only for badge-feed (trackable) paths — claiming for every
+    // change would grow the sequence table with paths that never enter
+    // the feed (codex round-7).
+    const seq = isTrackable(relativePath) ? claimEventSeq(relativePath) : undefined;
     const relativeDir = path.dirname(relativePath);
 
     try {
       const rendered = await renderFile(filePath, relativeDir === '.' ? '' : relativeDir);
-
-      // Superseded-event guard (codex P2, 2026-07-14 review round; widened
-      // to cover every path, not just trackable ones, in a later P2-b
-      // round the same day): the await above can resolve AFTER a LATER fs
-      // event already claimed a newer seq for this same path — most
-      // importantly 'unlink' (below), which calls journal.deletePath()
-      // synchronously the instant it fires. A now-stale handler that still
-      // journal.record()s would resurrect a just-deleted path's history (a
-      // recreated file inheriting a pre-deletion baseline/pin it should
-      // never have seen). This used to only apply when `seq !== undefined`
-      // — non-trackable paths never claimed one, so a stale 'change'
-      // handler for e.g. an .html file could race its own 'unlink' and
-      // resurrect its journal entry unguarded. Every path now claims a
-      // seq (above), so this is a plain inequality check.
-      //
-      // The whole handler bails, not just the journal write: record() and
-      // broadcastFileUpdate() are a PAIR (see the 0.6.3 comment below —
-      // the journal is seeded BEFORE broadcasting precisely so a diff
-      // request racing the WS message can use that version as a `from`
-      // baseline). Skipping only the record while still broadcasting would
-      // ship the client an etag the journal has never heard of — the exact
-      // unknown-baseline shape this whole change exists to eliminate.
-      // Dropping the stale event entirely is also simply correct: a newer
-      // event for this path already claimed the seq, and its own handler
-      // broadcasts the newer content (or, for 'unlink', removes the file).
-      if (pathEventSeq.get(relativePath) !== seq) return;
 
       // Change tracking (0.6.3): journal the raw source BEFORE broadcasting,
       // so a diff request racing this WS message can already use this
@@ -197,15 +160,8 @@ export function setupWatcher(rootDir, wss, options = {}) {
       // recomputed) so a hash the badge feed reports is guaranteed to
       // match the one diffReview.js's baseline comparison sees. Only
       // trackable types — see isTrackable below (codex 0.6.5 round-1).
-      if (trackable) {
+      if (isTrackable(relativePath)) {
         scheduleFilesChanged({ path: relativePath, etag, kind: 'changed' }, seq);
-      } else {
-        // No scheduleFilesChanged() flush will ever consume/delete this
-        // path's pathEventSeq entry (that hygiene only runs for items that
-        // entered the badge feed) — release it right away so the table
-        // doesn't grow one entry per non-trackable path forever (codex
-        // P2-b, 2026-07-14; see the claimEventSeq() call's comment above).
-        pathEventSeq.delete(relativePath);
       }
 
       wss.broadcastFileUpdate(relativePath, {
@@ -236,16 +192,7 @@ export function setupWatcher(rootDir, wss, options = {}) {
       if (stat.size <= JOURNAL_MAX_FILE_BYTES) {
         const raw = await fs.readFile(filePath, 'utf-8');
         etag = makeEtag(raw);
-        // Superseded-event guard (codex P2, 2026-07-14 review round): same
-        // race as the 'change' handler above — a slow stat/read here can
-        // resolve AFTER a later 'unlink' already claimed a newer seq (and
-        // called journal.deletePath()) for this path. `seq` is always
-        // defined at this point (the isTrackable early-return above is the
-        // only path that skips claimEventSeq()), so no `undefined` check is
-        // needed here unlike the 'change' handler.
-        if (journal && pathEventSeq.get(relativePath) === seq) {
-          journal.record(relativePath, raw);
-        }
+        if (journal) journal.record(relativePath, raw);
       }
     } catch {
       // Unreadable/vanished before we got to it — fall through etag-less;
@@ -263,34 +210,11 @@ export function setupWatcher(rootDir, wss, options = {}) {
   // keeps counting ghosts (and 次の未読へ opens a dead path). Renames
   // arrive as unlink+add pairs and are covered by both handlers
   // (codex 0.6.5 round-1).
-  //
-  // journal.deletePath() (Fix 4, 2026-07-13): a deleted file's version
-  // history/pin/LRU cells are forgotten too, not left dangling — the
-  // 'change' handler above journals EVERY changed file regardless of
-  // isTrackable, so cleanup here can't be gated on isTrackable either, or
-  // a non-trackable file's journal entries would survive its own deletion.
   watcher.on('unlink', (filePath) => {
     const relativePath = toRelativePath(filePath);
-    if (journal) journal.deletePath(relativePath);
     if (isTrackable(relativePath)) {
       const seq = claimEventSeq(relativePath);
       scheduleFilesChanged({ path: relativePath, kind: 'removed' }, seq);
-    } else {
-      // Mirror of the 'change' handler's guard, for the other half of the
-      // same race (codex P2-b, 2026-07-14): a 'change' handler for this
-      // SAME non-trackable path may be mid-await right now (already past
-      // its claimEventSeq() call above), about to journal.record() a
-      // version of a file journal.deletePath() just forgot. Invalidate its
-      // claim so that handler's stale-event guard sees a mismatch and
-      // bails instead of resurrecting the just-deleted entry. Deleting the
-      // pathEventSeq entry (rather than bumping it to a fresh number via
-      // claimEventSeq()) is enough — the 'change' handler's guard only
-      // checks for INEQUALITY with the seq it captured, and `undefined !==
-      // <anything>` already satisfies that — and it also means there is
-      // nothing left in the table afterward for round-7's cleanup concern
-      // to worry about (no scheduleFilesChanged() call happens on this
-      // branch, so nothing else would otherwise be able to release it).
-      pathEventSeq.delete(relativePath);
     }
   });
 
