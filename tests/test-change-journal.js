@@ -3,7 +3,11 @@
  *
  * Covers: basic record/get/latestHash roundtrip, content-hash dedup +
  * recency touch, per-file version cap (maxVersionsPerFile), oversized-file
- * hash-only behavior, and global byte-budget LRU eviction across files.
+ * hash-only behavior, global byte-budget LRU eviction across files, and the
+ * pin (Fix 1/2, 2026-07-13 — see 実装計画_2026-07-13_reviewベースライン消失.md)
+ * that protects the client's confirmed diff baseline from BOTH the version
+ * cap and the global LRU regardless of how much time or how many autosave
+ * cycles pass.
  */
 
 import { describe, it } from 'node:test';
@@ -213,3 +217,374 @@ describe('changeJournal — per-file cap runs before global eviction (codex roun
     assert.strictEqual(journal.get('b.md', hashB), 'BBBBBBB', "b.md must survive a's version churn");
   });
 });
+
+describe('changeJournal — pin protects the client baseline from eviction (Fix 1/2, 2026-07-13)', () => {
+  it('a pinned version survives the version cap across far more record() calls than the cap allows', () => {
+    // Reproduces the reported bug: cap=3 (analogous to the old default of
+    // 4), pin h0 as the client's baseline via get(), then blow way past the
+    // cap with further edits (analogous to autosave). Under the OLD
+    // versions.shift()-oldest-always logic, h0 would already be gone after
+    // the 3rd extra record() (cap exceeded by 1 -> shift drops h0
+    // unconditionally); this must survive all 10.
+    const journal = createChangeJournal({ maxVersionsPerFile: 3 });
+    const h0 = journal.record('a.md', 'v0');
+    assert.strictEqual(journal.get('a.md', h0), 'v0', 'sanity: baseline confirmed once -> pinned');
+    for (let i = 1; i <= 10; i++) {
+      journal.record('a.md', `v${i}`);
+    }
+    assert.strictEqual(journal.get('a.md', h0), 'v0', 'pinned baseline survives 10 records past a cap of 3');
+    assert.strictEqual(journal.listVersions('a.md').length, 3, 'cap still holds for everything else');
+  });
+
+  it('an untouched middle version is evicted before one with a higher lastUsed, even when neither is the current pin', () => {
+    const journal = createChangeJournal({ maxVersionsPerFile: 3 });
+    const h0 = journal.record('a.md', 'v0');
+    const h1 = journal.record('a.md', 'v1');
+    journal.get('a.md', h1); // h1 gets a lastUsed bump (and is pinned, for now)
+    journal.record('a.md', 'v2'); // still <= cap(3), no eviction yet
+    journal.get('a.md', h0); // pin moves to h0; h1 keeps its earlier lastUsed but loses the pin
+    const h3 = journal.record('a.md', 'v3'); // len 4 > cap(3) -> eviction: candidates are h1, h2 (h0 pinned, h3 newest)
+    assert.strictEqual(journal.get('a.md', h3), 'v3', 'newest untouched by this check');
+    // h2 was never touched by get() (lastUsed=0); h1 was (lastUsed>0). The
+    // colder (never-used) one must be the victim, even though it isn't the
+    // currently pinned hash.
+    const remaining = journal.listVersions('a.md').map((v) => v.hash);
+    assert.ok(remaining.includes(h0), 'pinned h0 survives');
+    assert.ok(remaining.includes(h1), 'previously-touched h1 survives over the untouched middle version');
+  });
+
+  it('the newest version is never evicted by the version cap, no matter how many records follow', () => {
+    const journal = createChangeJournal({ maxVersionsPerFile: 2 });
+    let lastHash;
+    for (let i = 0; i < 20; i++) {
+      lastHash = journal.record('a.md', `v${i}`);
+    }
+    assert.strictEqual(journal.get('a.md', lastHash), 'v19');
+    assert.strictEqual(journal.latestHash('a.md'), lastHash);
+  });
+
+  it('pin protection holds even when Date.now() is frozen — accessSeq (not wall-clock) drives lastUsed (codex #2)', (t) => {
+    t.mock.method(Date, 'now', () => 123456);
+    const journal = createChangeJournal({ maxVersionsPerFile: 3 });
+    const h0 = journal.record('a.md', 'v0');
+    journal.get('a.md', h0); // pin, with Date.now() frozen — a ms-tie-based design would fail this
+    for (let i = 1; i <= 5; i++) {
+      journal.record('a.md', `v${i}`);
+    }
+    assert.strictEqual(journal.get('a.md', h0), 'v0', 'pin survives cap overage even with Date.now() frozen');
+  });
+
+  it('get() on a hash whose content was already evicted/oversized does not pin or touch it', () => {
+    const journal = createChangeJournal({ maxBytesPerFile: 5, maxVersionsPerFile: 3 });
+    const bigHash = journal.record('a.md', 'x'.repeat(10)); // oversized -> content null immediately (a "shell")
+    assert.strictEqual(journal.get('a.md', bigHash), null, 'lookup on a shell returns null (nothing to diff against)');
+
+    // Fill past the cap with small, storable versions. If get() had wrongly
+    // pinned bigHash despite the null content, it would be excluded from
+    // eviction and this shell (which holds zero bytes anyway) would survive
+    // indefinitely instead of being the preferred victim.
+    journal.record('a.md', 'v1');
+    journal.record('a.md', 'v2');
+    const lastHash = journal.record('a.md', 'v3'); // len 4 > cap(3) -> eviction
+    const versions = journal.listVersions('a.md');
+    assert.strictEqual(versions.some((v) => v.hash === bigHash), false, 'the shell was evicted, not protected as a pin');
+    assert.strictEqual(journal.get('a.md', lastHash), 'v3');
+  });
+});
+
+describe('changeJournal — pin() public API (Fix 5, 2026-07-13 — src/api/diff.js\'s identical-hash branch calls this directly, since it never calls get())', () => {
+  it('pin() protects an explicitly pinned version from the version cap, same as get() does', () => {
+    const journal = createChangeJournal({ maxVersionsPerFile: 3 });
+    const h0 = journal.record('a.md', 'v0');
+    assert.strictEqual(journal.pin('a.md', h0), true, 'pin succeeds on a content-bearing version');
+    for (let i = 1; i <= 10; i++) {
+      journal.record('a.md', `v${i}`);
+    }
+    assert.strictEqual(journal.get('a.md', h0), 'v0', 'explicitly-pinned baseline survives 10 records past a cap of 3');
+  });
+
+  it('pin() refuses (returns false, does not protect) a content=null shell', () => {
+    const journal = createChangeJournal({ maxBytesPerFile: 5, maxVersionsPerFile: 3 });
+    const bigHash = journal.record('a.md', 'x'.repeat(10)); // oversized -> content null immediately (a "shell")
+    assert.strictEqual(journal.pin('a.md', bigHash), false, 'pin() cannot pin a shell — nothing to diff against');
+
+    // Fill past the cap with small, storable versions. If pin() had
+    // wrongly protected bigHash despite the null content, it would be
+    // excluded from eviction and survive indefinitely instead of being
+    // the preferred victim (same invariant as get()'s existing test).
+    journal.record('a.md', 'v1');
+    journal.record('a.md', 'v2');
+    const lastHash = journal.record('a.md', 'v3'); // len 4 > cap(3) -> eviction
+    const versions = journal.listVersions('a.md');
+    assert.strictEqual(versions.some((v) => v.hash === bigHash), false, 'the refused pin did not protect the shell');
+    assert.strictEqual(journal.get('a.md', lastHash), 'v3');
+  });
+
+  it('pin() returns false for an unknown path or an unknown hash on a known path', () => {
+    const journal = createChangeJournal();
+    assert.strictEqual(journal.pin('never-seen.md', 'sha256:whatever'), false, 'unknown path');
+    journal.record('a.md', 'v1');
+    assert.strictEqual(journal.pin('a.md', 'sha256:doesnotexist'), false, 'known path, unknown hash');
+  });
+
+  it('pin() and get() share ONE pin WINDOW per path — a later pin() protects the new hash WITHOUT evicting an earlier get()-pinned hash still inside the window (codex round-2 P1, 2026-07-14: single-slot pinning let a late in-flight request for an older hash silently steal a newer pin\'s protection)', () => {
+    const journal = createChangeJournal({ maxVersionsPerFile: 2 }); // default pinHistorySize (>=2) comfortably holds both
+    const h0 = journal.record('a.md', 'v0');
+    journal.get('a.md', h0);          // pin h0 via get()
+    const h1 = journal.record('a.md', 'v1'); // len 2 == cap, no eviction yet
+    journal.pin('a.md', h1);          // pin via pin() -- ADDS h1 to the window; h0 is still in it too
+    // Cap is 2: from here on the newest AND every window-pinned hash
+    // survive. Both h0 and h1 are still in the window, so BOTH must
+    // survive despite neither being the ever-advancing "newest".
+    for (let i = 2; i <= 10; i++) {
+      journal.record('a.md', `v${i}`);
+    }
+    assert.strictEqual(journal.get('a.md', h1), 'v1', 'the more recently pinned hash (h1) survives');
+    assert.strictEqual(journal.get('a.md', h0), 'v0', 'the earlier pin (h0) is STILL protected -- it has not aged out of the window');
+  });
+
+  it('the pin window holds only the `pinHistorySize` most-recently-pinned hashes — a pin older than the window eventually loses protection', () => {
+    // cap=3 so the FIRST post-aging-out record() leaves exactly ONE
+    // eligible eviction candidate (h0) -- deterministic regardless of the
+    // `lastUsed` tie-break rule (which a large churn loop of untouched
+    // filler versions would otherwise satisfy first, since a never-pinned
+    // version's lastUsed=0 is even lower than a once-pinned-then-aged-out
+    // one's, masking this specific invariant).
+    const journal = createChangeJournal({ maxVersionsPerFile: 3, pinHistorySize: 2 });
+    const h0 = journal.record('a.md', 'v0');
+    journal.pin('a.md', h0);                 // window: [h0]
+    const h1 = journal.record('a.md', 'v1');
+    journal.pin('a.md', h1);                 // window: [h0, h1]
+    const h2 = journal.record('a.md', 'v2'); // length 3 == cap(3), no eviction yet
+    journal.pin('a.md', h2);                 // window (size 2) is now [h1, h2] -- h0 ages out
+
+    // length 4 > cap(3) -> eviction: newest(h3) and window{h1,h2} excluded,
+    // leaving h0 as the ONLY eligible candidate.
+    const h3 = journal.record('a.md', 'v3');
+
+    assert.strictEqual(journal.get('a.md', h1), 'v1', 'still-in-window pin (h1) survives');
+    assert.strictEqual(journal.get('a.md', h2), 'v2', 'still-in-window pin (h2) survives');
+    assert.strictEqual(journal.get('a.md', h3), 'v3', 'newest survives');
+    assert.strictEqual(journal.get('a.md', h0), null, 'pin older than the window (h0) is no longer protected');
+  });
+
+  it('re-pinning an already-pinned hash moves it to the most-recent end instead of duplicating it in the window', () => {
+    // Same determinism trick as above: cap=2 so aging h1 out of the
+    // window (via the h0 re-pin, then pinning h2) leaves it the ONLY
+    // eligible eviction candidate on the next record(), with no
+    // `lastUsed` ambiguity against filler versions.
+    const journal = createChangeJournal({ maxVersionsPerFile: 2, pinHistorySize: 2 });
+    const h0 = journal.record('a.md', 'v0');
+    journal.pin('a.md', h0);                 // window: [h0]
+    const h1 = journal.record('a.md', 'v1');
+    journal.pin('a.md', h1);                 // window: [h0, h1]
+    journal.pin('a.md', h0);                 // re-pin h0 -- window becomes [h1, h0], NOT [h0, h1, h0]
+    const h2 = journal.record('a.md', 'v2'); // length 3 > cap(2), but h0/h1 both still IN the window here -> nothing evictable, overage tolerated
+    journal.pin('a.md', h2);                 // window (size 2) is now [h0, h2] -- h1 (the "older" member after the re-pin) ages out
+
+    // length 4 > cap(2) -> eviction: newest(h3) and window{h0,h2} excluded,
+    // leaving h1 as the ONLY eligible candidate.
+    const h3 = journal.record('a.md', 'v3');
+
+    assert.strictEqual(journal.get('a.md', h0), 'v0', 're-pinned h0 was refreshed to the window\'s most-recent end and survives');
+    assert.strictEqual(journal.get('a.md', h2), 'v2', 'h2 survives');
+    assert.strictEqual(journal.get('a.md', h3), 'v3', 'newest survives');
+    assert.strictEqual(journal.get('a.md', h1), null, 'h1 (not re-pinned, aged out of the size-2 window) is no longer protected');
+  });
+});
+
+describe('changeJournal — a late, in-flight get() for an OLDER hash no longer evicts a NEWER confirmed pin (codex round-2 P1, 2026-07-14)', () => {
+  it('H0 pin -> H1 pin (confirm) -> a delayed get() for H0 arrives -> a cap-exceeding record() still leaves H1 retrievable', () => {
+    // Reproduces the exact race from the round-2 review: the user opens
+    // Review (pinning H0), then confirms an edit (pinning H1) -- but a
+    // STALE /api/diff request for the OLD baseline (from=H0), issued
+    // before the confirm but delivered to the server after it, still
+    // calls journal.get(path, H0) internally. Under the pre-fix
+    // single-pin-slot design that get() unconditionally re-pinned H0,
+    // silently stealing H1's protection.
+    const journal = createChangeJournal({ maxVersionsPerFile: 3 }); // default pinHistorySize
+    const h0 = journal.record('a.md', 'v0');
+    journal.pin('a.md', h0); // user opens Review on H0
+    const h1 = journal.record('a.md', 'v1');
+    journal.pin('a.md', h1); // user confirms H1 ("✓確認")
+
+    // The delayed, stale request for the OLD baseline finally lands.
+    assert.strictEqual(journal.get('a.md', h0), 'v0', 'the stale request still resolves H0 (it still has content)');
+
+    // Autosave churn blows well past the version cap with ZERO further
+    // /api/diff calls in between -- same technique as the existing pin
+    // tests above.
+    for (let i = 2; i <= 10; i++) {
+      journal.record('a.md', `v${i}`);
+    }
+
+    assert.strictEqual(
+      journal.get('a.md', h1),
+      'v1',
+      'H1 (the client\'s actually-confirmed, most-recent baseline) must still be retrievable -- the late H0 re-pin must not have evicted it'
+    );
+  });
+});
+
+describe('changeJournal — forcibly evicting a pinned cell also clears its pin, so a later per-file-cap eviction can pick the now-worthless shell instead of a live version (codex round-2 P2, 2026-07-14)', () => {
+  it('a pin lost to a global byte-budget forced eviction no longer blocks per-file version-cap eviction from choosing that shell', () => {
+    const journal = createChangeJournal({
+      maxBytesTotal: 12, // fits one 10-byte cell plus a little, but not two
+      maxBytesPerFile: 100,
+      maxVersionsPerFile: 2,
+    });
+
+    const hA = journal.record('a.md', 'A'.repeat(10)); // 10 bytes
+    journal.pin('a.md', hA); // a.md's only cell -- and the ONLY cell in lru right now
+
+    // b.md's own 3-byte cell would push totalBytes to 13 > 12. a.md's cell
+    // is the only OTHER cell that exists, and it's pinned: evictOldestCell's
+    // first pass (skip pinned) finds nothing, so its second pass ("every
+    // other cell is pinned -- the budget still wins") sacrifices it anyway.
+    journal.record('b.md', 'xyz');
+    assert.strictEqual(journal.get('a.md', hA), null, 'precondition: the pinned cell was forcibly evicted for the byte budget');
+    // Budget headroom is now 12 - 3(b.md) = 9 bytes -- plenty for the small
+    // records below without triggering any FURTHER global eviction, so
+    // this test stays isolated to the per-file-cap mechanism.
+
+    const hB = journal.record('a.md', 'v2'); // a.md's 2nd distinct version (2 bytes) -- length 2 == cap(2), no eviction yet
+    const hC = journal.record('a.md', 'v3'); // 3rd distinct version -> length 3 > cap(2) -> per-file eviction fires
+
+    // Candidates (excluding newest=hC): hA (now a content-less shell) and
+    // hB (a live, content-bearing version). WITHOUT the fix, pinnedByPath
+    // still points at hA (stale), so the cap loop would treat hA as
+    // untouchable and sacrifice the live hB instead -- an avoidable
+    // unknown-baseline. WITH the fix, hA's pin was cleared the moment its
+    // content was forcibly evicted, so it's an ordinary (and preferred,
+    // being a worthless shell) victim.
+    assert.strictEqual(journal.get('a.md', hB), 'v2', 'the live version (hB) was NOT sacrificed for the stale-pinned shell');
+    const versions = journal.listVersions('a.md');
+    assert.strictEqual(versions.some((v) => v.hash === hA), false, 'the now-unpinned shell (hA) was evicted instead');
+    assert.strictEqual(journal.get('a.md', hC), 'v3', 'the newest version is untouched');
+  });
+});
+
+describe('changeJournal — global-LRU eviction over many tracked snapshots completes quickly (codex round-2 P2 perf, 2026-07-14)', () => {
+  it('records well past the byte budget across thousands of distinct paths without blowing up', () => {
+    // One version per path keeps maxVersionsPerFile out of the way, so this
+    // exercises ONLY the global byte-budget LRU (evictOldestCell()) -- the
+    // path whose old `[...lru.keys()]` full-array-copy-per-eviction-call
+    // was the round-2 P2 concern. Not a strict micro-benchmark (timing
+    // varies by machine) -- just a guard against the eviction path
+    // pathologically hanging/timing out with a large tracked-snapshot count.
+    const journal = createChangeJournal({
+      maxBytesTotal: 100 * 1000, // fits ~1000 100-byte cells at a time
+      maxBytesPerFile: 1000,
+      maxVersionsPerFile: 5000,
+    });
+
+    const start = Date.now();
+    const total = 8000;
+    const hashes = [];
+    for (let i = 0; i < total; i++) {
+      // 100 bytes, distinct path every call -> forces continuous eviction
+      // once the ~1000-cell budget fills.
+      hashes.push(journal.record(`file-${i}.md`, 'x'.repeat(100)));
+    }
+    const elapsed = Date.now() - start;
+
+    assert.ok(elapsed < 5000, `${total} records with continuous eviction should finish quickly (took ${elapsed}ms)`);
+
+    // Sanity: the budget really was enforced (early entries' content
+    // evicted, not silently allowed to grow unbounded) and the journal is
+    // still internally consistent after all that churn.
+    assert.strictEqual(journal.get('file-0.md', hashes[0]), null, 'an old, long-cold snapshot was evicted (content only)');
+    assert.strictEqual(
+      journal.get(`file-${total - 1}.md`, hashes[total - 1]),
+      'x'.repeat(100),
+      'the most recently written snapshot is still retrievable'
+    );
+  });
+});
+
+describe('changeJournal — eviction with many PINNED cells does not degrade to O(pinned * victims) (codex round-3 P1 perf, 2026-07-14)', () => {
+  it('a single record() call that must evict many filler cells finishes quickly even with thousands of pinned cells ahead of them in the LRU', () => {
+    // Reproduces the exact worst case reported by codex: every pinned cell
+    // sits AHEAD of every eviction victim in the global LRU's insertion
+    // order (pin() touches only its OWN key, so P pins recorded-then-pinned
+    // back-to-back stay bunched at the front). Under the pre-fix
+    // evictOldestCell() -- one victim per call, each call re-scanning tier 1
+    // from the front -- freeing E victims cost O(P*E): every one of the E
+    // calls re-skipped all P still-pinned cells before reaching the next
+    // unpinned one. evictUntilUnderBudget() (this fix) walks the LRU ONCE,
+    // collecting every eligible victim in the same pass, so one record()
+    // call's eviction is O(P+E) regardless of how many victims it needs.
+    const cellBytes = 100;
+
+    function timeOneEvictingRecord(pinnedCount) {
+      const fillerCount = pinnedCount; // E = P: the worst-case shape above
+      // Exactly fits P pinned + E filler cells, no slack -- no eviction
+      // happens until the final, deliberately-oversized write below.
+      const maxBytesTotal = (pinnedCount + fillerCount) * cellBytes;
+      const journal = createChangeJournal({
+        maxBytesTotal,
+        // Large enough that the final big write below is stored (not
+        // treated as oversized, which would skip the LRU/eviction path
+        // entirely and defeat the point of this benchmark).
+        maxBytesPerFile: fillerCount * cellBytes + cellBytes,
+        maxVersionsPerFile: 10,
+      });
+
+      // P pinned cells, each its own path, each pinned right after being
+      // recorded -- so every pinned key ends up bunched at the FRONT of the
+      // LRU's insertion order (pin() only touches its own key).
+      for (let i = 0; i < pinnedCount; i++) {
+        const path = `pinned-${i}.md`;
+        const hash = journal.record(path, 'p'.repeat(cellBytes));
+        journal.pin(path, hash);
+      }
+
+      // E filler (never-pinned) cells, each its own path -- these land
+      // AFTER every pinned cell in LRU order, i.e. exactly the victims the
+      // old code paid O(P) to reach on every single one of them.
+      for (let i = 0; i < fillerCount; i++) {
+        journal.record(`filler-${i}.md`, 'f'.repeat(cellBytes));
+      }
+
+      // ONE more record(), sized to force evicting every filler cell (but
+      // no pinned one) to get back under budget. This single call is what's
+      // timed -- it's the "1回のrecord()の所要" codex measured.
+      const bigContent = 'b'.repeat(fillerCount * cellBytes);
+      const start = process.hrtime.bigint();
+      journal.record('big.md', bigContent);
+      const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+
+      // Sanity: the eviction actually happened as designed -- every filler
+      // gone, every pin still standing, the big write itself retrievable.
+      assert.strictEqual(journal.get('filler-0.md', journal.latestHash('filler-0.md')), null, 'filler cells were the evicted victims');
+      assert.strictEqual(journal.get('pinned-0.md', journal.latestHash('pinned-0.md')), 'p'.repeat(cellBytes), 'pinned cells all survive');
+      assert.strictEqual(journal.get('big.md', journal.latestHash('big.md')), bigContent, 'the write that triggered eviction is itself retrievable');
+
+      return elapsedMs;
+    }
+
+    // DELIBERATELY LOOSE threshold (500ms). This is a wall-clock test, and a
+    // tight bound on wall-clock is how you build a flaky suite: an earlier
+    // draft asserted <50ms and duly failed at 108ms under full-suite parallel
+    // load on a developer laptop, while measuring in isolation at ~3ms. The
+    // point of this test is to catch the QUADRATIC SHAPE coming back, not to
+    // police milliseconds. Pre-fix (O(P*E)) this same harness measured 313ms
+    // (P=2000) and 1271ms (P=4000) — so 500ms still fails loudly if the
+    // regression returns, while leaving enough headroom that a loaded CI box
+    // never fails it for being slow.
+    // Only P=4000 is ASSERTED. A 500ms bound at P=2000 would be a test that
+    // cannot fail: pre-fix measured ~313ms there, i.e. it would pass against
+    // the very bug it exists to catch. Pick the size where the pre-fix cost
+    // (~1271ms) clears the threshold by a wide margin, so the assertion is
+    // real. P=2000 is still measured and reported for the failure message.
+    const ms2000 = timeOneEvictingRecord(2000);
+    const ms4000 = timeOneEvictingRecord(4000);
+    assert.ok(
+      ms4000 < 500,
+      `single record() must not be quadratic in (pinned x victims): `
+      + `P=2000 took ${ms2000.toFixed(1)}ms, P=4000 took ${ms4000.toFixed(1)}ms `
+      + `(pre-fix: ~313ms / ~1271ms — a linear implementation stays flat)`
+    );
+  });
+});
+

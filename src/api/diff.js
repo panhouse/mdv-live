@@ -100,6 +100,19 @@ export function setupDiffRoutes(app) {
       journal.record(relativePath, current);
 
       if (from === currentHash) {
+        // Fix 5 (2026-07-13): a client sending `from=<currentHash>` is
+        // declaring "this hash IS my baseline" even though there is
+        // nothing to diff yet — most commonly diffReview.js's fast path
+        // (modules/diffReview.js), which used to seed the journal with
+        // `from=''` and therefore never reached journal.get()'s pin. That
+        // left a file opened via Review ON with no pending change
+        // unprotected the instant it entered edit mode, where autosave
+        // churns versions with zero further /api/diff calls to touch
+        // anything — the version cap then evicted the baseline before a
+        // single real diff was ever requested. Pinning here closes that
+        // gap; journal.record() just above guarantees `currentHash` is a
+        // real entry (with content) for pin() to find.
+        journal.pin(relativePath, currentHash);
         return res.json({
           available: true,
           identical: true,

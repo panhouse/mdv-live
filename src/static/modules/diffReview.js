@@ -176,6 +176,60 @@
  * second module.
  *
  * ---------------------------------------------------------------------
+ * markSeen() is also the ONE place that pins a baseline server-side
+ * (codex 3rd-round P1, 2026-07-14)
+ * ---------------------------------------------------------------------
+ * Adopting a hash as the local baseline (this storage write) and protecting
+ * that same hash from the server's change-journal eviction (Fix 5's
+ * `_seedBaseline()`, see its docstring below) are two sides of the same
+ * event — a baseline localStorage adopted but never defended server-side is
+ * exactly the "unknown-baseline right after the most natural flow" bug this
+ * fix chases.
+ * Before this fix, every markSeen() CALLER that wanted its adopted hash
+ * pinned had to remember to also call `_seedBaseline()` itself — and every
+ * round of codex review kept finding one more caller that forgot: first
+ * sight (refresh()'s `!lastSeen` branch), the zero-hunk/CRLF-only adopt
+ * (`_applyResponse()`), and フォルダ内を確認済みにする
+ * (unreadBadges.js's markFolderSeen(), which calls markSeen() per-path
+ * directly). Only `_confirmLatest()` and refresh()'s fast path remembered.
+ * That is a discipline failure (every caller has to remember), not a
+ * one-off bug — so the fix is structural, not one more remembered call:
+ * markSeen() itself now calls `DiffReviewManager._seedBaseline()`
+ * whenever `hash` is truthy (the delete-baseline call, `markSeen(path,
+ * null)`, does NOT seed — there is nothing to pin), so EVERY current and
+ * future caller is covered automatically, with nothing left for a caller to
+ * remember. See markSeen()'s own body below for the one line that does
+ * this, and _seedBaseline()'s docstring for what "pin" means server-side.
+ * (refresh()'s fast path — "nothing changed, but re-seed anyway in case the
+ * server forgot" — does NOT go through markSeen(), since no baseline is
+ * being adopted there; it keeps its own direct `_seedBaseline()` call.)
+ *
+ * ---------------------------------------------------------------------
+ * markSeen()'s `{ pin }` opt-out — bulk confirms must not pin every file
+ * (codex 4th-round P2-a, 2026-07-14)
+ * ---------------------------------------------------------------------
+ * The structural fix above has a cost the "every caller" framing glossed
+ * over: `_seedBaseline()` is a real `GET /api/diff` round trip (fire-and-
+ * forget, but still a request the server has to read+hash the file and
+ * possibly Myers-diff for). unreadBadges.js's `markFolderSeen()` ("フォルダ
+ * 内を確認済みにする") calls `markSeen()` once per unread path under a
+ * directory — a folder with thousands of files turned ONE click into
+ * thousands of `/api/diff` requests, each doing real file I/O, enough to
+ * saturate the server. markSeen()'s THIRD parameter, `{ pin = true }`, lets
+ * a caller opt OUT of the pin/seed side effect while still doing everything
+ * else markSeen() does (the localStorage baseline write + the onSeen()
+ * notification unreadBadges.js/marpDiffIndicator.js rely on) — see
+ * markFolderSeen()'s call site for why this is safe to skip for a bulk
+ * confirm specifically: the server's pin window only exists to survive
+ * autosave churn while a file is being ACTIVELY edited, and a file bulk-
+ * confirmed from the tree was — by definition, at the moment of the
+ * click — not the one open in the editor. The opt-out is explicit at the
+ * call site (not a silent default) precisely so a future caller doesn't
+ * have to remember it exists, matching the "every caller gets pin
+ * protection for free" bar the structural fix above set — this is the one
+ * documented exception, not a loophole.
+ *
+ * ---------------------------------------------------------------------
  * Why this module does NOT trust `tab.etag` as "always populated"
  * ---------------------------------------------------------------------
  * The task brief for this feature (and the 0.6.3 author's handoff note)
@@ -360,11 +414,24 @@ export function onCurrentChange(fn) {
 }
 
 /**
- * Record `path` as confirmed-seen at `hash` (now).
+ * Record `path` as confirmed-seen at `hash` (now). The SOLE write path for
+ * STORAGE_KEYS.LAST_SEEN — every caller that adopts a new local baseline
+ * (first sight, ✓ 確認, the zero-hunk/CRLF-only auto-adopt, フォルダ内を
+ * 確認済みにする) MUST funnel through here rather than writing localStorage
+ * itself, because this function is also the ONE place that pins a truthy
+ * `hash` server-side (see this module's docstring's "markSeen() is also the
+ * ONE place that pins..." section for why that used to be a per-caller
+ * responsibility, and why that kept getting missed). Centralizing it here
+ * means a future caller of markSeen() gets pin protection for free, with
+ * nothing extra to remember.
  * @param {string} path
  * @param {string|null|undefined} hash
+ * @param {{ pin?: boolean }} [options] - `pin: false` (default `true`) skips
+ *   the server-side `_seedBaseline()` call below — see this module's
+ *   docstring's "markSeen()'s `{ pin }` opt-out" section for why
+ *   unreadBadges.js's bulk-confirm path is the one caller that needs this.
  */
-export function markSeen(path, hash) {
+export function markSeen(path, hash, { pin = true } = {}) {
     const key = storeKey(path);
     if (!key) return;
     const store = readStore();
@@ -388,13 +455,23 @@ export function markSeen(path, hash) {
             console.error('diffReview: onSeen listener failed:', e);
         }
     }
+    // Pin the just-adopted baseline server-side, fire-and-forget (codex
+    // 3rd-round P1, 2026-07-14) — a null hash means the baseline was
+    // DELETED, not adopted, so there is nothing to protect. This is the
+    // structural fix: every markSeen() caller gets this for free instead of
+    // each one needing its own explicit _seedBaseline() call (see the
+    // docstring section referenced above) — UNLESS it explicitly opted out
+    // via `{ pin: false }` (codex 4th-round P2-a, 2026-07-14; see this
+    // module's docstring's "markSeen()'s `{ pin }` opt-out" section).
+    if (hash && pin) {
+        DiffReviewManager._seedBaseline(path, hash);
+    }
 }
 
 export const DiffReviewManager = {
     _current: null, // see _applyResponse() for shape
     _jumpIndex: -1,
     _reviewSeq: 0,
-    _seededPaths: new Set(),
     _lastPath: null,
     // app.js injects the bootstrap-level refreshCurrentTab() here so a
     // stale pane (see refresh()) can be refetched before diffs apply.
@@ -402,14 +479,73 @@ export const DiffReviewManager = {
     _staleRefetchKey: null,
     setRequestTabRefresh(fn) { this._requestTabRefresh = fn; },
     /**
-     * Forget which paths have been journal-seeded. Called on WebSocket
-     * reconnect (app.js wiring): a reconnect may mean the server —
-     * and its in-memory journal — restarted, so every fast-path seed
-     * suppression is stale (codex round-16).
+     * Reset the stale-pane refetch-loop guard (`_staleRefetchKey`). Called
+     * on WebSocket reconnect (app.js wiring): a reconnect may mean the
+     * server restarted, so a refetch key computed against the PREVIOUS
+     * server instance's response could otherwise suppress a refetch this
+     * fresh connection actually needs.
+     *
+     * Used to also clear a per-(path,hash) seed-suppression Set —
+     * `_seedBaseline()` deliberately has no such suppression anymore (codex
+     * 3rd-round P2, 2026-07-14; see that method's docstring), so there is
+     * nothing left to forget on reconnect. The method survives under its
+     * original name only because app.js's reconnect wiring calls it and
+     * `_staleRefetchKey` still needs the same reset.
      */
     resetSeeds() {
-        this._seededPaths.clear();
         this._staleRefetchKey = null;
+    },
+
+    /**
+     * Fire-and-forget: tell the server "`hash` IS the confirmed baseline
+     * for `path`" so src/api/diff.js's `from === currentHash` branch pins
+     * it in the change journal, protecting it from the version-cap/LRU
+     * eviction an editing session's autosave flood would otherwise cause
+     * (Fix 5, 2026-07-13 — see refresh()'s fast-path comment above). The
+     * ONE call site that matters structurally is markSeen() itself (see
+     * this module's docstring's "markSeen() is also the ONE place..."
+     * section) — every adopted baseline gets pinned through there.
+     * refresh()'s fast path also calls this directly (no baseline is being
+     * ADOPTED there — the point is re-asserting a pin the server may have
+     * forgotten, see that call site's comment).
+     *
+     * Deliberately UNCONDITIONAL — no per-(path,hash) "already seeded this
+     * page load" suppression (codex 3rd-round P2, 2026-07-14; removed the
+     * `_seededPaths` Set this module used to keep). That cache was actively
+     * harmful: the SERVER's pin protection is a bounded WINDOW
+     * (JOURNAL_PIN_HISTORY_SIZE, currently 3 — see
+     * src/services/changeJournal.js's docstring) that ages a hash back out
+     * once enough OTHER hashes get pinned after it, or force-evicts it
+     * under the global byte budget. A client-side "seeded once, never
+     * again" cache has no way to learn that the server later forgot — the
+     * hash could become the baseline again (e.g. an edit that reverts to
+     * earlier content) with the client still convinced it never needs to
+     * re-ask, leaving it silently unprotected. The alternative considered
+     * (reactively clear the suppression only after actually observing an
+     * `unknown-baseline` response) was rejected: refresh()'s FAST path is
+     * exactly the case a stale pin most needs re-asserting, and the fast
+     * path never makes the full /api/diff call that could observe
+     * `unknown-baseline` in the first place (that's the whole reason it's
+     * fast) — reactive clearing would still require the bug to manifest
+     * once before it could self-heal. Sending an idempotent re-seed on
+     * every adoption/re-assertion instead is simpler and closes the gap
+     * before it can be seen: `pin()` (changeJournal.js) already treats
+     * re-pinning an in-window hash as a no-op cost, and every caller here
+     * fires this only from user-paced events (tab open/switch, ✓ 確認, a
+     * live file_update repaint) — not a tight loop — so the extra request
+     * volume this trades for is negligible (codex 3rd-round: "実測上ほぼ
+     * 無意味" — the original round-8 suppression's traffic savings were
+     * never meaningful next to correctness).
+     * @param {string} path
+     * @param {string|null|undefined} hash
+     */
+    _seedBaseline(path, hash) {
+        if (!hash) return;
+        MDVApi.diff(path, hash).catch(() => {
+            // Best-effort — a later adoption/re-assertion of this same
+            // baseline (there is no suppression left to prevent one) will
+            // simply retry.
+        });
     },
 
     /**
@@ -520,22 +656,26 @@ export const DiffReviewManager = {
         // is only sound for the already-watched active path, so the first
         // refresh after a path switch always asks the server.)
 
-        // Fast path: no network call needed when we already know the
-        // current hash and it matches the baseline. One catch: after a
-        // server restart the in-memory journal is empty even though
-        // localStorage remembers this hash — seed it (fire-and-forget,
-        // once per path per page load) so the NEXT edit produces real
-        // counts instead of unknown-baseline (codex round-8).
+        // Fast path: no network call needed to update the UI when we
+        // already know the current hash and it matches the baseline. One
+        // catch: the server may have forgotten this baseline's pin (a
+        // restart, or the pin simply aged out of the window — see
+        // _seedBaseline()'s docstring) even though localStorage still
+        // remembers the hash — re-seed it (fire-and-forget, unconditional,
+        // see _seedBaseline() below) every time this path fires, so the
+        // NEXT edit produces real counts instead of unknown-baseline
+        // (codex round-8). Sending `lastSeen.hash` (not '') as `from`
+        // matters beyond seeding, too (Fix 5, 2026-07-13): it makes this an
+        // identical-hash request, which src/api/diff.js now pins as the
+        // confirmed baseline. Before Fix 5 this sent `from=''`, which
+        // src/api/diff.js never pins — a file opened via Review ON with
+        // nothing changed yet had NO pin protecting its baseline, so
+        // entering edit mode right after let autosave's flood of
+        // journal.record() calls evict it before a single real diff was
+        // ever requested (実装計画_2026-07-13_reviewベースライン消失.md §3
+        // Fix 5).
         if (!pathChanged && tab.etag && tab.etag === lastSeen.hash) {
-            if (!this._seededPaths.has(tab.path)) {
-                this._seededPaths.add(tab.path);
-                // On failure, forget the suppression so a later visit
-                // retries instead of silently degrading to
-                // unknown-baseline (codex round-16).
-                MDVApi.diff(tab.path, '').catch(() => {
-                    this._seededPaths.delete(tab.path);
-                });
-            }
+            this._seedBaseline(tab.path, lastSeen.hash);
             this._hide();
             return;
         }
@@ -749,6 +889,19 @@ export const DiffReviewManager = {
             const tab = state.tabs.find((t) => t.path === path);
             hash = tab ? await this._resolveCurrentHash(tab) : null;
         }
+        // markSeen() itself pins `hash` server-side right away when it's
+        // truthy (codex 3rd-round P1, 2026-07-14 — see markSeen()'s
+        // docstring) — no separate _seedBaseline() call needed here
+        // anymore. That matters for exactly this call site: entering edit
+        // mode right after confirming does NOT reliably trigger another
+        // fast-path refresh() first (app.js's init() wraps
+        // EditorManager.show() to call refresh() afterward, but
+        // EditorManager.toggle() already set state.isEditMode = true
+        // before calling show(), so that refresh() hits the isEditMode
+        // guard and returns before ever reaching the fast path) — without
+        // markSeen() pinning directly, the newly-confirmed baseline would
+        // only get seeded by some UNRELATED later trigger that happens to
+        // fire before autosave's edit-mode churn evicts it.
         markSeen(path, hash);
         this._hide();
     },

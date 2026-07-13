@@ -149,7 +149,34 @@ export const JOURNAL_MAX_FILE_BYTES = 1 * 1024 * 1024;
 
 /**
  * Max snapshot versions changeJournal.js keeps per path, independent of the
- * global JOURNAL_MAX_BYTES byte budget — the oldest version for that path is
- * dropped once a new one pushes the count over this cap.
+ * global JOURNAL_MAX_BYTES byte budget. The client's confirmed diff
+ * baseline is protected from this cap by a pin (changeJournal.js's
+ * pinnedByPath, Fix 1/2, 2026-07-13) that never weakens with time, so this
+ * cap's real job is just bounding how many UNPINNED, non-newest
+ * intermediate versions accumulate — not protecting the baseline itself.
+ * 4 was too small: mdv's own editor autosaves every
+ * EDITOR_AUTOSAVE_DEBOUNCE_MS (1.5s), so ~6s of continuous typing already
+ * exceeded it and evicted the baseline out from under an open Review
+ * session before the pin existed. 32 leaves headroom; actual memory is
+ * still bounded by maxBytesPerFile (per snapshot) and the global
+ * JOURNAL_MAX_BYTES LRU, so raising this doesn't risk unbounded growth.
  */
-export const JOURNAL_MAX_VERSIONS_PER_FILE = 4;
+export const JOURNAL_MAX_VERSIONS_PER_FILE = 32;
+
+/**
+ * How many of a path's most-recently-pinned baselines
+ * src/services/changeJournal.js protects SIMULTANEOUSLY (its pinnedByPath —
+ * Map<path, hash[]>, most-recent last). A single pin slot (pre-2026-07-14)
+ * let a stale, still-in-flight GET /api/diff request for an OLDER `from`
+ * hash re-pin it via journal.get() AFTER the client had already confirmed a
+ * NEWER hash — silently stealing that newer pin's protection and reopening
+ * the very eviction race the pin exists to close (codex round-2 P1,
+ * 2026-07-14: pinnedByPath.set() was unconditional on every successful
+ * get()/pin(), with no memory of what was already pinned). Keeping the last
+ * N pins means a late re-pin of an older hash no longer evicts a newer
+ * one's protection — both stay protected until the window itself grows past
+ * N. 3 is small (a pin is just a hash string — negligible memory) but
+ * comfortably covers realistic in-flight-request staleness (rarely more
+ * than one or two requests overlapping per path).
+ */
+export const JOURNAL_PIN_HISTORY_SIZE = 3;
