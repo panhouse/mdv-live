@@ -154,7 +154,7 @@ export function createChangeJournal({
     return `${path}\u0000${hash}`;
   }
 
-  /** Evict a single content cell (helper shared by evictOldestCell()'s two passes). */
+  /** Evict a single content cell (helper shared by evictUntilUnderBudget()'s passes). */
   function evictCell(key) {
     const bytes = lru.get(key);
     lru.delete(key);
@@ -188,7 +188,8 @@ export function createChangeJournal({
   }
 
   /**
-   * Evict a content cell to bring totalBytes back under budget. Called
+   * Evict content cells, oldest-first, until totalBytes is back under
+   * maxBytesTotal (or there is nothing left safe/possible to evict). Called
    * from record() right after it added-or-restored ITS OWN path cell,
    * passed in as `justWrittenKey` (codex round-2 P2, 2026-07-14 -- record()
    * knows this key directly, O(1), instead of this function inferring it by
@@ -199,36 +200,59 @@ export function createChangeJournal({
    * pre-existing global byte-budget LRU eviction unit test once pins were
    * added, 2026-07-13).
    *
-   * Priority (Fix 2, 2026-07-13): (1) oldest cell that is neither pinned
+   * Priority (Fix 2, 2026-07-13): (1) oldest cells that are neither pinned
    * nor the just-written one, (2) if every OTHER cell is pinned, the oldest
    * of those -- the byte budget must never be violated just to keep every
    * pin alive, (3) only if the just-written cell is the ONLY cell that
    * exists at all (maxBytesTotal smaller than a single entry) does it get
-   * sacrificed too. Returns false if there is nothing to evict.
+   * sacrificed too.
    *
-   * Iterates the `lru` Map's own key iterator directly, breaking as soon as
-   * a victim is found -- NOT `[...lru.keys()]` (codex round-2 P2,
-   * 2026-07-14): with many tracked snapshots, materializing and copying
-   * every key on EVERY eviction call, repeated once per victim needed, was
-   * avoidable quadratic-ish overhead on the request thread.
+   * ONE pass per tier over the `lru` Map's own key iterator, evicting EVERY
+   * victim a tier finds rather than returning after the first (codex
+   * round-3 P1, 2026-07-14 -- replaces the earlier evictOldestCell(), which
+   * evicted a single victim per call and was invoked once per victim needed
+   * from record()'s "while (totalBytes > maxBytesTotal)" loop. Each of
+   * those calls re-scanned tier 1 from the front of the Map, re-skipping
+   * every still-pinned cell it had already skipped on the previous call --
+   * with P pinned cells ahead of the eviction frontier and E victims needed
+   * to clear one record()'s overage, that was O(P*E) work on the request
+   * thread (measured before this fix: ~90ms at P=2000, ~350ms at P=4000
+   * pinned cells sharing the LRU). Collecting every eligible victim in a
+   * single walk here makes one record() call's eviction O(P+E) regardless
+   * of how many victims it takes to clear the budget. Deleting the CURRENT
+   * key mid-iteration is well-defined for Map (the iterator continues to
+   * the next still-present key), so this stays a single forward pass per
+   * tier even though evictCell() mutates `lru` as we go.
    * @param {string} [justWrittenKey]
    */
-  function evictOldestCell(justWrittenKey) {
-    if (lru.size === 0) return false;
+  function evictUntilUnderBudget(justWrittenKey) {
+    if (totalBytes <= maxBytesTotal) return;
 
+    // Tier 1: skip pinned cells and the just-written one.
     for (const key of lru.keys()) {
+      if (totalBytes <= maxBytesTotal) return;
       if (key === justWrittenKey) continue;
       const sep = key.indexOf("\u0000");
       const path = key.slice(0, sep);
       const hash = key.slice(sep + 1);
-      if (isPinned(path, hash)) continue; // protected -- try the next-oldest
-      return evictCell(key);
+      if (isPinned(path, hash)) continue; // protected -- tier 2 may still take it
+      evictCell(key);
     }
+    if (totalBytes <= maxBytesTotal) return;
+
+    // Tier 2: only pinned cells (and maybe justWrittenKey) remain -- the
+    // byte budget wins over every pin.
     for (const key of lru.keys()) {
+      if (totalBytes <= maxBytesTotal) return;
       if (key === justWrittenKey) continue;
-      return evictCell(key); // every other cell is pinned -- the budget still wins
+      evictCell(key);
     }
-    return justWrittenKey !== undefined ? evictCell(justWrittenKey) : false; // nothing else exists at all
+    if (totalBytes <= maxBytesTotal) return;
+
+    // Tier 3: nothing else exists at all -- sacrifice the just-written cell.
+    if (justWrittenKey !== undefined && lru.has(justWrittenKey)) {
+      evictCell(justWrittenKey);
+    }
   }
 
   /**
@@ -270,9 +294,7 @@ export function createChangeJournal({
           existing.bytes = restoredBytes;
           lru.set(key, restoredBytes);
           totalBytes += restoredBytes;
-          while (totalBytes > maxBytesTotal) {
-            if (!evictOldestCell(key)) break;
-          }
+          evictUntilUnderBudget(key);
         }
       }
       return hash;
@@ -292,8 +314,8 @@ export function createChangeJournal({
     // The cell THIS call itself wrote to lru (undefined if oversized — an
     // oversized entry is never added to lru, so there is nothing of this
     // call's own to protect from eviction below). Tracked directly (codex
-    // round-2 P2, 2026-07-14) so evictOldestCell() never has to infer it by
-    // materializing/copying lru's keys.
+    // round-2 P2, 2026-07-14) so evictUntilUnderBudget() never has to infer
+    // it by materializing/copying lru's keys.
     let justWrittenKey;
     if (!oversized) {
       justWrittenKey = cellKey(path, hash);
@@ -348,9 +370,7 @@ export function createChangeJournal({
       }
     }
 
-    while (totalBytes > maxBytesTotal) {
-      if (!evictOldestCell(justWrittenKey)) break;
-    }
+    evictUntilUnderBudget(justWrittenKey);
 
     return hash;
   }

@@ -502,3 +502,89 @@ describe('changeJournal — global-LRU eviction over many tracked snapshots comp
   });
 });
 
+describe('changeJournal — eviction with many PINNED cells does not degrade to O(pinned * victims) (codex round-3 P1 perf, 2026-07-14)', () => {
+  it('a single record() call that must evict many filler cells finishes quickly even with thousands of pinned cells ahead of them in the LRU', () => {
+    // Reproduces the exact worst case reported by codex: every pinned cell
+    // sits AHEAD of every eviction victim in the global LRU's insertion
+    // order (pin() touches only its OWN key, so P pins recorded-then-pinned
+    // back-to-back stay bunched at the front). Under the pre-fix
+    // evictOldestCell() -- one victim per call, each call re-scanning tier 1
+    // from the front -- freeing E victims cost O(P*E): every one of the E
+    // calls re-skipped all P still-pinned cells before reaching the next
+    // unpinned one. evictUntilUnderBudget() (this fix) walks the LRU ONCE,
+    // collecting every eligible victim in the same pass, so one record()
+    // call's eviction is O(P+E) regardless of how many victims it needs.
+    const cellBytes = 100;
+
+    function timeOneEvictingRecord(pinnedCount) {
+      const fillerCount = pinnedCount; // E = P: the worst-case shape above
+      // Exactly fits P pinned + E filler cells, no slack -- no eviction
+      // happens until the final, deliberately-oversized write below.
+      const maxBytesTotal = (pinnedCount + fillerCount) * cellBytes;
+      const journal = createChangeJournal({
+        maxBytesTotal,
+        // Large enough that the final big write below is stored (not
+        // treated as oversized, which would skip the LRU/eviction path
+        // entirely and defeat the point of this benchmark).
+        maxBytesPerFile: fillerCount * cellBytes + cellBytes,
+        maxVersionsPerFile: 10,
+      });
+
+      // P pinned cells, each its own path, each pinned right after being
+      // recorded -- so every pinned key ends up bunched at the FRONT of the
+      // LRU's insertion order (pin() only touches its own key).
+      for (let i = 0; i < pinnedCount; i++) {
+        const path = `pinned-${i}.md`;
+        const hash = journal.record(path, 'p'.repeat(cellBytes));
+        journal.pin(path, hash);
+      }
+
+      // E filler (never-pinned) cells, each its own path -- these land
+      // AFTER every pinned cell in LRU order, i.e. exactly the victims the
+      // old code paid O(P) to reach on every single one of them.
+      for (let i = 0; i < fillerCount; i++) {
+        journal.record(`filler-${i}.md`, 'f'.repeat(cellBytes));
+      }
+
+      // ONE more record(), sized to force evicting every filler cell (but
+      // no pinned one) to get back under budget. This single call is what's
+      // timed -- it's the "1回のrecord()の所要" codex measured.
+      const bigContent = 'b'.repeat(fillerCount * cellBytes);
+      const start = process.hrtime.bigint();
+      journal.record('big.md', bigContent);
+      const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+
+      // Sanity: the eviction actually happened as designed -- every filler
+      // gone, every pin still standing, the big write itself retrievable.
+      assert.strictEqual(journal.get('filler-0.md', journal.latestHash('filler-0.md')), null, 'filler cells were the evicted victims');
+      assert.strictEqual(journal.get('pinned-0.md', journal.latestHash('pinned-0.md')), 'p'.repeat(cellBytes), 'pinned cells all survive');
+      assert.strictEqual(journal.get('big.md', journal.latestHash('big.md')), bigContent, 'the write that triggered eviction is itself retrievable');
+
+      return elapsedMs;
+    }
+
+    // DELIBERATELY LOOSE threshold (500ms). This is a wall-clock test, and a
+    // tight bound on wall-clock is how you build a flaky suite: an earlier
+    // draft asserted <50ms and duly failed at 108ms under full-suite parallel
+    // load on a developer laptop, while measuring in isolation at ~3ms. The
+    // point of this test is to catch the QUADRATIC SHAPE coming back, not to
+    // police milliseconds. Pre-fix (O(P*E)) this same harness measured 313ms
+    // (P=2000) and 1271ms (P=4000) — so 500ms still fails loudly if the
+    // regression returns, while leaving enough headroom that a loaded CI box
+    // never fails it for being slow.
+    // Only P=4000 is ASSERTED. A 500ms bound at P=2000 would be a test that
+    // cannot fail: pre-fix measured ~313ms there, i.e. it would pass against
+    // the very bug it exists to catch. Pick the size where the pre-fix cost
+    // (~1271ms) clears the threshold by a wide margin, so the assertion is
+    // real. P=2000 is still measured and reported for the failure message.
+    const ms2000 = timeOneEvictingRecord(2000);
+    const ms4000 = timeOneEvictingRecord(4000);
+    assert.ok(
+      ms4000 < 500,
+      `single record() must not be quadratic in (pinned x victims): `
+      + `P=2000 took ${ms2000.toFixed(1)}ms, P=4000 took ${ms4000.toFixed(1)}ms `
+      + `(pre-fix: ~313ms / ~1271ms — a linear implementation stays flat)`
+    );
+  });
+});
+
