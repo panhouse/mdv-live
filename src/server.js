@@ -16,7 +16,7 @@ import { setupPdfRoutes } from './api/pdf.js';
 import { setupSearchRoutes } from './api/search.js';
 import { setupTreeRoutes } from './api/tree.js';
 import { setupUploadRoutes } from './api/upload.js';
-import { DEFAULT_PORT, DEFAULT_DEPTH, JSON_BODY_LIMIT } from './config/constants.js';
+import { BIND_HOST, DEFAULT_PORT, DEFAULT_DEPTH, JSON_BODY_LIMIT } from './config/constants.js';
 import { createChangeJournal } from './services/changeJournal.js';
 import { mkError, sendError } from './utils/errors.js';
 import { getVersion } from './utils/version.js';
@@ -130,7 +130,7 @@ export function createMdvServer(options) {
     // Best-effort sweep of stale temp files left by a previous crashed write.
     sweepStaleTemps(app.locals.rootDir).catch(() => {});
     return new Promise((resolve) => {
-      server.listen(port, () => {
+      server.listen(port, BIND_HOST, () => {
         // Resolve with the ACTUAL bound port (not the requested `port`
         // option) so callers passing `port: 0` for an OS-assigned ephemeral
         // port can discover what it was.

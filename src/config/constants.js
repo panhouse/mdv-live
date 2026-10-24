@@ -20,6 +20,9 @@
 /** Default HTTP port `mdv` (CLI) listens on when none is specified. */
 export const DEFAULT_PORT = 8642;
 
+/** Loopback only: reads (/api/tree, /raw) are not Host-guarded, so other machines on the same Wi-Fi must not reach the server. */
+export const BIND_HOST = '127.0.0.1';
+
 /** Default chokidar watch depth (prevents EMFILE errors on huge trees). */
 export const DEFAULT_DEPTH = 3;
 
